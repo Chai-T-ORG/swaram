@@ -14,6 +14,7 @@ import { getStream, initMic } from "./micManager";
 import { getGroqKey } from "./groqSTT";
 import { getVoiceSettings } from "./voiceSettings";
 import { emitExternalTranscript } from "./speechToText";
+import { blobToWav16k } from "./wavEncode";
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -117,14 +118,26 @@ if (typeof window !== "undefined") {
 }
 
 async function transcribeBlob(blob: Blob): Promise<string> {
+  const provider = getVoiceSettings().sttProvider;
+
+  // Azure's REST endpoint only accepts 16 kHz mono WAV. MediaRecorder emits
+  // webm/mp4/ogg, so decode the clip to 16 kHz WAV via the browser before
+  // upload. If decoding fails, send the original and let the server fall back.
+  let body: Blob = blob;
+  if (provider === "azure") {
+    const wav = await blobToWav16k(blob);
+    if (wav) body = wav;
+  }
+
   const headers: Record<string, string> = {
-    "Content-Type": blob.type || "audio/webm",
+    "Content-Type": body.type || "audio/webm",
     "x-language": getVoiceSettings().sttLang || "en-IN",
+    "x-stt-provider": provider,
   };
   const localKey = getGroqKey();
   if (localKey) headers["x-groq-key"] = localKey;
   try {
-    const res = await fetch("/api/transcribe", { method: "POST", headers, body: blob });
+    const res = await fetch("/api/transcribe", { method: "POST", headers, body });
     const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
     if (!res.ok || data.error) {
       console.warn("[PTT] transcription failed:", res.status, data.error);

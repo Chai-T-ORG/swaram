@@ -18,7 +18,7 @@ import {
 } from "@/lib/voice/modelManager";
 import { loadKokoro } from "@/lib/voice/textToSpeech";
 import { loadWhisper } from "@/lib/voice/whisperSTT";
-import { probeGroqAvailability } from "@/lib/voice/groqSTT";
+import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { initMic } from "@/lib/voice/micManager";
 import { speak, unlockAudioPlayback } from "@/lib/voice/textToSpeech";
@@ -63,9 +63,16 @@ export default function SetupOverlay() {
     if (state.stage !== "ready" || dismissed) return;
     if (!announcedRef.current) {
       announcedRef.current = true;
+      const isTouch =
+        typeof window !== "undefined" &&
+        ((typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
+          "ontouchstart" in window ||
+          navigator.maxTouchPoints > 0);
       speak(
         getVoiceSettings().micMode === "ptt"
-          ? "All set. Hold the space bar, or tap the microphone, then speak."
+          ? isTouch
+            ? "All set. Tap anywhere to talk, then tap again to send."
+            : "All set. Hold the space bar, or tap the microphone, then speak."
           : "All set. I'm listening — just tell me what you'd like to do.",
         { interrupt: false },
       );
@@ -119,10 +126,11 @@ export default function SetupOverlay() {
       markTtsReady();
     }
 
-    // STT: cloud (Groq) downloads nothing — mark ready once a key is confirmed.
-    // Only on-device Whisper fetches a model.
-    if (sttProvider === "groq" || sttProvider === "auto") {
-      probeGroqAvailability().then((ok) => {
+    // STT: cloud engines (Groq / Azure) download nothing — mark ready once a
+    // key is confirmed. Only on-device Whisper fetches a model.
+    if (sttProvider === "groq" || sttProvider === "auto" || sttProvider === "azure") {
+      probeGroqAvailability().then((groqOk) => {
+        const ok = sttProvider === "azure" ? isAzureConfigured() : groqOk;
         if (ok) {
           updateSttProgress(1, "Cloud voice ready");
           markSttReady();

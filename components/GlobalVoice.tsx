@@ -40,7 +40,7 @@ import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
 import { getProfile } from "@/lib/storage/profileStore";
 import { getStream, primeMicIfGranted } from "@/lib/voice/micManager";
 import { loadWhisper, isWhisperReady } from "@/lib/voice/whisperSTT";
-import { probeGroqAvailability } from "@/lib/voice/groqSTT";
+import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
 import { interpretCommand, probeLlmAvailability } from "@/lib/voice/llm";
 import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "@/lib/voice/pushToTalk";
 import type { MicMode } from "@/lib/voice/voiceSettings";
@@ -154,6 +154,9 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   const [showNotice, setShowNotice] = useState(false);
   const [micMode, setMicMode] = useState<MicMode>("ptt");
   const [pttActive, setPttActive] = useState(false);
+  // Touch devices can't reliably "hold" (a press triggers scroll / the OS
+  // callout), so we switch push-to-talk to a tap-to-start / tap-to-stop toggle.
+  const [isTouch, setIsTouch] = useState(false);
 
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [userName, setUserName] = useState("User");
@@ -578,8 +581,13 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     if (!isPttCapturing()) return;
     flashToast("Thinking…", 2500);
     const text = await stopPtt();
-    if (!text) flashToast("Didn't catch that — hold and speak clearly.", 3000);
-  }, [flashToast]);
+    if (!text) {
+      flashToast(
+        isTouch ? "Didn't catch that — tap and speak clearly." : "Didn't catch that — hold and speak clearly.",
+        3000,
+      );
+    }
+  }, [flashToast, isTouch]);
 
   const togglePtt = useCallback(() => {
     if (isPttCapturing()) void endPtt();
@@ -590,6 +598,16 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   useEffect(() => {
     const unsub = onPttStateChange((cap) => setPttActive(cap));
     return unsub;
+  }, []);
+
+  // Detect coarse-pointer / touch input once on mount so push-to-talk can adapt
+  // its interaction model (tap-toggle) and its on-screen copy ("Tap to talk").
+  useEffect(() => {
+    setIsTouch(
+      (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
+        "ontouchstart" in window ||
+        navigator.maxTouchPoints > 0,
+    );
   }, []);
   useEffect(() => {
     if (micMode === "ptt") setSttState(pttActive ? "listening" : "off");
@@ -618,7 +636,7 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
 
   const onMicPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (micMode !== "ptt") return;
+      if (micMode !== "ptt" || isTouch) return; // touch uses tap-toggle via onClick
       e.preventDefault();
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -627,12 +645,12 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
       pttPressRef.current = { start: Date.now(), stopping: alreadyCapturing };
       if (!alreadyCapturing) void beginPtt();
     },
-    [micMode, beginPtt],
+    [micMode, isTouch, beginPtt],
   );
 
   const onMicPointerUp = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (micMode !== "ptt") return;
+      if (micMode !== "ptt" || isTouch) return;
       const press = pttPressRef.current;
       pttPressRef.current = null;
       try {
@@ -644,14 +662,15 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
       // A quick first tap leaves recording on; the next tap ends it.
       if (press.stopping || held >= HOLD_MS) void endPtt();
     },
-    [micMode, endPtt],
+    [micMode, isTouch, endPtt],
   );
 
   const onMicPointerCancel = useCallback(() => {
+    if (isTouch) return;
     const press = pttPressRef.current;
     pttPressRef.current = null;
     if (press && !press.stopping) cancelPtt();
-  }, []);
+  }, [isTouch]);
 
   const isTypingTarget = (t: EventTarget | null): boolean => {
     const el = t as HTMLElement | null;
@@ -689,6 +708,49 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
       if (holding) cancelPtt();
     };
   }, [micMode, beginPtt, endPtt]);
+
+  // Touch push-to-talk: tap anywhere on the page to start listening, tap again
+  // to send. We ignore taps on interactive controls (so buttons, links, and
+  // form fields still work) and on gestures that are really a scroll or a
+  // long-press. The mic panel handles its own tap via onClick, so it's skipped
+  // here too. Desktop keeps hold-to-talk (space bar / mouse), handled above.
+  useEffect(() => {
+    if (micMode !== "ptt" || !isTouch) return;
+    let x = 0;
+    let y = 0;
+    let downAt = 0;
+    let moved = false;
+
+    const onDown = (e: PointerEvent) => {
+      x = e.clientX;
+      y = e.clientY;
+      downAt = Date.now();
+      moved = false;
+    };
+    const onMove = (e: PointerEvent) => {
+      if (Math.hypot(e.clientX - x, e.clientY - y) > 12) moved = true;
+    };
+    const onUp = (e: PointerEvent) => {
+      if (e.pointerType === "mouse") return; // desktop uses hold-to-talk
+      if (moved || Date.now() - downAt > 600) return; // a scroll or long-press, not a tap
+      if (!isSetupComplete() || showNotice) return; // don't fight the setup/consent UI
+      const el = e.target as HTMLElement | null;
+      // Interactive controls and the mic panel (role=button) self-handle taps.
+      if (el?.closest('a, button, input, textarea, select, label, [role="button"], [contenteditable="true"]')) {
+        return;
+      }
+      togglePtt();
+    };
+
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+    };
+  }, [micMode, isTouch, showNotice, togglePtt]);
 
   // Continuous mode only: wake from the idle auto-pause on any interaction.
   useEffect(() => {
@@ -732,14 +794,17 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     void probeLlmAvailability();
 
     const provider = getVoiceSettings().sttProvider;
-    // Cloud STT (Groq) downloads nothing — probe the server for a key and mark
-    // the STT model ready so setup never waits on the ~150 MB Whisper download.
-    if (provider === "groq" || provider === "auto") {
-      void probeGroqAvailability().then((ok) => {
-        if (ok && (getVoiceSettings().sttProvider === "groq" || getVoiceSettings().sttProvider === "auto")) {
+    // Cloud STT (Groq / Azure) downloads nothing — probe the server for a key
+    // and mark the STT model ready so setup never waits on the ~150 MB Whisper
+    // download.
+    if (provider === "groq" || provider === "auto" || provider === "azure") {
+      void probeGroqAvailability().then((groqOk) => {
+        const cur = getVoiceSettings().sttProvider;
+        const ok = cur === "azure" ? isAzureConfigured() : groqOk;
+        if (ok && (cur === "groq" || cur === "auto" || cur === "azure")) {
           updateSttProgress(1, "Cloud voice ready");
           markSttReady();
-        } else if (getVoiceSettings().sttProvider === "auto") {
+        } else if (cur === "auto") {
           // No cloud key — fall back to downloading on-device Whisper.
           void loadWhisper().catch(console.error);
         }
@@ -978,16 +1043,24 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         {(!exclusive || isHome) && (
           <div
             onClick={() => {
-              // In PTT mode the pointer handlers own the interaction; onClick
-              // only wakes the mic in continuous mode.
+              // Continuous mode: tap wakes the mic. Touch push-to-talk: tap
+              // toggles listening. Desktop push-to-talk: the pointer handlers
+              // own the hold interaction, so onClick is a no-op there.
               if (micMode !== "ptt") wakeMic();
+              else if (isTouch) togglePtt();
             }}
             onPointerDown={onMicPointerDown}
             onPointerUp={onMicPointerUp}
             onPointerCancel={onMicPointerCancel}
             role="button"
             tabIndex={0}
-            aria-label={micMode === "ptt" ? "Hold to talk, release to send" : "Tap to listen"}
+            aria-label={
+              micMode === "ptt"
+                ? isTouch
+                  ? "Tap to talk, tap again to send"
+                  : "Hold to talk, release to send"
+                : "Tap to listen"
+            }
             className={`fixed touch-none select-none transition-all duration-700 ease-in-out overflow-hidden bg-raised border border-line ${
               isHome
                 ? "top-[90px] left-4 right-4 h-[320px] rounded-3xl shadow-md z-40 flex flex-col items-center justify-between p-6 md:top-0 md:left-0 md:bottom-0 md:right-auto md:w-72 md:h-full md:rounded-none md:border-r md:border-b-0 md:shadow-none"
@@ -1082,14 +1155,16 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
                         : sttState === "paused-silence"
                         ? "Microphone Paused"
                         : micMode === "ptt"
-                        ? "Hold to talk"
+                        ? isTouch ? "Tap to talk" : "Hold to talk"
                         : "Microphone Off"}
                     </h3>
                     <p className="text-xs text-soft mt-1 max-w-[200px] leading-relaxed font-semibold">
                       {sttState === "listening"
-                        ? micMode === "ptt" ? "Speak now, then release." : "Speak naturally, I'll take it from here."
+                        ? micMode === "ptt"
+                          ? isTouch ? "Speak now, then tap to send." : "Speak now, then release."
+                          : "Speak naturally, I'll take it from here."
                         : micMode === "ptt"
-                        ? "Hold the space bar or tap here, then speak."
+                        ? isTouch ? "Tap anywhere to talk, tap again to send." : "Hold the space bar or tap here, then speak."
                         : "Tap to resume listening"}
                     </p>
                   </div>
@@ -1150,7 +1225,12 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
                       {sttState === "listening" ? "Swaram is listening" : "Swaram is paused"}
                     </p>
                     <p className="text-[10px] text-soft mt-0.5 truncate">
-                      {toast || "Speak naturally"}
+                      {toast ||
+                        (micMode === "ptt" && isTouch
+                          ? sttState === "listening"
+                            ? "Tap anywhere to send"
+                            : "Tap anywhere to talk"
+                          : "Speak naturally")}
                     </p>
                   </div>
                   <div className="w-16 shrink-0">

@@ -10,6 +10,7 @@
  */
 import { startVadCapture, type VadHandle } from "./vadCapture";
 import { getVoiceSettings } from "./voiceSettings";
+import { encodeWav16k } from "./wavEncode";
 
 const LOCAL_KEY = "swaram_groq_key";
 
@@ -41,9 +42,10 @@ export function removeGroqTranscriptListener(l: TranscriptListener): void {
 
 let probeState: "unknown" | "probing" | "done" = "unknown";
 let cachedAvailable = false;
+let cachedAzureAvailable = false;
 let onFatalFallback: (() => void) | null = null;
 
-/** Register what to do if Groq turns out to be unusable mid-session. */
+/** Register what to do if the cloud engine turns out to be unusable mid-session. */
 export function setGroqFallback(cb: () => void): void {
   onFatalFallback = cb;
 }
@@ -58,19 +60,29 @@ export function isGroqConfigured(): boolean {
   return cachedAvailable;
 }
 
-/** One-time async probe of the server for an env-configured key. */
+/**
+ * Azure STT availability. Unlike Groq there's no client-key path — it needs a
+ * server key + region — so this reflects only the cached server probe.
+ */
+export function isAzureConfigured(): boolean {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+  return cachedAzureAvailable;
+}
+
+/** One-time async probe of the server for env-configured cloud STT keys. */
 export async function probeGroqAvailability(): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  if (getGroqKey()) { cachedAvailable = true; return true; }
-  if (probeState === "done") return cachedAvailable;
-  if (probeState === "probing") return cachedAvailable;
+  const hasLocal = Boolean(getGroqKey());
+  if (hasLocal) cachedAvailable = true;
+  if (probeState === "done" || probeState === "probing") return cachedAvailable;
   probeState = "probing";
   try {
     const res = await fetch("/api/transcribe", { method: "GET" });
-    const data = (await res.json()) as { envKey?: boolean };
-    cachedAvailable = Boolean(data.envKey);
+    const data = (await res.json()) as { envKey?: boolean; azure?: boolean };
+    cachedAvailable = hasLocal || Boolean(data.envKey);
+    cachedAzureAvailable = Boolean(data.azure);
   } catch {
-    cachedAvailable = false;
+    cachedAvailable = hasLocal;
   }
   probeState = "done";
   return cachedAvailable;
@@ -112,10 +124,14 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
 }
 
 async function transcribe(pcm: Float32Array, sampleRate: number): Promise<void> {
-  const wav = encodeWav(pcm, sampleRate);
+  const provider = getVoiceSettings().sttProvider;
+  // Azure's REST endpoint only accepts 16 kHz mono WAV; Groq resamples the
+  // native-rate clip itself, so only pay the downsample cost for Azure.
+  const wav = provider === "azure" ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
   const headers: Record<string, string> = {
     "Content-Type": "audio/wav",
     "x-language": getVoiceSettings().sttLang || "en-IN",
+    "x-stt-provider": provider,
   };
   const localKey = getGroqKey();
   if (localKey) headers["x-groq-key"] = localKey;
