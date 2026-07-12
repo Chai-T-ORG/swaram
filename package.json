@@ -1,0 +1,40 @@
+{
+  "name": "swaram",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "@supertone/supertone": "^0.2.3",
+    "@supertone/supertonic": "file:./lib/voice/supertonic",
+    "@techstark/opencv-js": "^5.0.0-release.1",
+    "framer-motion": "^12.42.2",
+    "fuse.js": "^7.4.2",
+    "kokoro-js": "^1.2.1",
+    "lucide-react": "^1.23.0",
+    "next": "16.2.10",
+    "onnxruntime-web": "^1.27.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.1.200",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "supertonic": "^0.0.1",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "puppeteer-core": "^25.3.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
