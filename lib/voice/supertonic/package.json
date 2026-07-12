@@ -1,0 +1,9 @@
+{
+  "name": "@supertone/supertonic",
+  "version": "3.0.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "dependencies": {
+    "onnxruntime-web": "^1.18.0"
+  }
+}
