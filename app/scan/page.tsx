@@ -8,7 +8,7 @@ import { useVoicePage } from "@/components/GlobalVoice";
 import { saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import { newId, type FormRecord } from "@/lib/types";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
-import { loadOpenCv, checkDocumentInFrame } from "@/lib/vision/shapeDetector";
+import { loadOpenCv, checkDocumentInFrame, detectCorners, warpPerspectiveCanvas } from "@/lib/vision/shapeDetector";
 import { motion } from "framer-motion";
 import {
   IconArrowLeft,
@@ -170,8 +170,25 @@ export default function ScanPage() {
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.drawImage(video, 0, 0);
+    }
+
+    let finalCanvas = canvas;
+    try {
+      const corners = await detectCorners(canvas);
+      if (corners) {
+        finalCanvas = await warpPerspectiveCanvas(canvas, corners);
+        console.log("[swaram] Perspective correction applied successfully at capture.");
+      } else {
+        console.log("[swaram] No sheet corners detected. Storing raw capture.");
+      }
+    } catch (e) {
+      console.warn("[swaram] Perspective correction failed during capture:", e);
+    }
+
+    const blob = await new Promise<Blob | null>((resolve) => finalCanvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob) {
       capturingRef.current = false;
       setCameraState("active");
