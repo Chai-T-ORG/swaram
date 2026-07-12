@@ -13,6 +13,7 @@ import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from 
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
   needsCloudNotice,
@@ -105,13 +106,13 @@ export default function FillPage() {
       const clean = text.toLowerCase().trim();
 
       if (phase === "start" || phase === "notice") {
-        if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean)) {
+        if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.start)) {
           handleStart();
         }
         return;
       }
       if (phase === "paused") {
-        if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean)) {
+        if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.resume)) {
           resume();
         }
         return;
@@ -1048,6 +1049,9 @@ function parseYesNo(transcript: string): boolean | null {
   const t = transcript.toLowerCase().trim();
   if (/^(yes|yeah|yep|yup|correct|right|that's right|sure|ok|okay|haan|ha|confirm)\b/.test(t)) return true;
   if (/^(no|nope|nah|wrong|incorrect|nahi|not correct|that's wrong)\b/.test(t)) return false;
+  // Hindi / Malayalam / French — the recognizer returns native script.
+  if (containsKeyword(transcript, INTL_KEYWORDS.no)) return false; // check "no" first: "വേണ്ട"/"non" are distinct
+  if (containsKeyword(transcript, INTL_KEYWORDS.yes)) return true;
   return null;
 }
 
