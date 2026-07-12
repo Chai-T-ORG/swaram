@@ -23,6 +23,7 @@ import {
 } from "./whisperSTT";
 import {
   isGroqConfigured,
+  isAzureConfigured,
   startGroqListening,
   stopGroqListening,
   pauseGroqListening,
@@ -406,9 +407,15 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
     }
   };
 
-  // ── Cloud Whisper via Groq (most accurate; the demo default) ──────
-  if ((provider === "groq" || provider === "auto") && isGroqConfigured() && !groqDisabledThisSession) {
-    console.log("[STT] Using Groq cloud engine (primary)");
+  // ── Cloud STT via our /api/transcribe proxy (Groq or Azure) ──────
+  // Both engines share the same VAD capture; the proxy routes per request.
+  const cloudConfigured = provider === "azure" ? isAzureConfigured() : isGroqConfigured();
+  if (
+    (provider === "groq" || provider === "auto" || provider === "azure") &&
+    cloudConfigured &&
+    !groqDisabledThisSession
+  ) {
+    console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : "Groq"})`);
     usingGroq = true;
     usingWhisper = false;
     stopNative();
@@ -432,7 +439,10 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
 /** Whisper if ready & permitted, otherwise the native browser engine. */
 function startWhisperOrNative(options: { lang?: string } = {}): void {
   const provider = getVoiceSettings().sttProvider;
-  if (isWhisperReady() && (provider === "whisper" || provider === "auto" || provider === "groq")) {
+  if (
+    isWhisperReady() &&
+    (provider === "whisper" || provider === "auto" || provider === "groq" || provider === "azure")
+  ) {
     console.log("[STT] Using Whisper engine");
     usingWhisper = true;
     usingGroq = false;

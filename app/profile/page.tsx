@@ -79,6 +79,7 @@ export default function ProfilePage() {
   const [micMode, setMicMode] = useState<MicMode>(DEFAULT_VOICE_SETTINGS.micMode);
   const [groqKey, setGroqKeyState] = useState("");
   const [groqEnvKey, setGroqEnvKey] = useState(false);
+  const [azureEnvKey, setAzureEnvKey] = useState(false);
   const [kokoroState, setKokoroState] = useState<KokoroStatus>({ state: "idle" });
   const [cloudTtsEngine, setCloudTtsEngine] = useState<"google" | "azure" | "kokoro">("google");
   const [activeSubTab, setActiveSubTab] = useState<"voice" | "personal" | "cloud">("voice");
@@ -109,7 +110,10 @@ export default function ProfilePage() {
     setMicMode(settings.micMode);
     setGroqKeyState(getGroqKey());
     void probeGroqAvailability(); // warms the availability cache
-    fetch("/api/transcribe").then((r) => r.json()).then((d) => setGroqEnvKey(Boolean(d.envKey))).catch(() => {});
+    fetch("/api/transcribe").then((r) => r.json()).then((d) => {
+      setGroqEnvKey(Boolean(d.envKey));
+      setAzureEnvKey(Boolean(d.azure));
+    }).catch(() => {});
     fetch("/api/tts").then((r) => r.json()).then((d) => {
       setCloudTtsEngine(d.default === "azure" ? "azure" : d.default === "kokoro" ? "kokoro" : "google");
     }).catch(() => {});
@@ -477,16 +481,44 @@ export default function ProfilePage() {
                       setSttProvider(next);
                       setVoiceSettings({ sttProvider: next });
                       if (next === "groq") speak("Using cloud recognition. This is the most accurate option.");
+                      else if (next === "azure") speak("Using Azure regional recognition, tuned for your selected language.");
                       else if (next === "whisper") speak("Using on-device recognition.");
                       else if (next === "native") speak("Using the browser's built-in recognition.");
                       else speak("Using automatic recognition. I'll pick the best available.");
                     }}
                   >
                     <option value="groq">Cloud Whisper (Groq) &mdash; most accurate, needs internet</option>
+                    <option value="azure">Azure Speech (Regional) &mdash; tuned per language, needs internet</option>
                     <option value="auto">Automatic &mdash; cloud when online, on-device otherwise</option>
                     <option value="whisper">On-Device Whisper &mdash; private &amp; offline (~150MB)</option>
                     <option value="native">Browser Built-in &mdash; instant, no download</option>
                   </select>
+
+                  {sttProvider === "azure" && (
+                    <div className="max-w-sm rounded-2xl border border-line bg-surface p-4 mt-1 flex flex-col gap-2.5">
+                      {azureEnvKey ? (
+                        <p className="flex items-center gap-2 text-xs font-bold text-ok leading-tight">
+                          <IconCheck className="h-4 w-4" />
+                          Azure key configured on the server. Ready to go.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="flex items-center gap-2 text-xs font-bold text-warn leading-tight">
+                            <IconInfo className="h-4 w-4 shrink-0" />
+                            No Azure key detected on the server.
+                          </p>
+                          <p className="text-[10px] text-faint font-semibold leading-normal">
+                            Azure recognition needs a server key and region. Set{" "}
+                            <code className="rounded bg-raised px-1 py-0.5 font-mono">AZURE_SPEECH_KEY</code>{" "}
+                            and{" "}
+                            <code className="rounded bg-raised px-1 py-0.5 font-mono">AZURE_SPEECH_REGION</code>{" "}
+                            on the server, then restart it. Until then, recognition falls back to cloud
+                            Whisper or the browser&apos;s built-in engine.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   {(sttProvider === "groq" || sttProvider === "auto") && (
                     <div className="max-w-sm rounded-2xl border border-line bg-surface p-4 mt-1 flex flex-col gap-2.5">
