@@ -3,6 +3,7 @@
  * policy. Kept out of the page component so they can be unit-tested.
  */
 import type { FormField } from "../types";
+import { INTL_KEYWORDS, containsKeyword } from "./intlCommands";
 
 export type FillCommand = "repeat" | "skip" | "back" | "type" | "pause" | "help" | "spell" | null;
 
@@ -10,6 +11,10 @@ export type FillCommand = "repeat" | "skip" | "back" | "type" | "pause" | "help"
  * Recognise a spoken command. Anchored to the WHOLE utterance and tolerant of
  * punctuation/casing (cloud Whisper returns "Skip." or "Go back please"), so a
  * real answer that merely contains a command word is never mistaken for one.
+ *
+ * English matches the anchored regexes below; Hindi / Malayalam / French match
+ * the shared multilingual keyword lists (see intlCommands.ts), since the
+ * recognizer returns native script in those languages.
  */
 export function parseFillCommand(text: string): FillCommand {
   const t = text
@@ -27,6 +32,15 @@ export function parseFillCommand(text: string): FillCommand {
   if (/^(pause|stop|wait|hold on|one moment)$/.test(t)) return "pause";
   if (/^(help|what can i say|commands|what are my options)$/.test(t)) return "help";
   if (/^(let me spell|i('| wi)ll spell|spell( it| that)?( out)?|spell mode|by letters?)$/.test(t)) return "spell";
+
+  // Non-English (script-based) commands.
+  if (containsKeyword(text, INTL_KEYWORDS.repeat)) return "repeat";
+  if (containsKeyword(text, INTL_KEYWORDS.skip)) return "skip";
+  if (containsKeyword(text, INTL_KEYWORDS.back)) return "back";
+  if (containsKeyword(text, INTL_KEYWORDS.type)) return "type";
+  if (containsKeyword(text, INTL_KEYWORDS.pause)) return "pause";
+  if (containsKeyword(text, INTL_KEYWORDS.help)) return "help";
+  if (containsKeyword(text, INTL_KEYWORDS.spell)) return "spell";
   return null;
 }
 

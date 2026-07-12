@@ -42,6 +42,7 @@ import { getStream, primeMicIfGranted } from "@/lib/voice/micManager";
 import { loadWhisper, isWhisperReady } from "@/lib/voice/whisperSTT";
 import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
 import { interpretCommand, probeLlmAvailability } from "@/lib/voice/llm";
+import { intentRegex, type IntlIntent } from "@/lib/voice/intlCommands";
 import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "@/lib/voice/pushToTalk";
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
@@ -71,6 +72,15 @@ import {
 import Waveform from "./Waveform";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
+
+/**
+ * OR an English command pattern together with the multilingual keyword regex
+ * for the same intent, so a single VoiceCommand matches every language. Input
+ * is lower-cased before testing; the `u` flag makes native-script matching work.
+ */
+function orIntl(base: RegExp, intent: IntlIntent): RegExp {
+  return new RegExp(`${base.source}|${intentRegex(intent).source}`, "iu");
+}
 
 export interface PageVoiceConfig {
   title?: string;
@@ -390,23 +400,26 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   }, []);
 
   const globalCommands = useCallback((): VoiceCommand[] => {
+    // Hindi / Malayalam / French keyword alternations (native script) so the
+    // same navigation commands work in every language, offline. English keeps
+    // its richer hand-tuned patterns; the intl regex is ORed in.
     return [
       [/\b(hindi|हिंदी|हिन्दी)\b|hindi (me|mein)/, () => setAssistantLang("hi-IN"), "speak in Hindi"],
       [/\b(malayalam|മലയാളം)\b/, () => setAssistantLang("ml-IN"), "speak in Malayalam"],
       [/\b(french|francais|français)\b|en français/, () => setAssistantLang("fr-FR"), "speak in French"],
       [/(speak|switch|talk).{0,12}\benglish\b|\bin english\b/, () => setAssistantLang("en-IN"), "speak in English"],
-      [/\b(go |open )?home\b|main menu|home page/, () => navigateWithFeedback("home"), "home"],
-      [/\bupload\b|choose (a )?file|pdf file|new form/, () => navigateWithFeedback("upload"), "upload"],
-      [/\bscan\b|camera|paper form|take (a )?photo/, () => navigateWithFeedback("scan"), "scan"],
+      [orIntl(/\b(go |open )?home\b|main menu|home page/, "home"), () => navigateWithFeedback("home"), "home"],
+      [orIntl(/\bupload\b|choose (a )?file|pdf file|new form/, "upload"), () => navigateWithFeedback("upload"), "upload"],
+      [orIntl(/\bscan\b|camera|paper form|take (a )?photo/, "scan"), () => navigateWithFeedback("scan"), "scan"],
       [
-        /my forms|history|recent forms|open (my )?(forms?|folder|files?|documents?)|my documents/,
+        orIntl(/my forms|history|recent forms|open (my )?(forms?|folder|files?|documents?)|my documents/, "history"),
         () => navigateWithFeedback("history"),
         "my forms",
       ],
-      [/\bprofile\b|my details|voice settings|\bsettings\b|preferences/, () => navigateWithFeedback("profile"), "profile"],
+      [orIntl(/\bprofile\b|my details|voice settings|\bsettings\b|preferences/, "profile"), () => navigateWithFeedback("profile"), "profile"],
       [/^(go |take me )?back(ward)?$/, () => router.back(), "go back"],
       [
-        /read (this )?page|where am i/,
+        orIntl(/read (this )?page|where am i/, "read_page"),
         () => {
           const page = pageRef.current;
           speak(page.description ?? page.title ?? "You are in Swaram.");
@@ -414,12 +427,12 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         "read this page",
       ],
       [
-        /^(stop|quiet|silence)( talking| reading)?$/,
+        orIntl(/^(stop|quiet|silence)( talking| reading)?$/, "stop"),
         () => cancelSpeech(),
         "stop",
       ],
       [
-        /\bhelp\b|what can i say|commands/,
+        orIntl(/\bhelp\b|what can i say|commands/, "help"),
         () => {
           const pageHelp = (pageRef.current.commands ?? []).map(([, , help]) => help).filter(Boolean);
           const all = [...pageHelp, "upload", "scan", "my forms", "profile", "go home", "read this page", "stop"];
