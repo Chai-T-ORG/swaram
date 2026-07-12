@@ -12,7 +12,7 @@ import type { FormField, FormRecord } from "@/lib/types";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
-import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { parseFillCommand, isNameField, needsConfirmation, plausibleAnswer } from "@/lib/voice/fillCommands";
 import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
@@ -424,6 +424,20 @@ export default function FillPage() {
     value = formatAnswer(source, field);
     if (!value) {
       await speak("I didn't catch that. Could you repeat it?");
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    // Plausibility check — reject obvious mismatches before confirming.
+    const implausible = plausibleAnswer(value, field);
+    if (implausible) {
+      retriesRef.current += 1;
+      if (retriesRef.current >= 3) {
+        await speak("No problem — let's type it instead.");
+        if (alive(id)) setPhase("typing");
+        return;
+      }
+      await speak(`That doesn't look like ${implausible}. Please try again, or say skip.`);
       if (alive(id)) setPhase("listening");
       return;
     }

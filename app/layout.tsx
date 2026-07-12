@@ -41,7 +41,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${outfit.variable} h-full antialiased`}
     >
-      <body className="h-full bg-surface text-ink">
+      <body className="h-full bg-surface text-ink" suppressHydrationWarning>
         <GlobalVoice>
           {children}
         </GlobalVoice>
