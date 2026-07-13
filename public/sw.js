@@ -4,6 +4,10 @@
  * pdf.js worker) so repeat visits work offline; network-first for pages.
  */
 const CACHE = "swaram-v1";
+// Caches to preserve on activate. The TTS clip cache (managed by
+// lib/voice/textToSpeech.ts) is kept so spoken prompts survive updates; keep
+// this in sync with TTS_CACHE_NAME there.
+const KEEP_CACHES = [CACHE, "swaram-tts-v1"];
 const ENGINE_PATHS = ["/tesseract/", "/pdf.worker.min.mjs", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -14,7 +18,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => !KEEP_CACHES.includes(k)).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });

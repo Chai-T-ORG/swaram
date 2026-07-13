@@ -10,13 +10,16 @@
  */
 export type TtsProvider = "system" | "cloud" | "local" | "google";
 /**
- * "groq"    — cloud Whisper via Groq (most accurate, needs internet + key)
- * "azure"   — cloud Azure Speech (regional locales, needs a server key + region)
- * "whisper" — on-device Whisper (private, offline, heavier)
- * "native"  — the browser's built-in recognition (instant, no download)
- * "auto"    — groq if configured & online, else whisper if ready, else native
+ * "groq"         — cloud Whisper via Groq (most accurate, needs internet + key)
+ * "azure"        — cloud Azure Speech, REST (regional locales, server key + region)
+ * "azure-stream" — cloud Azure Speech, real-time streaming SDK: partial results,
+ *                  auto language detection, phrase-list biasing. Falls back to
+ *                  the Azure REST path on any failure. (Opt-in / beta.)
+ * "whisper"      — on-device Whisper (private, offline, heavier)
+ * "native"       — the browser's built-in recognition (instant, no download)
+ * "auto"         — groq if configured & online, else whisper if ready, else native
  */
-export type SttProvider = "groq" | "azure" | "whisper" | "native" | "auto";
+export type SttProvider = "groq" | "azure" | "azure-stream" | "whisper" | "native" | "auto";
 /**
  * "ptt"        — push-to-talk: capture only while the user holds space / taps
  *                the mic. Reliable in noisy/crowded rooms; nothing is recorded
@@ -115,5 +118,5 @@ export function migrateVoiceSettings(): void {
 }
 
 function isValidSttProvider(provider: any): provider is SttProvider {
-  return ["groq", "azure", "whisper", "native", "auto"].includes(provider);
+  return ["groq", "azure", "azure-stream", "whisper", "native", "auto"].includes(provider);
 }

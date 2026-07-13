@@ -128,9 +128,9 @@ export default function SetupOverlay() {
 
     // STT: cloud engines (Groq / Azure) download nothing — mark ready once a
     // key is confirmed. Only on-device Whisper fetches a model.
-    if (sttProvider === "groq" || sttProvider === "auto" || sttProvider === "azure") {
+    if (sttProvider === "groq" || sttProvider === "auto" || sttProvider === "azure" || sttProvider === "azure-stream") {
       probeGroqAvailability().then((groqOk) => {
-        const ok = sttProvider === "azure" ? isAzureConfigured() : groqOk;
+        const ok = sttProvider === "azure" || sttProvider === "azure-stream" ? isAzureConfigured() : groqOk;
         if (ok) {
           updateSttProgress(1, "Cloud voice ready");
           markSttReady();
