@@ -444,14 +444,79 @@ export function unlockAudioPlayback(): void {
   getAudioContext();
 }
 
-// Client-side blob cache so a prefetched line plays with zero network wait.
+/* ------------------------------------------------------------------ *
+ * Two-layer TTS blob cache.                                            *
+ *   L1 (memory)  — instant within a session.                          *
+ *   L2 (Cache Storage) — survives reloads, so the app's deterministic  *
+ *     lines (form questions, "Is this correct?", errors) are spoken    *
+ *     with zero network wait AND zero synthesis cost after the first   *
+ *     time anyone hears them. Non-English lines benefit most, since    *
+ *     they otherwise pay a translate + synth round-trip every reload.  *
+ * Everything degrades cleanly: if Cache Storage is unavailable or      *
+ * throws, we simply fall back to the network path.                     *
+ * ------------------------------------------------------------------ */
 const clientTtsCache = new Map<string, Blob>();
 const CLIENT_TTS_CACHE_MAX = 40;
 
+// Bump the version to invalidate every persisted clip at once (e.g. if voices
+// change). Old caches are pruned lazily on next open.
+const TTS_CACHE_NAME = "swaram-tts-v1";
+const PERSIST_MAX = 200;
+
+/** A stable, opaque Request key for a (lang, text) pair. */
+function persistKey(text: string, lang: string): string {
+  return `https://swaram.local/tts/${encodeURIComponent(lang)}/${encodeURIComponent(text)}`;
+}
+
+function cacheStorageAvailable(): boolean {
+  return typeof caches !== "undefined";
+}
+
+async function persistentGet(text: string, lang: string): Promise<Blob | null> {
+  if (!cacheStorageAvailable()) return null;
+  try {
+    const cache = await caches.open(TTS_CACHE_NAME);
+    const hit = await cache.match(persistKey(text, lang));
+    if (!hit) return null;
+    const blob = await hit.blob();
+    return blob.size > 0 ? blob : null;
+  } catch {
+    return null; // never let a cache hiccup block speech
+  }
+}
+
+async function persistentSet(text: string, lang: string, blob: Blob): Promise<void> {
+  if (!cacheStorageAvailable()) return;
+  try {
+    const cache = await caches.open(TTS_CACHE_NAME);
+    await cache.put(
+      persistKey(text, lang),
+      new Response(blob, { headers: { "Content-Type": blob.type || "audio/mpeg" } }),
+    );
+    // Bound the store. Cache.keys() is insertion-ordered, so the oldest
+    // entries sort first — a simple LRU-ish eviction.
+    const keys = await cache.keys();
+    if (keys.length > PERSIST_MAX) {
+      const overflow = keys.slice(0, keys.length - PERSIST_MAX);
+      await Promise.all(overflow.map((k) => cache.delete(k)));
+    }
+  } catch {
+    // best-effort persistence
+  }
+}
+
 async function fetchTTS(text: string, lang: string): Promise<Blob> {
   const key = `${lang}|${text}`;
-  const cachedBlob = clientTtsCache.get(key);
-  if (cachedBlob) return cachedBlob;
+  const memBlob = clientTtsCache.get(key);
+  if (memBlob) return memBlob;
+
+  // L2: persisted from an earlier session — instant and free.
+  const persisted = await persistentGet(text, lang);
+  if (persisted) {
+    clientTtsCache.set(key, persisted);
+    return persisted;
+  }
+
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -460,10 +525,12 @@ async function fetchTTS(text: string, lang: string): Promise<Blob> {
   if (!res.ok) throw new Error("tts-http-" + res.status);
   const blob = await res.blob();
   if (blob.size === 0) throw new Error("tts-empty");
+
   clientTtsCache.set(key, blob);
   if (clientTtsCache.size > CLIENT_TTS_CACHE_MAX) {
     clientTtsCache.delete(clientTtsCache.keys().next().value as string);
   }
+  void persistentSet(text, lang, blob); // fire-and-forget
   return blob;
 }
 

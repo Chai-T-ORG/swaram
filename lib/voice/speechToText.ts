@@ -32,6 +32,12 @@ import {
   removeGroqTranscriptListener,
   setGroqFallback,
 } from "./groqSTT";
+import {
+  startAzureStream,
+  stopAzureStream,
+  pauseAzureStream,
+  resumeAzureStream,
+} from "./azureStreamSTT";
 
 interface SRAlternative {
   transcript: string;
@@ -289,10 +295,10 @@ function resetSilenceTimer(): void {
   if (silenceTimer) clearTimeout(silenceTimer);
   if (!shouldBeListening || isPausedForTTS || isAutoPaused) return;
 
-  // The VAD engines (Groq/Whisper) capture locally and only transmit on
-  // speech, so there's nothing to save by pausing — keep listening so the
-  // mic never "randomly" drops while the user reads or thinks.
-  if (usingGroq || usingWhisper) return;
+  // The streaming/VAD engines (Groq/Whisper/Azure stream) capture locally and
+  // only transmit on speech, so there's nothing to save by pausing — keep
+  // listening so the mic never "randomly" drops while the user reads or thinks.
+  if (usingGroq || usingWhisper || usingAzureStream) return;
 
   // Native Web Speech keeps a live session open; pause it after a long idle
   // so the recording indicator doesn't stay on forever.
@@ -343,6 +349,9 @@ export function wakeUpContinuous(): void {
 /** Which engine is currently capturing. */
 let usingWhisper = false;
 let usingGroq = false;
+let usingAzureStream = false;
+/** Set once Azure streaming has fallen back, so we don't re-select it this session. */
+let azureStreamDisabled = false;
 
 /** Shared: normalize, play the earcon, reset silence timer, and fan out. */
 function emitTranscript(source: string, text: string, confidence: number): void {
@@ -400,15 +409,34 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
   isAutoPaused = false;
 
   const provider = getVoiceSettings().sttProvider;
-  const stopNative = () => {
-    if (continuousActive) {
-      try { continuousActive.abort(); } catch { /* ignore */ }
-      continuousActive = null;
-    }
-  };
 
-  // ── Cloud STT via our /api/transcribe proxy (Groq or Azure) ──────
-  // Both engines share the same VAD capture; the proxy routes per request.
+  // ── Azure real-time streaming (opt-in) ──────────────────────────
+  // The token fetch inside startAzureStream is the availability check; any
+  // failure resolves false / fires onFallback and we drop to the Azure REST
+  // capture below (which the /api/transcribe proxy routes to Azure too).
+  if (provider === "azure-stream" && !azureStreamDisabled) {
+    console.log("[STT] Using Azure streaming engine");
+    usingAzureStream = true;
+    usingGroq = false;
+    usingWhisper = false;
+    if (continuousActive) { try { continuousActive.abort(); } catch { /* ignore */ } continuousActive = null; }
+    const fallBack = (reason: string) => {
+      console.warn("[STT] Azure streaming unavailable — falling back:", reason);
+      azureStreamDisabled = true;
+      usingAzureStream = false;
+      if (shouldBeListening) startCloudVadCapture(options);
+    };
+    startAzureStream({
+      onFinal: (text, confidence) => emitTranscript("AzureStream", text, confidence),
+      onFallback: fallBack,
+    }).then((ok) => {
+      if (ok) { if (onStateChangeCallback) onStateChangeCallback("listening"); }
+      else fallBack("start-failed");
+    });
+    return;
+  }
+
+  // ── Cloud STT via our /api/transcribe proxy (Groq or Azure REST) ──
   const cloudConfigured = provider === "azure" ? isAzureConfigured() : isGroqConfigured();
   if (
     (provider === "groq" || provider === "auto" || provider === "azure") &&
@@ -416,24 +444,30 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
     !groqDisabledThisSession
   ) {
     console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : "Groq"})`);
-    usingGroq = true;
-    usingWhisper = false;
-    stopNative();
-    addGroqTranscriptListener(groqBridgeListener);
-    startGroqListening().then((ok) => {
-      if (ok) {
-        if (onStateChangeCallback) onStateChangeCallback("listening");
-      } else {
-        console.warn("[STT] Groq start failed, falling back.");
-        usingGroq = false;
-        removeGroqTranscriptListener(groqBridgeListener);
-        startWhisperOrNative(options);
-      }
-    });
+    startCloudVadCapture(options);
     return;
   }
 
   startWhisperOrNative(options);
+}
+
+/** Start the shared VAD capture that posts utterances to /api/transcribe. */
+function startCloudVadCapture(options: { lang?: string } = {}): void {
+  usingGroq = true;
+  usingWhisper = false;
+  usingAzureStream = false;
+  if (continuousActive) { try { continuousActive.abort(); } catch { /* ignore */ } continuousActive = null; }
+  addGroqTranscriptListener(groqBridgeListener);
+  startGroqListening().then((ok) => {
+    if (ok) {
+      if (onStateChangeCallback) onStateChangeCallback("listening");
+    } else {
+      console.warn("[STT] Cloud capture start failed, falling back.");
+      usingGroq = false;
+      removeGroqTranscriptListener(groqBridgeListener);
+      startWhisperOrNative(options);
+    }
+  });
 }
 
 /** Whisper if ready & permitted, otherwise the native browser engine. */
@@ -558,6 +592,12 @@ export function stopContinuousListening(): void {
     silenceTimer = null;
   }
 
+  // Stop Azure streaming if active
+  if (usingAzureStream) {
+    stopAzureStream();
+    usingAzureStream = false;
+  }
+
   // Stop Groq if active
   if (usingGroq) {
     stopGroqListening();
@@ -586,6 +626,9 @@ export function stopContinuousListening(): void {
 
 export function pauseContinuousListening(): void {
   isPausedForTTS = true;
+  if (usingAzureStream) {
+    pauseAzureStream();
+  }
   if (usingGroq) {
     pauseGroqListening();
   }
@@ -604,7 +647,9 @@ export function pauseContinuousListening(): void {
 export function resumeContinuousListening(): void {
   isPausedForTTS = false;
   if (shouldBeListening && !isAutoPaused) {
-    if (usingGroq) {
+    if (usingAzureStream) {
+      resumeAzureStream();
+    } else if (usingGroq) {
       resumeGroqListening();
     } else if (usingWhisper) {
       resumeWhisperListening();

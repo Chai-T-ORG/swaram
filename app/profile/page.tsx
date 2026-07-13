@@ -482,6 +482,7 @@ export default function ProfilePage() {
                       setVoiceSettings({ sttProvider: next });
                       if (next === "groq") speak("Using cloud recognition. This is the most accurate option.");
                       else if (next === "azure") speak("Using Azure regional recognition, tuned for your selected language.");
+                      else if (next === "azure-stream") speak("Using Azure real-time recognition. I'll understand any language as you speak.");
                       else if (next === "whisper") speak("Using on-device recognition.");
                       else if (next === "native") speak("Using the browser's built-in recognition.");
                       else speak("Using automatic recognition. I'll pick the best available.");
@@ -489,12 +490,21 @@ export default function ProfilePage() {
                   >
                     <option value="groq">Cloud Whisper (Groq) &mdash; most accurate, needs internet</option>
                     <option value="azure">Azure Speech (Regional) &mdash; tuned per language, needs internet</option>
+                    <option value="azure-stream">Azure Speech &mdash; Real-time (beta) &mdash; fastest, auto-detects language</option>
                     <option value="auto">Automatic &mdash; cloud when online, on-device otherwise</option>
                     <option value="whisper">On-Device Whisper &mdash; private &amp; offline (~150MB)</option>
                     <option value="native">Browser Built-in &mdash; instant, no download</option>
                   </select>
 
-                  {sttProvider === "azure" && (
+                  {sttProvider === "azure-stream" && (
+                    <p className="max-w-sm text-[11px] text-soft font-semibold leading-normal mt-1">
+                      Real-time streaming: text appears as you speak, and it auto-detects English,
+                      Hindi, Malayalam or French so you don&apos;t have to switch languages. If it can&apos;t
+                      connect, it falls back to the standard Azure path automatically.
+                    </p>
+                  )}
+
+                  {(sttProvider === "azure" || sttProvider === "azure-stream") && (
                     <div className="max-w-sm rounded-2xl border border-line bg-surface p-4 mt-1 flex flex-col gap-2.5">
                       {azureEnvKey ? (
                         <p className="flex items-center gap-2 text-xs font-bold text-ok leading-tight">
