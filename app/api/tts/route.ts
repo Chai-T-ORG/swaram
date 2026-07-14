@@ -66,9 +66,21 @@ function escapeXml(s: string): string {
 
 const translateCache = new Map<string, string>();
 
+// Unicode blocks for the non-Latin target languages. If the text already
+// contains this script, it's an LLM reply / caption already written in the
+// target language — skip the translate network hop (a real latency win, and
+// the source of "non-English replies are slow").
+const SCRIPT_RANGES: Record<string, RegExp> = {
+  hi: /[ऀ-ॿ]/, // Devanagari (Hindi)
+  ml: /[ഀ-ൿ]/, // Malayalam
+};
+
 /** Translate app text into the spoken language. English is a no-op. */
 async function translateForSpeech(text: string, tl: string): Promise<string> {
   if (tl === "en" || !text.trim()) return text;
+  const script = SCRIPT_RANGES[tl];
+  if (script && script.test(text)) return text; // already in the target language
+
   const key = `${tl}|${text}`;
   const hit = translateCache.get(key);
   if (hit !== undefined) return hit;

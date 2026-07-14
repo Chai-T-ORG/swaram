@@ -41,7 +41,16 @@ import { getProfile } from "@/lib/storage/profileStore";
 import { getStream, primeMicIfGranted } from "@/lib/voice/micManager";
 import { loadWhisper, isWhisperReady } from "@/lib/voice/whisperSTT";
 import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
-import { interpretCommand, probeLlmAvailability } from "@/lib/voice/llm";
+import { resolveAction, isLlmAvailable, probeLlmAvailability } from "@/lib/voice/llm";
+import { intentRegex, type IntlIntent } from "@/lib/voice/intlCommands";
+import { onAzureStreamDiag, warmAzureStream } from "@/lib/voice/azureStreamSTT";
+import {
+  registerGlobalActions,
+  setPageActions,
+  getAvailableActions,
+  getAction,
+  type VoiceAction,
+} from "@/lib/voice/actionRegistry";
 import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "@/lib/voice/pushToTalk";
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
@@ -72,11 +81,22 @@ import Waveform from "./Waveform";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
 
+/**
+ * OR an English command pattern together with the multilingual keyword regex
+ * for the same intent, so a single VoiceCommand matches every language. Input
+ * is lower-cased before testing; the `u` flag makes native-script matching work.
+ */
+function orIntl(base: RegExp, intent: IntlIntent): RegExp {
+  return new RegExp(`${base.source}|${intentRegex(intent).source}`, "iu");
+}
+
 export interface PageVoiceConfig {
   title?: string;
   hint?: string;
   description?: string;
   commands?: VoiceCommand[];
+  /** Screen-specific actions for the adaptive (LLM) router — see actionRegistry. */
+  actions?: VoiceAction[];
   exclusive?: boolean;
 }
 
@@ -335,6 +355,7 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   const setPage = useCallback(
     (config: PageVoiceConfig) => {
       pageRef.current = config;
+      const clearActions = setPageActions(config.actions ?? []);
       setExclusive(Boolean(config.exclusive));
       const key = `${pathname}:${config.title ?? ""}`;
       if (config.title && announcedRef.current !== key && speechUnlocked()) {
@@ -342,6 +363,7 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         speak(`${config.title}.${config.hint ? ` ${config.hint}` : ""}`);
       }
       return () => {
+        clearActions();
         if (pageRef.current === config) {
           pageRef.current = {};
           setExclusive(false);
@@ -390,23 +412,26 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   }, []);
 
   const globalCommands = useCallback((): VoiceCommand[] => {
+    // Hindi / Malayalam / French keyword alternations (native script) so the
+    // same navigation commands work in every language, offline. English keeps
+    // its richer hand-tuned patterns; the intl regex is ORed in.
     return [
       [/\b(hindi|हिंदी|हिन्दी)\b|hindi (me|mein)/, () => setAssistantLang("hi-IN"), "speak in Hindi"],
       [/\b(malayalam|മലയാളം)\b/, () => setAssistantLang("ml-IN"), "speak in Malayalam"],
       [/\b(french|francais|français)\b|en français/, () => setAssistantLang("fr-FR"), "speak in French"],
       [/(speak|switch|talk).{0,12}\benglish\b|\bin english\b/, () => setAssistantLang("en-IN"), "speak in English"],
-      [/\b(go |open )?home\b|main menu|home page/, () => navigateWithFeedback("home"), "home"],
-      [/\bupload\b|choose (a )?file|pdf file|new form/, () => navigateWithFeedback("upload"), "upload"],
-      [/\bscan\b|camera|paper form|take (a )?photo/, () => navigateWithFeedback("scan"), "scan"],
+      [orIntl(/\b(go |open )?home\b|main menu|home page/, "home"), () => navigateWithFeedback("home"), "home"],
+      [orIntl(/\bupload\b|choose (a )?file|pdf file|new form/, "upload"), () => navigateWithFeedback("upload"), "upload"],
+      [orIntl(/\bscan\b|camera|paper form|take (a )?photo/, "scan"), () => navigateWithFeedback("scan"), "scan"],
       [
-        /my forms|history|recent forms|open (my )?(forms?|folder|files?|documents?)|my documents/,
+        orIntl(/my forms|history|recent forms|open (my )?(forms?|folder|files?|documents?)|my documents/, "history"),
         () => navigateWithFeedback("history"),
         "my forms",
       ],
-      [/\bprofile\b|my details|voice settings|\bsettings\b|preferences/, () => navigateWithFeedback("profile"), "profile"],
+      [orIntl(/\bprofile\b|my details|voice settings|\bsettings\b|preferences/, "profile"), () => navigateWithFeedback("profile"), "profile"],
       [/^(go |take me )?back(ward)?$/, () => router.back(), "go back"],
       [
-        /read (this )?page|where am i/,
+        orIntl(/read (this )?page|where am i/, "read_page"),
         () => {
           const page = pageRef.current;
           speak(page.description ?? page.title ?? "You are in Swaram.");
@@ -414,12 +439,12 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         "read this page",
       ],
       [
-        /^(stop|quiet|silence)( talking| reading)?$/,
+        orIntl(/^(stop|quiet|silence)( talking| reading)?$/, "stop"),
         () => cancelSpeech(),
         "stop",
       ],
       [
-        /\bhelp\b|what can i say|commands/,
+        orIntl(/\bhelp\b|what can i say|commands/, "help"),
         () => {
           const pageHelp = (pageRef.current.commands ?? []).map(([, , help]) => help).filter(Boolean);
           const all = [...pageHelp, "upload", "scan", "my forms", "profile", "go home", "read this page", "stop"];
@@ -432,7 +457,9 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
 
   const runGlobalTranscript = useCallback(
     (transcript: string) => {
-      const heard = transcript.toLowerCase().trim();
+      // NFC so native-script (Malayalam/Hindi) regexes compare against the same
+      // code-point form the recognizer emits.
+      const heard = transcript.normalize("NFC").toLowerCase().trim();
       const commands = [...(pageRef.current.commands ?? []), ...globalCommands()];
       for (const [pattern, handler] of commands) {
         if (pattern.test(heard)) {
@@ -445,54 +472,74 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     [globalCommands],
   );
 
-  // Intelligent fallback: when nothing matched, ask the LLM to interpret the
-  // sentence into an action (navigation, read page, help…) or answer a general
-  // question aloud. Fails soft: if the LLM is unavailable, we just say we
-  // didn't catch it.
+  // Adaptive fallback: when the fast (regex/keyword) lane doesn't match, resolve
+  // the utterance against the actions available on this screen right now — first
+  // any offline matcher, then the LLM, which maps arbitrary phrasings and any
+  // language onto a real action (or answers as chat). Fails soft.
   const resolveWithLlm = useCallback(
     async (transcript: string) => {
-      flashToast("Thinking…", 3000);
-      const intent = await interpretCommand(transcript, {
-        page: pathname,
-        pageLabel: pageRef.current.title,
-        lang: getVoiceSettings().sttLang,
-      });
-      switch (intent.action) {
-        case "navigate":
-          navigateWithFeedback(intent.target);
+      const actions = getAvailableActions();
+      const lower = transcript.toLowerCase();
+
+      // Fast lane: an action carrying its own offline matcher.
+      for (const a of actions) {
+        if (a.match && a.match.test(lower)) {
+          a.run();
           return;
-        case "read_page":
-          speak(pageRef.current.description ?? pageRef.current.title ?? "You are in Swaram.");
-          return;
-        case "help":
-          runGlobalTranscript("help");
-          return;
-        case "stop":
-          cancelSpeech();
-          return;
-        case "start_filling":
-          if (!runGlobalTranscript("start filling")) {
-            speak("Open a form first — say upload to choose one, or scan to use your camera.");
-          }
-          return;
-        case "review":
-          if (!runGlobalTranscript("review")) speak("There's nothing to review yet. Say upload to start a form.");
-          return;
-        case "chat":
-          // Answer their question, then steer back — the reply already does this.
-          speak(intent.reply || "I'm here to help you fill forms. Say upload to begin.");
-          return;
-        case "answer":
-          // No question is awaiting at the app level — nudge toward a form.
-          speak("Let's get that onto a form. Say upload to choose one, or scan a paper form.");
-          return;
-        default:
-          // Never a dead end: say something useful.
-          speak("I'm here to help you fill forms by voice. You can say: upload, scan, my forms, or profile. What would you like to do?");
+        }
       }
+
+      // Context-aware fallback: offer what this screen actually supports, not a
+      // generic home-page list.
+      const pageOpts = (pageRef.current.commands ?? []).map((c) => c[2]).filter(Boolean);
+      const nudge = pageOpts.length
+        ? `On this screen you can say: ${[...pageOpts, "go home"].slice(0, 5).join(", ")}. What would you like to do?`
+        : "I'm here to help you fill forms by voice. You can say: upload, scan, my forms, or profile. What would you like to do?";
+      if (!isLlmAvailable()) {
+        speak(nudge);
+        return;
+      }
+
+      flashToast("Thinking…", 3000);
+      const res = await resolveAction(
+        transcript,
+        { pageLabel: pageRef.current.title, lang: getVoiceSettings().sttLang },
+        actions.map((a) => ({ id: a.id, description: a.description })),
+      );
+
+      if (res.action === "chat") {
+        speak(res.reply || nudge);
+        return;
+      }
+      const action = res.action && res.action !== "none" ? getAction(res.action) : undefined;
+      if (action) {
+        action.run();
+        return;
+      }
+      speak(nudge); // never a dead end
     },
-    [flashToast, pathname, navigateWithFeedback, runGlobalTranscript],
+    [flashToast],
   );
+
+  // Register the always-available actions once the handlers they call exist.
+  // These give the adaptive router its baseline vocabulary; the fast-lane
+  // regexes in globalCommands() still handle the common English phrasings.
+  useEffect(() => {
+    registerGlobalActions([
+      { id: "go_home", description: "Go to the home screen.", run: () => navigateWithFeedback("home") },
+      { id: "open_upload", description: "Go to the upload screen to choose a PDF or photo of a form from the device.", run: () => navigateWithFeedback("upload") },
+      { id: "open_scan", description: "Open the camera to scan a paper form.", run: () => navigateWithFeedback("scan") },
+      { id: "open_history", description: "Open the list of the user's saved forms and documents.", run: () => navigateWithFeedback("history") },
+      { id: "open_profile", description: "Open profile and settings: voice, language, and saved personal details.", run: () => navigateWithFeedback("profile") },
+      { id: "read_page", description: "Read aloud what is on the current screen.", run: () => speak(pageRef.current.description ?? pageRef.current.title ?? "You are in Swaram.") },
+      { id: "stop_talking", description: "Stop talking / be quiet.", run: () => cancelSpeech() },
+      { id: "help", description: "Explain what the user can say or do on this screen.", run: () => runGlobalTranscript("help") },
+      { id: "language_english", description: "Speak and listen in English.", run: () => setAssistantLang("en-IN") },
+      { id: "language_hindi", description: "Speak and listen in Hindi.", run: () => setAssistantLang("hi-IN") },
+      { id: "language_malayalam", description: "Speak and listen in Malayalam.", run: () => setAssistantLang("ml-IN") },
+      { id: "language_french", description: "Speak and listen in French.", run: () => setAssistantLang("fr-FR") },
+    ]);
+  }, [navigateWithFeedback, setAssistantLang, runGlobalTranscript]);
 
   // Initialize SpeechRecognition State Changes and Transcript routing
   useEffect(() => {
@@ -609,6 +656,15 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         navigator.maxTouchPoints > 0,
     );
   }, []);
+
+  // Surface real-time (Azure streaming) status so failures are visible instead
+  // of silently falling back. Errors stay on-screen long enough to read/report.
+  useEffect(() => {
+    return onAzureStreamDiag((msg, isError) => {
+      if (isError) flashToast("Real-time voice: " + msg, 7000);
+      else if (msg.startsWith("connected")) flashToast("Real-time recognition connected.", 2500);
+    });
+  }, [flashToast]);
   useEffect(() => {
     if (micMode === "ptt") setSttState(pttActive ? "listening" : "off");
   }, [pttActive, micMode]);
@@ -797,11 +853,13 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     // Cloud STT (Groq / Azure) downloads nothing — probe the server for a key
     // and mark the STT model ready so setup never waits on the ~150 MB Whisper
     // download.
-    if (provider === "groq" || provider === "auto" || provider === "azure") {
+    // Preload the streaming SDK + token so the first real-time press is fast.
+    if (provider === "azure-stream") void warmAzureStream();
+    if (provider === "groq" || provider === "auto" || provider === "azure" || provider === "azure-stream") {
       void probeGroqAvailability().then((groqOk) => {
         const cur = getVoiceSettings().sttProvider;
-        const ok = cur === "azure" ? isAzureConfigured() : groqOk;
-        if (ok && (cur === "groq" || cur === "auto" || cur === "azure")) {
+        const ok = cur === "azure" || cur === "azure-stream" ? isAzureConfigured() : groqOk;
+        if (ok && (cur === "groq" || cur === "auto" || cur === "azure" || cur === "azure-stream")) {
           updateSttProgress(1, "Cloud voice ready");
           markSttReady();
         } else if (cur === "auto") {

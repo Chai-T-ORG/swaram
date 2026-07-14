@@ -76,8 +76,11 @@ export async function POST(req: NextRequest) {
   const locale = req.headers.get("x-language") || "en-IN";
 
   // 1) Azure when explicitly requested and a server key is configured.
+  // "azure-stream" degrades to the same REST path when the streaming SDK path
+  // fails on the client, so it maps here too.
+  const wantsAzure = provider === "azure" || provider === "azure-stream";
   let azureError = "";
-  if (provider === "azure" && process.env.AZURE_SPEECH_KEY) {
+  if (wantsAzure && process.env.AZURE_SPEECH_KEY) {
     try {
       const text = await transcribeAzure(audio, locale);
       if (text) return Response.json({ text, provider: "azure" });
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
   if (!key) {
     // Azure was tried but there's no Groq backstop: surface its outcome so the
     // client can drop to an on-device engine, without a misleading "no-key".
-    if (provider === "azure" && process.env.AZURE_SPEECH_KEY) {
+    if (wantsAzure && process.env.AZURE_SPEECH_KEY) {
       return azureError
         ? Response.json({ error: "azure", detail: azureError }, { status: 502 })
         : Response.json({ text: "", provider: "azure" });

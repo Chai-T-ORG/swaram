@@ -14,7 +14,9 @@ const SPEECH_THRESHOLD = 0.012;
 // Time-based thresholds (sample-rate independent) — the old frame-count VAD
 // waited ~3.8s of silence, which made every command feel broken.
 const MIN_SPEECH_MS = 150;    // need this much speech to count as an utterance
-const SILENCE_FLUSH_MS = 700; // end the utterance this long after speech stops
+const SILENCE_FLUSH_MS = 500; // end the utterance this long after speech stops
+                              // (500ms keeps short commands snappy without
+                              //  clipping the natural pauses in a spoken answer)
 const MAX_UTTERANCE_MS = 14000; // hard cap
 // Keep this much audio from *before* speech is detected, so soft word onsets
 // ("T" in "Tejas") aren't clipped — clipped onsets are what makes Whisper
