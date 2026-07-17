@@ -22,7 +22,8 @@ import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { initMic } from "@/lib/voice/micManager";
 import { speak, unlockAudioPlayback } from "@/lib/voice/textToSpeech";
-import { IconMic, IconCheck } from "@/components/icons";
+import { IconCheck } from "@/components/icons";
+import VoiceOrb from "@/components/ui/VoiceOrb";
 
 /**
  * SetupOverlay — the one-tap welcome shown on first visit.
@@ -169,18 +170,18 @@ export default function SetupOverlay() {
             {/* Logo / Branding */}
             <div className="text-center mb-8">
               <motion.div
-                initial={{ scale: 0, rotate: -20 }}
-                animate={{ scale: 1, rotate: 0 }}
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: "spring", delay: 0.3, damping: 15 }}
-                className="w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-6 bg-gradient-to-br from-accent to-accent-deep shadow-button"
+                className="mb-6 flex justify-center"
               >
-                <IconMic className="w-10 h-10 text-white" strokeWidth={1.5} />
+                <VoiceOrb state={hasStarted && state.stage !== "ready" ? "thinking" : "idle"} size="md" />
               </motion.div>
 
-              <h1 className="text-2xl font-bold mb-2 text-ink">
+              <h1 className="font-display text-3xl mb-2 text-ink">
                 Welcome to Swaram
               </h1>
-              <p className="text-sm text-soft">
+              <p className="text-sm leading-relaxed text-soft">
                 {!hasStarted
                   ? "Tap below to begin. I'll read your forms aloud and fill them in for you — just by talking."
                   : state.stage === "ready"
@@ -197,7 +198,7 @@ export default function SetupOverlay() {
                 whileTap={{ scale: 0.98 }}
                 onClick={startSetup}
                 aria-label="Tap to begin using Swaram"
-                className="w-full py-5 px-6 rounded-2xl font-bold text-white text-lg mb-6 cursor-pointer bg-accent hover:bg-accent-deep shadow-button transition-colors"
+                className="w-full py-5 px-6 rounded-full font-bold text-on-accent text-lg mb-6 cursor-pointer bg-accent hover:bg-accent-hover shadow-button transition-colors"
               >
                 Tap to begin
               </motion.button>
@@ -293,17 +294,11 @@ export default function SetupOverlay() {
                 animate={{ scale: 1, opacity: 1 }}
                 className="text-center py-4"
               >
-                <div
-                  className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
-                  style={{
-                    background: "var(--color-success, #22c55e)",
-                    boxShadow: "0 8px 24px rgba(34, 197, 94, 0.3)",
-                  }}
-                >
-                  <IconCheck className="w-8 h-8 text-white" strokeWidth={2.5} />
+                <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-ok-soft text-ok shadow-sm">
+                  <IconCheck className="w-8 h-8" strokeWidth={2.5} />
                 </div>
-                <p className="text-lg font-bold text-ink">
-                  All Set
+                <p className="font-display text-xl text-ink">
+                  All set
                 </p>
                 <p className="text-sm mt-1 text-soft">
                   Your voice assistant is ready. Entering Swaram…
