@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import Waveform from "@/components/Waveform";
 import VoiceControl from "@/components/voice/VoiceControl";
@@ -32,14 +33,16 @@ import {
 export default function FillMobile() {
   const s = useFillSession();
   const [showConversation, setShowConversation] = useState(false);
+  const prefersReducedMotion = useReducedMotion();
 
   if (s.phase === "loading") {
     return (
       <div className="flex h-full flex-1 flex-col items-center justify-center p-8 text-center">
-        <div className="mb-4 h-10 w-10 animate-spin rounded-full border-4 border-accent-soft border-t-accent" />
-        <p role="status" className="text-sm font-bold text-soft">
-          Loading your voice session…
-        </p>
+        <div className="skeleton-card flex w-full max-w-sm flex-col gap-4">
+          <div className="skeleton-shimmer h-12 w-12 rounded-full self-center" />
+          <div className="skeleton-text h-6 w-3/4 self-center" />
+          <div className="skeleton-text h-4 w-1/2 self-center" />
+        </div>
       </div>
     );
   }
@@ -106,9 +109,9 @@ export default function FillMobile() {
   }
 
   return (
-    <div className="relative flex h-full flex-1 flex-col overflow-hidden">
+    <div className={`relative flex h-full flex-1 flex-col overflow-hidden bg-surface transition-colors duration-500 ${s.voice?.ttsActive ? "bg-accent-soft/10" : ""}`}>
       {/* Slim top bar */}
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-surface/90 px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] backdrop-blur-md">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
         <Link href="/" className="grid h-11 w-11 place-items-center rounded-full text-soft" aria-label="Quit session">
           <IconX className="h-5 w-5" />
         </Link>
@@ -135,43 +138,65 @@ export default function FillMobile() {
 
       <div className="h-1 w-full shrink-0 bg-line" aria-hidden="true">
         <div
-          className="h-full bg-accent transition-all duration-500"
+          key={s.questionNumber}
+          className="relative h-full bg-accent transition-all duration-500"
           style={{ width: `${(s.questionNumber / Math.max(s.total, 1)) * 100}%` }}
-        />
+        >
+          {!prefersReducedMotion && (
+            <motion.div
+              initial={{ left: "-20%", opacity: 0.8 }}
+              animate={{ left: "100%", opacity: 0 }}
+              transition={{ duration: 0.8, ease: "easeInOut" }}
+              className="absolute top-0 bottom-0 w-24 bg-gradient-to-r from-transparent via-white/80 to-transparent pointer-events-none"
+            />
+          )}
+        </div>
       </div>
 
       {/* Question stage */}
       <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-y-auto px-5 pb-56 pt-6 text-center">
-        {s.currentField && (
-          <span className="chip bg-accent-soft text-[10px] font-bold uppercase tracking-wider text-accent">
-            {typeLabel(s.currentField.type)}
-          </span>
-        )}
-
-        <h1 className="max-w-md font-display text-[2rem] leading-tight text-ink">{s.currentField?.label ?? "…"}</h1>
+        <AnimatePresence mode="wait">
+          {s.currentField && (
+            <motion.div
+              key={s.currentField.id}
+              initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: prefersReducedMotion ? 0 : -12 }}
+              transition={{ type: "spring", stiffness: 260, damping: 24 }}
+              className="flex flex-col items-center gap-4"
+            >
+              <span className="chip bg-accent-soft text-[10px] font-bold uppercase tracking-wider text-accent">
+                {typeLabel(s.currentField.type)}
+              </span>
+              <h1 className="max-w-md font-display text-[2rem] leading-tight text-ink">
+                {s.currentField.label}
+              </h1>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="sr-only">
           <StatusAnnouncer message={s.status} tone={s.tone} />
         </div>
 
-        {s.phase === "asking" && <p className="text-sm font-semibold text-accent animate-pulse">Reading the question aloud…</p>}
+        {s.phase === "asking" && <p className="text-sm font-semibold text-accent animate-pulse">Reading question aloud…</p>}
 
         {s.phase === "listening" && !s.confirmMode && (
-          <div className="flex flex-col items-center gap-3 animate-fade-in">
-            <div className="w-36">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-40">
               <Waveform active={s.voice?.sttState === "listening"} speaking={s.voice?.ttsActive} volume={s.voice?.micVolume} />
             </div>
-            <p className="text-sm font-semibold text-soft">Listening — speak now</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-accent animate-pulse">Listening — speak now</p>
           </div>
         )}
 
         {(s.phase === "confirming" || (s.phase === "listening" && s.confirmMode)) && s.confirmValue && (
-          <div className="flex w-full flex-col items-center gap-3 animate-fade-in">
-            <p className="text-[15px] text-soft">
-              I heard <strong className="font-display text-lg text-ink">&ldquo;{s.confirmValue}&rdquo;</strong> — correct?
+          <div className="flex flex-col items-center gap-4 w-full max-w-sm">
+            <p className="text-sm text-soft">
+              I heard <strong className="font-display text-lg text-ink block mt-1">&ldquo;{s.confirmValue}&rdquo;</strong>
             </p>
             <SpellBubbles value={s.confirmValue} />
-            <div className="mt-1 flex w-full max-w-sm gap-2.5">
+            <div className="mt-2 flex gap-3 w-full">
               <button type="button" className="btn-primary min-h-13 flex-1" onClick={s.confirmYes}>
                 <IconCheck className="h-4 w-4" />
                 Yes
@@ -189,7 +214,7 @@ export default function FillMobile() {
       {/* Bottom: control row + the one voice control */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col items-center gap-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <div
-          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-line bg-raised/95 px-2 py-1.5 shadow-md backdrop-blur"
+          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-line bg-raised px-2 py-1.5 shadow-md"
           role="group"
           aria-label="Voice controls"
         >
@@ -220,7 +245,7 @@ export default function FillMobile() {
 
       {/* Paused overlay */}
       {s.phase === "paused" && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-surface/95 backdrop-blur animate-fade-in">
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-surface animate-fade-in">
           <p className="font-display text-2xl text-ink">Paused</p>
           <p className="text-sm text-soft">Take your time. Nothing is being recorded.</p>
           <button type="button" className="btn-primary min-h-14 px-10" onClick={s.resume}>
@@ -232,7 +257,7 @@ export default function FillMobile() {
 
       {/* Fields map sheet */}
       {s.showFieldsList && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-raised/97 backdrop-blur-md animate-slide-up">
+        <div className="fixed inset-0 z-50 flex flex-col bg-raised animate-slide-up">
           <div className="flex items-center justify-between border-b border-line p-5 pt-[calc(1.25rem+env(safe-area-inset-top))]">
             <div>
               <h2 className="text-sm font-bold uppercase tracking-wider text-ink">All fields</h2>
@@ -254,7 +279,7 @@ export default function FillMobile() {
 
       {/* Conversation sheet */}
       {showConversation && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-raised/97 backdrop-blur-md animate-slide-up">
+        <div className="fixed inset-0 z-50 flex flex-col bg-raised animate-slide-up">
           <div className="flex items-center justify-between border-b border-line p-5 pt-[calc(1.25rem+env(safe-area-inset-top))]">
             <h2 className="text-sm font-bold uppercase tracking-wider text-ink">Our conversation</h2>
             <button

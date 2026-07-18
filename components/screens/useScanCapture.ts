@@ -34,6 +34,7 @@ export function useScanCapture() {
   const [guidance, setGuidance] = useState("Tap Start camera, or say start camera. I will guide you with my voice.");
   const [tone, setTone] = useState<ScanTone>("info");
   const [cvReady, setCvReady] = useState<boolean | null>(null);
+  const [isDocumentDetected, setIsDocumentDetected] = useState(false);
 
   useVoicePage(
     {
@@ -63,6 +64,7 @@ export function useScanCapture() {
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    setIsDocumentDetected(false);
     cancelSpeech();
   }
 
@@ -122,28 +124,38 @@ export function useScanCapture() {
       ctx.drawImage(video, 0, 0, probe.width, probe.height);
 
       const check = await checkDocumentInFrame(probe);
-      if (!check) return;
+      if (!check) {
+        setIsDocumentDetected(false);
+        return;
+      }
 
       if (check.coverage < 0.2) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(false);
         sayGuidance("Move the form closer, so it fills the frame.");
       } else if (check.offsetX < -0.3) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(false);
         sayGuidance("Move left. Keep the form inside the frame.");
       } else if (check.offsetX > 0.3) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(false);
         sayGuidance("Move right. Keep the form inside the frame.");
       } else if (check.offsetY < -0.3) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(false);
         sayGuidance("Tilt up. Raise the camera a little.");
       } else if (check.offsetY > 0.3) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(false);
         sayGuidance("Tilt down. Lower the camera a little.");
       } else if (check.sharpness < SHARPNESS_MIN) {
         goodFramesRef.current = 0;
+        setIsDocumentDetected(true);
         sayGuidance("Hold steady.");
       } else {
         goodFramesRef.current += 1;
+        setIsDocumentDetected(true);
         if (goodFramesRef.current === 1) sayGuidance("Hold steady.", 1500);
         if (goodFramesRef.current >= GOOD_FRAMES_NEEDED) capture();
       }
@@ -205,6 +217,7 @@ export function useScanCapture() {
     guidance,
     tone,
     cvReady,
+    isDocumentDetected,
     startCamera,
     capture,
     ingest,

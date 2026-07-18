@@ -778,11 +778,11 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         void endPtt();
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
       if (holding) cancelPtt();
     };
   }, [micMode, beginPtt, endPtt]);

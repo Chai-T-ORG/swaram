@@ -43,9 +43,7 @@ export default function VoiceControl({ variant, className = "" }: VoiceControlPr
     : sttState === "paused-silence"
     ? "Microphone paused"
     : micMode === "ptt"
-    ? isTouch
-      ? "Tap to talk"
-      : "Hold to talk"
+    ? "I'm listening whenever you're ready."
     : "Microphone off";
 
   const hint = listening

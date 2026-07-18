@@ -30,6 +30,7 @@ export function useUploadScreen() {
   const [tone, setTone] = useState<UploadTone>("info");
   const [progress, setProgress] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [isArmed, setIsArmed] = useState(false);
   // Browsers only open the file dialog from a real tap/click — never from a
   // voice callback. So "choose file" arms this flag, and the very next tap
   // anywhere on the page opens the picker.
@@ -41,6 +42,7 @@ export function useUploadScreen() {
 
   function armPicker() {
     armedRef.current = true;
+    setIsArmed(true);
     const msg = "To choose your file, tap anywhere on the screen.";
     setStatus(msg);
     setTone("info");
@@ -51,6 +53,7 @@ export function useUploadScreen() {
     function onAnyTap() {
       if (armedRef.current) {
         armedRef.current = false;
+        setIsArmed(false);
         openPicker();
       }
     }
@@ -143,7 +146,7 @@ export function useUploadScreen() {
     }
   }
 
-  return { inputRef, status, tone, progress, dragging, setDragging, handleFile, openPicker };
+  return { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker };
 }
 
 function readWithProgress(file: File, onProgress: (pct: number) => void): Promise<ArrayBuffer> {

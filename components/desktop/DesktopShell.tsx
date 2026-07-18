@@ -13,6 +13,7 @@
 import { type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 import { useVoiceShell } from "@/components/voice/VoiceProvider";
 import VoiceControl from "@/components/voice/VoiceControl";
 import ConsentDialog from "@/components/voice/ConsentDialog";
@@ -27,12 +28,10 @@ const NAV_LINKS = [
 export default function DesktopShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { exclusive, theme, toggleTheme } = useVoiceShell();
-  // Home renders the hero voice control as its stage — the docked pill would
-  // be a duplicate control there.
   const isHome = pathname === "/";
 
   return (
-    <div className="flex h-dvh w-full flex-col bg-surface text-ink">
+    <div className="flex h-dvh w-full flex-col bg-surface text-ink ambient-grid">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-full focus:bg-accent focus:px-5 focus:py-2.5 focus:text-sm focus:font-bold focus:text-on-accent"
@@ -41,7 +40,7 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
       </a>
 
       {!exclusive && (
-        <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between border-b border-line bg-surface/85 px-8 py-4 backdrop-blur-md">
+        <header className="sticky top-4 z-30 mx-auto flex w-[calc(100%-2.5rem)] max-w-5xl shrink-0 items-center justify-between rounded-2xl border border-line bg-raised/95 px-6 py-3 shadow-md backdrop-blur-sm">
           <Link
             href="/"
             className="flex items-center gap-3 text-ink no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent rounded-full"
@@ -60,11 +59,18 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
                   key={link.href}
                   href={link.href}
                   aria-current={active ? "page" : undefined}
-                  className={`rounded-full px-4 py-2 text-sm font-semibold no-underline transition-colors ${
-                    active ? "bg-accent-soft text-accent" : "text-soft hover:bg-sunken hover:text-ink"
+                  className={`relative rounded-full px-4 py-2 text-sm font-semibold no-underline transition-colors ${
+                    active ? "text-accent" : "text-soft hover:text-ink"
                   }`}
                 >
-                  {link.label}
+                  {active && (
+                    <motion.span
+                      layoutId="activeNavIndicator"
+                      className="absolute inset-0 rounded-full bg-accent-soft z-0"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative z-10">{link.label}</span>
                 </Link>
               );
             })}
@@ -89,7 +95,18 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
               : "mx-auto w-full max-w-5xl px-8 pb-44 pt-10"
           }
         >
-          {children}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={pathname}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="w-full h-full flex flex-col flex-1"
+            >
+              {children}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
 

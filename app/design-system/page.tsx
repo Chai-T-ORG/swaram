@@ -6,6 +6,7 @@
  */
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import Waveform from "@/components/Waveform";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
@@ -173,6 +174,131 @@ export default function DesignSystemPage() {
           </div>
         </div>
       </section>
+
+      <section aria-label="Motion polish">
+        <h2 className="eyebrow mb-4">Motion &amp; Choreography</h2>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+          <div className="card flex flex-col items-center justify-between p-6 text-center">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-faint mb-4">Staggers</h3>
+            <StaggerDemo />
+          </div>
+          <div className="card flex flex-col items-center justify-between p-6 text-center">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-faint mb-4">Button Presses</h3>
+            <ButtonPressDemo />
+          </div>
+          <div className="card flex flex-col items-center justify-between p-6 text-center">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-faint mb-4">Check Draws</h3>
+            <DrawnCheckDemo />
+          </div>
+          <div className="card flex flex-col items-center justify-between p-6 text-center">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-faint mb-4">Celebrate Bloom</h3>
+            <CelebrateDemo />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function StaggerDemo() {
+  const [trigger, setTrigger] = useState(0);
+  const items = ["Item One", "Item Two", "Item Three", "Item Four"];
+  return (
+    <div className="flex flex-col items-center gap-3 w-full">
+      <div key={trigger} className="flex flex-col gap-2 w-full">
+        {items.map((item, i) => (
+          <motion.div
+            key={`${item}-${trigger}`}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 24, delay: i * 0.08 }}
+            className="card p-3 text-xs text-center text-ink font-semibold"
+          >
+            {item}
+          </motion.div>
+        ))}
+      </div>
+      <button className="btn-secondary text-xs min-h-9 px-3 py-1 self-center" onClick={() => setTrigger(t => t + 1)}>
+        Replay
+      </button>
+    </div>
+  );
+}
+
+function ButtonPressDemo() {
+  return (
+    <div className="flex flex-col items-center gap-4 w-full my-auto">
+      <button className="btn-primary min-h-12 w-full">Primary Action</button>
+      <button className="btn-secondary min-h-12 w-full">Secondary</button>
+      <span className="text-[10px] text-faint font-semibold uppercase leading-tight">Observe active translateY click effect</span>
+    </div>
+  );
+}
+
+function DrawnCheckDemo() {
+  const [trigger, setTrigger] = useState(0);
+  return (
+    <div className="flex flex-col items-center gap-4 w-full my-auto">
+      <div className="grid h-10 w-10 place-items-center rounded-full bg-ok-soft">
+        <svg
+          key={trigger}
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={3.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-5 w-5 text-ok"
+        >
+          <motion.path
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            d="M5 13l4 4L19 7"
+          />
+        </svg>
+      </div>
+      <button className="btn-secondary text-xs min-h-9 px-3 py-1" onClick={() => setTrigger(t => t + 1)}>
+        Replay
+      </button>
+    </div>
+  );
+}
+
+function CelebrateDemo() {
+  const [trigger, setTrigger] = useState(0);
+  return (
+    <div className="flex flex-col items-center gap-4 w-full my-auto">
+      <div key={trigger} className="relative grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok shadow-sm">
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0.6 }}
+          animate={{ scale: 1.8, opacity: 0 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="absolute inset-0 rounded-full bg-ok-soft pointer-events-none"
+        />
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={3.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-8 w-8 text-ok"
+          aria-hidden="true"
+        >
+          <motion.path
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+            d="M5 13l4 4L19 7"
+          />
+        </svg>
+      </div>
+      <button className="btn-secondary text-xs min-h-9 px-3 py-1" onClick={() => setTrigger(t => t + 1)}>
+        Replay
+      </button>
     </div>
   );
 }

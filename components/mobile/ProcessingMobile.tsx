@@ -6,13 +6,38 @@
  */
 
 import Link from "next/link";
+import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import { useProcessing, PROCESSING_STEPS } from "@/components/screens/useProcessing";
-import { IconCheck, IconLoader, IconDoc, IconAlertCircle, IconPlay, IconRepeat, IconSparkle } from "@/components/icons";
+import { IconLoader, IconDoc, IconAlertCircle, IconPlay, IconRepeat, IconSparkle } from "@/components/icons";
+
+function DrawnCheck() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={3.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4 text-ok"
+      aria-hidden="true"
+    >
+      <motion.path
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+        d="M5 13l4 4L19 7"
+      />
+    </svg>
+  );
+}
 
 export default function ProcessingMobile() {
   const p = useProcessing();
+  const prefersReducedMotion = useReducedMotion();
 
   return (
     <div className="flex flex-col items-center gap-6 pb-6 animate-fade-in">
@@ -34,19 +59,31 @@ export default function ProcessingMobile() {
           {PROCESSING_STEPS.map((step) => {
             const state = p.stepState(step.key);
             return (
-              <li key={step.key} className="flex min-h-12 items-center gap-3.5 border-b border-line/40 pb-1 last:border-0">
+              <motion.li
+                key={step.key}
+                animate={
+                  prefersReducedMotion
+                    ? {}
+                    : {
+                        backgroundColor: state === "done" ? "rgba(21, 128, 61, 0.03)" : "transparent",
+                        scale: state === "done" ? [1, 1.015, 1] : 1,
+                      }
+                }
+                transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                className="flex min-h-12 items-center gap-3.5 border-b border-line/40 pb-1 last:border-0 rounded-lg px-2 -mx-2"
+              >
                 <span
                   aria-hidden="true"
                   className={`grid h-7 w-7 shrink-0 place-items-center rounded-full transition-all duration-300 ${
                     state === "done"
-                      ? "bg-ok-soft text-ok"
+                      ? "bg-ok-soft"
                       : state === "active"
                         ? "bg-accent-soft text-accent ring-2 ring-accent/15"
                         : "border border-line text-faint"
                   }`}
                 >
                   {state === "done" ? (
-                    <IconCheck className="h-4 w-4" strokeWidth={3} />
+                    <DrawnCheck />
                   ) : state === "active" ? (
                     <IconLoader className="h-4 w-4 animate-spin" />
                   ) : null}
@@ -58,7 +95,7 @@ export default function ProcessingMobile() {
                     {state === "done" ? " finished" : state === "active" ? " in progress" : " waiting"}
                   </span>
                 </span>
-              </li>
+              </motion.li>
             );
           })}
         </ol>

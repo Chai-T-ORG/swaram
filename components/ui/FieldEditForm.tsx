@@ -1,17 +1,19 @@
 "use client";
 
-/**
- * Inline editor for one review-screen field — text input, choice select, or
- * yes/no for checkboxes. Shared by both platform review bodies.
- */
-
+import { motion, useReducedMotion } from "framer-motion";
 import type { FormField } from "@/lib/types";
 import type { ReviewScreen } from "@/components/screens/useReview";
 
 export default function FieldEditForm({ r, field }: { r: ReviewScreen; field: FormField }) {
+  const prefersReducedMotion = useReducedMotion();
+
   return (
-    <form
-      className="mt-3.5 flex flex-wrap gap-2.5 animate-fade-in"
+    <motion.form
+      initial={prefersReducedMotion ? {} : { height: 0, opacity: 0 }}
+      animate={prefersReducedMotion ? {} : { height: "auto", opacity: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 26 }}
+      style={{ overflow: "hidden" }}
+      className="mt-3.5 flex flex-wrap gap-2.5"
       onSubmit={(e) => {
         e.preventDefault();
         r.saveEdit(field);
@@ -60,6 +62,6 @@ export default function FieldEditForm({ r, field }: { r: ReviewScreen; field: Fo
       <button type="button" className="btn-secondary min-h-12 px-4 text-xs" onClick={r.cancelEdit}>
         Cancel
       </button>
-    </form>
+    </motion.form>
   );
 }

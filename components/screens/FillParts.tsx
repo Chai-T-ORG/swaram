@@ -1,30 +1,60 @@
 "use client";
 
-/**
- * Shared presentational pieces for the fill screen — spelling bubbles, the
- * typed-answer form, and the fields-map list. Both platform bodies compose
- * these.
- */
-
+import { motion, useReducedMotion } from "framer-motion";
 import type { FillSession } from "./useFillSession";
 import { IconCheck, IconAlertCircle } from "@/components/icons";
 
 /** The dictated value shown character by character, so spelling is verifiable. */
 export function SpellBubbles({ value }: { value: string }) {
+  const prefersReducedMotion = useReducedMotion();
+  const containerVariants = {
+    hidden: {},
+    visible: {
+      transition: {
+        staggerChildren: prefersReducedMotion ? 0 : 0.02,
+      },
+    },
+  };
+
+  const letterVariants = {
+    hidden: { scale: prefersReducedMotion ? 1 : 0, opacity: 0 },
+    visible: {
+      scale: 1,
+      opacity: 1,
+      transition: {
+        type: "spring" as const,
+        stiffness: 260,
+        damping: 24,
+      },
+    },
+  };
+
   return (
-    <div className="mt-1 flex max-w-md flex-wrap justify-center gap-1 font-mono text-xs font-bold" aria-hidden="true">
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="visible"
+      className="mt-1 flex max-w-md flex-wrap justify-center gap-1 font-mono text-xs font-bold"
+      aria-hidden="true"
+    >
       {value
         .toUpperCase()
         .split("")
-        .map((ch, i) => (
-          <span
-            key={i}
-            className={ch === " " ? "w-2.5" : "rounded-lg border border-line bg-sunken px-1.5 py-0.5 text-ink shadow-sm"}
-          >
-            {ch === " " ? "" : ch}
-          </span>
-        ))}
-    </div>
+        .map((ch, i) => {
+          if (ch === " ") {
+            return <span key={i} className="w-2.5" />;
+          }
+          return (
+            <motion.span
+              key={i}
+              variants={letterVariants}
+              className="rounded-lg border border-line bg-sunken px-1.5 py-0.5 text-ink shadow-sm"
+            >
+              {ch}
+            </motion.span>
+          );
+        })}
+    </motion.div>
   );
 }
 

@@ -54,9 +54,9 @@
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.03);
   --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.03);
-  --shadow-card: 0 12px 30px -10px rgba(27, 26, 23, 0.06), 0 4px 12px -5px rgba(27, 26, 23, 0.03);
+  --shadow-card: 0 2px 4px 0 rgba(27, 26, 23, 0.05), 0 12px 28px -6px rgba(27, 26, 23, 0.07);
   --shadow-glow: 0 0 30px 0 rgba(30, 81, 56, 0.1);
-  --shadow-float: 0 20px 40px -15px rgba(20, 52, 36, 0.18), 0 1px 10px rgba(20, 52, 36, 0.06);
+  --shadow-float: 0 4px 8px -2px rgba(20, 52, 36, 0.1), 0 24px 48px -12px rgba(20, 52, 36, 0.18);
   --shadow-button: 0 4px 14px 0 rgba(30, 81, 56, 0.25);
 
   /* Transitions */
@@ -97,9 +97,9 @@
   --gradient-glow: radial-gradient(circle, rgba(143,191,155,0.08) 0%, rgba(143,191,155,0) 70%);
 
   /* Shadows */
-  --shadow-card: 0 12px 30px -10px rgba(0, 0, 0, 0.25), 0 4px 12px -5px rgba(0, 0, 0, 0.15);
+  --shadow-card: 0 2px 4px 0 rgba(0, 0, 0, 0.4), 0 12px 28px -6px rgba(0, 0, 0, 0.35);
   --shadow-glow: 0 0 35px 0 rgba(143, 191, 155, 0.1);
-  --shadow-float: 0 20px 40px -15px rgba(0, 0, 0, 0.4), 0 1px 10px rgba(143, 191, 155, 0.05);
+  --shadow-float: 0 4px 8px -2px rgba(0, 0, 0, 0.5), 0 24px 48px -12px rgba(0, 0, 0, 0.45);
   --shadow-button: 0 4px 14px 0 rgba(143, 191, 155, 0.18);
 }
 
@@ -130,9 +130,9 @@
     --gradient-surface: linear-gradient(180deg, #1E1B18 0%, #141311 100%);
     --gradient-glow: radial-gradient(circle, rgba(143,191,155,0.08) 0%, rgba(143,191,155,0) 70%);
 
-    --shadow-card: 0 12px 30px -10px rgba(0, 0, 0, 0.25), 0 4px 12px -5px rgba(0, 0, 0, 0.15);
+    --shadow-card: 0 2px 4px 0 rgba(0, 0, 0, 0.4), 0 12px 28px -6px rgba(0, 0, 0, 0.35);
     --shadow-glow: 0 0 35px 0 rgba(143, 191, 155, 0.1);
-    --shadow-float: 0 20px 40px -15px rgba(0, 0, 0, 0.4), 0 1px 10px rgba(143, 191, 155, 0.05);
+    --shadow-float: 0 4px 8px -2px rgba(0, 0, 0, 0.5), 0 24px 48px -12px rgba(0, 0, 0, 0.45);
     --shadow-button: 0 4px 14px 0 rgba(143, 191, 155, 0.18);
   }
 }
@@ -190,6 +190,28 @@ body {
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
+/* Tactile Paper Grain Overlay */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.02;
+  background-attachment: fixed;
+}
+
+.dark body::before {
+  opacity: 0.008;
+}
+
+@media (prefers-contrast: more) {
+  body::before {
+    display: none !important;
+  }
+}
+
 ::selection {
   background: var(--accent);
   color: var(--surface);
@@ -223,19 +245,29 @@ body {
     border: 1px solid var(--line);
     background: var(--raised);
     padding: 1.5rem;
-    box-shadow: var(--shadow-card);
-    transition: all var(--transition-normal);
+    box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    transition: transform var(--transition-normal), box-shadow var(--transition-normal), border-color var(--transition-normal);
     z-index: 1;
   }
   
+  .dark .card {
+    box-shadow: var(--shadow-card);
+  }
+
   .card:hover {
     transform: translateY(-2px);
-    box-shadow: var(--shadow-xl), var(--shadow-glow);
+    box-shadow: var(--shadow-float), var(--shadow-glow), inset 0 1px 0 rgba(255, 255, 255, 0.7);
     border-color: rgba(30, 81, 56, 0.25);
   }
 
   .dark .card:hover {
+    box-shadow: var(--shadow-float), var(--shadow-glow);
     border-color: rgba(143, 191, 155, 0.25);
+  }
+
+  .card:active {
+    transform: translateY(1px);
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(0, 0, 0, 0.05);
   }
 
   /* Interactive Premium Buttons */
@@ -269,29 +301,40 @@ body {
 
   .btn-primary:hover {
     background: var(--accent-hover);
-    transform: translateY(-1px);
+    transform: translateY(-1.5px);
     box-shadow: var(--shadow-button), 0 6px 20px 0 rgba(30, 81, 56, 0.35);
   }
 
   .btn-primary:active {
-    transform: translateY(0) scale(0.98);
+    transform: translateY(1px) scale(0.98);
+    box-shadow: var(--shadow-sm);
   }
 
   .btn-secondary {
     background: var(--raised);
     border-color: var(--line);
     color: var(--ink);
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  .dark .btn-secondary {
     box-shadow: var(--shadow-sm);
   }
 
   .btn-secondary:hover {
     background: var(--surface);
     border-color: var(--faint);
-    transform: translateY(-1px);
+    transform: translateY(-1.5px);
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  .dark .btn-secondary:hover {
+    box-shadow: var(--shadow-md);
   }
 
   .btn-secondary:active {
-    transform: scale(0.98);
+    transform: translateY(1px) scale(0.98);
+    box-shadow: var(--shadow-sm);
   }
 
   .btn-ghost {
@@ -322,11 +365,15 @@ body {
     width: 100%;
     border-radius: var(--radius-md);
     border: 1px solid var(--line);
-    background: var(--raised);
+    background-color: var(--raised);
+    background-image: linear-gradient(var(--accent), var(--accent));
+    background-position: bottom center;
+    background-repeat: no-repeat;
+    background-size: 0% 2px;
     padding: 0.625rem 1rem;
     font-size: 0.95rem;
     color: var(--ink);
-    transition: all var(--transition-fast);
+    transition: border-color var(--transition-fast), background-size var(--transition-normal);
   }
 
   .field-input::placeholder {
@@ -336,6 +383,7 @@ body {
   .field-input:focus {
     outline: none;
     border-color: var(--accent);
+    background-size: 100% 2px;
     box-shadow: 0 0 0 3px rgba(30, 81, 56, 0.15);
   }
 
@@ -484,8 +532,15 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .scan-laser,
   .animate-fade-in,
-  .animate-slide-up {
+  .animate-slide-up,
+  .skeleton-shimmer,
+  .skeleton-text {
     animation: none;
+  }
+
+  .skeleton-shimmer,
+  .skeleton-text {
+    background: var(--sunken);
   }
 
   .card:hover,
@@ -495,4 +550,471 @@ body {
   .bubble:hover {
     transform: none;
   }
+}
+
+/* ---------------------------------------------------------------------
+   TACTILE FOCUS STYLES
+   Thick 3px accent ring with 2px offset on EVERY focusable
+--------------------------------------------------------------------- */
+*:focus-visible {
+  outline: 3px solid var(--accent) !important;
+  outline-offset: 2px !important;
+}
+
+/* ---------------------------------------------------------------------
+   SKELETON SHIMMER CLASSES
+--------------------------------------------------------------------- */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--raised);
+  padding: 1.5rem;
+  min-height: 120px;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--sunken) 25%,
+    var(--line) 37%,
+    var(--sunken) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+.skeleton-text {
+  background: linear-gradient(
+    90deg,
+    var(--sunken) 25%,
+    var(--line) 37%,
+    var(--sunken) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Dropzone Animations */
+@keyframes stroke-march {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.dropzone-dragging {
+  background-image: url("data:image/svg+xml,%3Csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' fill='none' rx='28' stroke='%231E5138' stroke-width='3' stroke-dasharray='10 10' stroke-dashoffset='0'/%3E%3C/svg%3E") !important;
+  animation: stroke-march 0.6s linear infinite !important;
+  border-style: none !important;
+}
+
+.dark .dropzone-dragging {
+  background-image: url("data:image/svg+xml,%3Csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' fill='none' rx='28' stroke='%238FBF9B' stroke-width='3' stroke-dasharray='10 10' stroke-dashoffset='0'/%3E%3C/svg%3E") !important;
+}
+
+@keyframes border-breath {
+  0% {
+    border-color: var(--line);
+    box-shadow: var(--shadow-card);
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow: 0 0 15px 3px rgba(30, 81, 56, 0.15);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+.dropzone-armed {
+  animation: border-breath 3s ease-in-out infinite !important;
+}
+
+.dark .dropzone-armed {
+  animation-name: border-breath-dark !important;
+}
+
+@keyframes border-breath-dark {
+  0% {
+    border-color: var(--line);
+    box-shadow: var(--shadow-card);
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow: 0 0 15px 3px rgba(143, 191, 155, 0.2);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropzone-dragging,
+  .dropzone-armed {
+    animation: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   AWWWARDS-WORTHY BENTO GRID & SPECULAR INTERACTIONS
+   --------------------------------------------------------------------- */
+
+/* Drifting mesh backdrop styling */
+.mesh-backdrop {
+  position: relative;
+  overflow: hidden;
+}
+
+.mesh-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: 
+    radial-gradient(circle at 15% 25%, rgba(30, 81, 56, 0.04) 0%, transparent 40%),
+    radial-gradient(circle at 85% 75%, rgba(143, 191, 155, 0.03) 0%, transparent 45%);
+  filter: blur(80px);
+  opacity: 1;
+  animation: mesh-drift 24s ease-in-out infinite alternate;
+}
+
+.dark .mesh-backdrop::after {
+  background: 
+    radial-gradient(circle at 15% 25%, rgba(143, 191, 155, 0.03) 0%, transparent 40%),
+    radial-gradient(circle at 85% 75%, rgba(46, 92, 67, 0.05) 0%, transparent 45%);
+}
+
+@keyframes mesh-drift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(4%, 3%) scale(1.06);
+  }
+  100% {
+    transform: translate(-3%, -2%) scale(0.97);
+  }
+}
+
+/* Bento Grid */
+.bento-grid {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.bento-card {
+  position: relative;
+  z-index: 10;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-fast);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.bento-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-glow), var(--shadow-md);
+}
+
+/* Lens Iris Animation for camera scan portal card */
+.lens-iris {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  border: 3.5px solid var(--line);
+  background: var(--sunken);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+
+.lens-iris::before {
+  content: "";
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent) 0%, var(--accent-deep) 75%);
+  animation: lens-pulse 4.5s ease-in-out infinite;
+}
+
+.dark .lens-iris::before {
+  animation-name: lens-pulse-dark;
+}
+
+@keyframes lens-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.95;
+    box-shadow: 0 0 0 0 rgba(30, 81, 56, 0.15);
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.7;
+    box-shadow: 0 0 0 8px rgba(30, 81, 56, 0);
+  }
+}
+
+@keyframes lens-pulse-dark {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.95;
+    box-shadow: 0 0 0 0 rgba(143, 191, 155, 0.15);
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.7;
+    box-shadow: 0 0 0 8px rgba(143, 191, 155, 0);
+  }
+}
+
+/* Pulsing Lock Animation for Security Card */
+.lock-pulse {
+  animation: lock-breath 3s ease-in-out infinite;
+}
+
+@keyframes lock-breath {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0px transparent);
+  }
+  50% {
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 8px rgba(30, 81, 56, 0.3));
+  }
+}
+
+.dark .lock-pulse {
+  animation-name: lock-breath-dark;
+}
+
+@keyframes lock-breath-dark {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0px transparent);
+  }
+  50% {
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 8px rgba(143, 191, 155, 0.35));
+  }
+}
+
+/* Media accessibility rules */
+@media (prefers-reduced-motion: reduce) {
+  .mesh-backdrop::after {
+    animation: none !important;
+  }
+  .lens-iris::before,
+  .lock-pulse {
+    animation: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .mesh-backdrop::after {
+    display: none !important;
+  }
+  .bento-card {
+    border: 2px solid var(--ink) !important;
+    background: var(--surface) !important;
+    box-shadow: none !important;
+  }
+  .lens-iris {
+    border-color: var(--ink) !important;
+  }
+  .lens-iris::before {
+    background: var(--ink) !important;
+    animation: none !important;
+  }
+  .lock-pulse {
+    animation: none !important;
+  }
+}
+
+/* Morphing Liquid Orb Animation */
+@keyframes liquid-morph-1 {
+  0%, 100% { border-radius: 45% 55% 70% 30% / 45% 45% 55% 55%; }
+  33% { border-radius: 70% 30% 52% 48% / 60% 40% 60% 40%; }
+  66% { border-radius: 50% 50% 35% 65% / 40% 60% 45% 55%; }
+}
+@keyframes liquid-morph-2 {
+  0%, 100% { border-radius: 50% 50% 35% 65% / 40% 60% 45% 55%; }
+  33% { border-radius: 45% 55% 70% 30% / 45% 45% 55% 55%; }
+  66% { border-radius: 70% 30% 52% 48% / 60% 40% 60% 40%; }
+}
+@keyframes liquid-morph-3 {
+  0%, 100% { border-radius: 70% 30% 52% 48% / 60% 40% 60% 40%; }
+  33% { border-radius: 50% 50% 35% 65% / 40% 60% 45% 55%; }
+  66% { border-radius: 45% 55% 70% 30% / 45% 45% 55% 55%; }
+}
+
+/* Scanner laser sweep line animation */
+@keyframes laser-sweep {
+  0% { top: 0%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+.laser-line {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 10px var(--accent), 0 0 20px var(--accent);
+  animation: laser-sweep 3.5s ease-in-out infinite;
+}
+
+/* Tactile paper form preview canvas styles */
+.paper-sheet {
+  background-color: #FAF7F1;
+  color: #2b2b2b;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05), inset 0 0 30px rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  position: relative;
+}
+.dark .paper-sheet {
+  background-color: #181614;
+  color: #e5e5e5;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tactile-blueprint {
+  background-size: 24px 24px;
+  background-image: linear-gradient(to right, rgba(0, 0, 0, 0.02) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(0, 0, 0, 0.02) 1px, transparent 1px);
+}
+.dark .tactile-blueprint {
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+}
+
+.handwritten {
+  font-family: Georgia, Garamond, serif;
+  font-style: italic;
+  font-weight: 550;
+  color: #1e3a8a;
+}
+.dark .handwritten {
+  color: #93c5fd;
+}
+
+/* Marching Dash Borders on file dragover */
+@keyframes marching-ants {
+  0% { background-position: 0 0, 0 100%, 0 0, 100% 0; }
+  100% { background-position: 40px 0, -40px 100%, 0 -40px, 100% 40px; }
+}
+
+.marching-border {
+  border: none !important;
+  background-image: linear-gradient(90deg, var(--accent) 50%, transparent 50%),
+                    linear-gradient(90deg, var(--accent) 50%, transparent 50%),
+                    linear-gradient(0deg, var(--accent) 50%, transparent 50%),
+                    linear-gradient(0deg, var(--accent) 50%, transparent 50%);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 20px 2.5px, 20px 2.5px, 2.5px 20px, 2.5px 20px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: marching-ants 0.8s linear infinite;
+}
+
+/* Clipboard Binder Clip */
+.clipboard-clip {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 56px;
+  height: 24px;
+  background: #3e3c38;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+}
+.dark .clipboard-clip {
+  background: #d6d3cb;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.clipboard-clip::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 8px;
+  background: #1c1b19;
+  border-radius: 4px;
+  opacity: 0.8;
+}
+.dark .clipboard-clip::after {
+  background: #eae8e1;
+}/* Ambient dotted grid background for the entire application interface */
+.ambient-grid {
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 20px 20px;
+  position: relative;
+}
+
+.ambient-grid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 30%, var(--accent-soft)/15, transparent 75%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Volumetric fluid layers combining keyframes natively to prevent layout jumps */
+.liquid-layer-1 {
+  animation: liquid-morph-1 9s infinite ease-in-out, spin 12s linear infinite;
+}
+.liquid-layer-2 {
+  animation: liquid-morph-2 7s infinite ease-in-out, spin 8s linear infinite reverse;
+}
+.liquid-layer-3 {
+  animation: liquid-morph-3 8s infinite ease-in-out, spin 14s linear infinite;
+}
+
+@keyframes ink-bleed {
+  0% {
+    opacity: 0;
+    filter: blur(1.5px) contrast(150%);
+    transform: scale(0.96);
+  }
+  60% {
+    opacity: 0.85;
+    filter: blur(0.5px) contrast(120%);
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0) contrast(100%);
+    transform: scale(1);
+  }
+}
+.animate-ink-bleed {
+  animation: ink-bleed 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  display: inline-block;
+  transform-origin: left center;
 }

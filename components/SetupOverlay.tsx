@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   subscribeSetup,
   getSetupState,
@@ -35,6 +35,7 @@ import VoiceOrb from "@/components/ui/VoiceOrb";
  * has opted into an offline engine (on-device Kokoro voice or Whisper).
  */
 export default function SetupOverlay() {
+  const prefersReducedMotion = useReducedMotion();
   const [state, setState] = useState<SetupState>(getSetupState);
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -194,11 +195,27 @@ export default function SetupOverlay() {
             {/* Start Button (before download begins) */}
             {!hasStarted && (
               <motion.button
+                animate={
+                  prefersReducedMotion
+                    ? {}
+                    : {
+                        boxShadow: [
+                          "0 4px 14px 0 var(--shadow-button)",
+                          "0 4px 28px 8px var(--shadow-button)",
+                          "0 4px 14px 0 var(--shadow-button)",
+                        ],
+                      }
+                }
+                transition={{
+                  repeat: Infinity,
+                  duration: 2.5,
+                  ease: "easeInOut",
+                }}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={startSetup}
                 aria-label="Tap to begin using Swaram"
-                className="w-full py-5 px-6 rounded-full font-bold text-on-accent text-lg mb-6 cursor-pointer bg-accent hover:bg-accent-hover shadow-button transition-colors"
+                className="w-full py-5 px-6 rounded-full font-bold text-on-accent text-lg mb-6 cursor-pointer bg-accent hover:bg-accent-hover transition-colors"
               >
                 Tap to begin
               </motion.button>

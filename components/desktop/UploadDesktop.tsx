@@ -5,16 +5,22 @@
  * instruction as a calm caption, keyboard/voice affordances spelled out.
  */
 
+import { motion } from "framer-motion";
 import Link from "next/link";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useUploadScreen } from "@/components/screens/useUploadScreen";
 import { IconArrowLeft, IconUpload, IconDoc, IconCamera, IconLoader } from "@/components/icons";
 
 export default function UploadDesktop() {
-  const { inputRef, status, tone, progress, dragging, setDragging, handleFile, openPicker } = useUploadScreen();
+  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker } = useUploadScreen();
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-8">
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 260, damping: 26 }}
+      className="mx-auto flex w-full max-w-2xl flex-col gap-8"
+    >
       <nav aria-label="Breadcrumb" className="self-start">
         <Link href="/" className="link-plain inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider">
           <IconArrowLeft className="h-4 w-4" />
@@ -44,10 +50,12 @@ export default function UploadDesktop() {
           setDragging(false);
           handleFile(e.dataTransfer.files?.[0]);
         }}
-        className={`card flex flex-col items-center gap-6 border-2 border-dashed py-16 text-center transition-all duration-300 ${
+        className={`card flex flex-col items-center gap-6 py-16 text-center transition-all duration-300 ${
           dragging
-            ? "border-accent bg-accent-soft/40 shadow-xl"
-            : "border-line bg-raised hover:border-accent/40"
+            ? "marching-border shadow-xl bg-accent-soft/30 scale-[1.01]"
+            : isArmed
+            ? "dropzone-armed border-2 border-dashed border-accent"
+            : "border-2 border-dashed border-line bg-raised hover:border-accent/40"
         }`}
       >
         <span className="grid h-14 w-14 place-items-center rounded-2xl bg-accent-soft text-accent">
@@ -116,6 +124,6 @@ export default function UploadDesktop() {
       <p className="text-xs text-faint">
         Files are read entirely inside your browser — nothing is uploaded to a server.
       </p>
-    </div>
+    </motion.div>
   );
 }

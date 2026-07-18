@@ -6,12 +6,18 @@
  */
 
 import Link from "next/link";
+import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useScanCapture } from "@/components/screens/useScanCapture";
 import { IconCamera, IconUpload, IconAlertCircle } from "@/components/icons";
 
 export default function ScanMobile() {
   const sc = useScanCapture();
+  const prefersReducedMotion = useReducedMotion();
+
+  const bracketClass = sc.isDocumentDetected
+    ? "border-accent scale-105" + (prefersReducedMotion ? "" : " animate-pulse")
+    : "border-faint/30 scale-100";
 
   return (
     <div className="flex flex-col gap-5 pb-6 animate-fade-in">
@@ -24,15 +30,28 @@ export default function ScanMobile() {
 
       {/* Full-bleed camera viewport */}
       <div className="-mx-5 relative aspect-[3/4] overflow-hidden bg-ink">
-        <video
+        <motion.video
           ref={sc.videoRef}
           playsInline
           muted
           aria-label="Camera preview"
           className="absolute inset-0 h-full w-full object-cover"
+          animate={{
+            scale: sc.cameraState === "captured" ? 0.95 : 1
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 20 }}
         />
 
-        {sc.cameraState === "active" && <div className="scan-laser" />}
+        {sc.cameraState === "active" && <div className="laser-line" />}
+
+        {sc.cameraState === "captured" && !prefersReducedMotion && (
+          <motion.div
+            initial={{ opacity: 0.8 }}
+            animate={{ opacity: 0 }}
+            transition={{ duration: 0.12, ease: "easeOut" }}
+            className="absolute inset-0 z-50 bg-white pointer-events-none"
+          />
+        )}
 
         <div aria-hidden="true" className="pointer-events-none absolute inset-5">
           {[
@@ -41,7 +60,7 @@ export default function ScanMobile() {
             "bottom-0 left-0 border-b-2 border-l-2",
             "bottom-0 right-0 border-b-2 border-r-2",
           ].map((pos) => (
-            <span key={pos} className={`absolute h-10 w-10 border-accent/80 transition-colors duration-300 ${pos}`} />
+            <span key={pos} className={`absolute h-10 w-10 transition-all duration-300 ${bracketClass} ${pos}`} />
           ))}
         </div>
 

@@ -6,16 +6,22 @@
  * desktop.
  */
 
+import { motion } from "framer-motion";
 import Link from "next/link";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useUploadScreen } from "@/components/screens/useUploadScreen";
 import { IconUpload, IconCamera, IconLoader, IconChevronRight } from "@/components/icons";
 
 export default function UploadMobile() {
-  const { inputRef, status, tone, progress, handleFile, openPicker } = useUploadScreen();
+  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker } = useUploadScreen();
 
   return (
-    <div className="flex flex-col gap-6 pb-6">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 260, damping: 26 }}
+      className="flex flex-col gap-6 pb-6"
+    >
       <header>
         <span className="eyebrow">Import a form</span>
         <h1 className="mt-1 font-display text-[1.75rem] leading-tight text-ink">Upload your document</h1>
@@ -35,7 +41,23 @@ export default function UploadMobile() {
       <button
         type="button"
         onClick={openPicker}
-        className="card flex min-h-24 cursor-pointer items-center gap-4 border-2 border-dashed border-line p-5 text-left"
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          handleFile(e.dataTransfer.files?.[0]);
+        }}
+        className={`card flex min-h-24 cursor-pointer items-center gap-4 p-5 text-left transition-all duration-300 ${
+          dragging
+            ? "marching-border shadow-xl bg-accent-soft/30 scale-[1.01]"
+            : isArmed
+            ? "dropzone-armed border-2 border-dashed border-accent"
+            : "border-2 border-dashed border-line bg-raised hover:border-accent/40"
+        }`}
       >
         <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-accent text-on-accent">
           <IconUpload className="h-6.5 w-6.5" />
@@ -87,6 +109,6 @@ export default function UploadMobile() {
         You can also say <span className="font-semibold text-soft">&ldquo;choose file&rdquo;</span>, then tap anywhere to open
         the picker. Files are read entirely on this phone.
       </p>
-    </div>
+    </motion.div>
   );
 }

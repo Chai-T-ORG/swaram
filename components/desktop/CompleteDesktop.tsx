@@ -6,6 +6,7 @@
  */
 
 import Link from "next/link";
+import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useComplete } from "@/components/screens/useComplete";
 import {
@@ -23,20 +24,62 @@ import {
 
 export default function CompleteDesktop() {
   const c = useComplete();
+  const prefersReducedMotion = useReducedMotion();
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-7 animate-fade-in">
+    <div className="relative mx-auto flex w-full max-w-2xl flex-col gap-7 animate-fade-in">
+      {/* Soft green radial wash */}
+      {!prefersReducedMotion && (
+        <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-96 h-96 bg-ok-soft/15 rounded-full filter blur-3xl pointer-events-none" />
+      )}
+
       <div className="flex flex-col items-center gap-4 pt-6 text-center">
-        <span aria-hidden="true" className="grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok shadow-sm">
-          <IconCheck className="h-8 w-8" strokeWidth={3} />
-        </span>
+        <motion.div
+          initial={prefersReducedMotion ? {} : { scale: 0.8, opacity: 0 }}
+          animate={prefersReducedMotion ? {} : { scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 200, damping: 20 }}
+          className="relative grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok shadow-sm"
+        >
+          {!prefersReducedMotion && (
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0.6 }}
+              animate={{ scale: 1.8, opacity: 0 }}
+              transition={{ duration: 0.8, ease: "easeOut" }}
+              className="absolute inset-0 rounded-full bg-ok-soft pointer-events-none"
+            />
+          )}
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={3.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-8 w-8 text-ok"
+            aria-hidden="true"
+          >
+            <motion.path
+              initial={{ pathLength: 0 }}
+              animate={{ pathLength: 1 }}
+              transition={prefersReducedMotion ? { duration: 0.1 } : { duration: 0.5, ease: "easeOut" }}
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        </motion.div>
         <h1 className="font-display text-4xl text-ink">Your form is ready</h1>
         <div className="w-full">
           <StatusAnnouncer message={c.status} tone={c.tone} />
         </div>
       </div>
 
-      <section className="card p-7" aria-label="Export options">
+      <motion.section
+        initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 24, delay: 0.15 }}
+        className="card p-7 animate-none"
+        aria-label="Export options"
+      >
         {c.record && (
           <p className="mb-4 border-b border-line pb-4 text-sm text-soft">
             <span className="font-semibold text-ink">{c.record.name.replace(/\.(pdf|jpe?g|png)$/i, "")} — filled.pdf</span>
@@ -67,7 +110,7 @@ export default function CompleteDesktop() {
             {c.reading ? "Stop reading" : "Read it back to me"}
           </button>
         </div>
-      </section>
+      </motion.section>
 
       {c.profileOffer && (
         <section className="card flex flex-col gap-4.5 p-7 animate-slide-up" aria-label="Save to profile">

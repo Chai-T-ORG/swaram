@@ -34,12 +34,12 @@ function TabLink({ label, href, icon: Icon }: { label: string; href: string; ico
     <Link
       href={href}
       aria-current={active ? "page" : undefined}
-      className={`flex min-h-14 flex-1 flex-col items-center justify-center gap-1 rounded-2xl no-underline transition-colors ${
-        active ? "text-accent" : "text-soft"
+      className={`flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl no-underline transition-colors ${
+        active ? "text-accent" : "text-soft hover:text-ink"
       }`}
     >
-      <Icon className="h-5.5 w-5.5" aria-hidden="true" />
-      <span className="text-[10px] font-bold">{label}</span>
+      <Icon className="h-5 w-5" aria-hidden="true" />
+      <span className="text-[9px] font-bold tracking-tight">{label}</span>
     </Link>
   );
 }
@@ -59,7 +59,7 @@ export default function MobileShell({ children }: { children: ReactNode }) {
       </a>
 
       {!exclusive && (
-        <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between border-b border-line bg-surface/85 px-5 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] backdrop-blur-md">
+        <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between border-b border-line bg-surface px-5 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
           <Link href="/" className="flex items-center gap-2.5 text-ink no-underline">
             <span className="grid h-8.5 w-8.5 place-items-center rounded-full bg-accent text-on-accent shadow-sm">
               <IconWave className="h-4.5 w-4.5" />
@@ -92,11 +92,11 @@ export default function MobileShell({ children }: { children: ReactNode }) {
       {!exclusive && (
         <nav
           aria-label="Main"
-          className="relative z-30 shrink-0 border-t border-line bg-raised/95 px-3 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur"
+          className="relative z-30 shrink-0 mx-auto w-[calc(100%-2rem)] max-w-md mb-[calc(1.25rem+env(safe-area-inset-bottom))] rounded-3xl border border-line bg-raised/95 px-4 py-2.5 shadow-lg backdrop-blur-sm"
         >
           {/* Live transcript / status toast floats just above the tab bar */}
           {toast && (
-            <div className="pointer-events-none absolute -top-12 left-1/2 w-max max-w-[calc(100vw-3rem)] -translate-x-1/2 truncate rounded-full border border-line bg-raised/95 px-4 py-2 text-xs font-semibold text-soft shadow-md backdrop-blur">
+            <div className="pointer-events-none absolute -top-12 left-1/2 w-max max-w-[calc(100vw-3rem)] -translate-x-1/2 truncate rounded-full border border-line bg-raised px-4 py-2 text-xs font-semibold text-soft shadow-md">
               {toast}
             </div>
           )}
@@ -104,7 +104,7 @@ export default function MobileShell({ children }: { children: ReactNode }) {
             {LEFT_TABS.map((tab) => (
               <TabLink key={tab.href} {...tab} />
             ))}
-            <div className="-mt-8 flex flex-1 justify-center">
+            <div className="-mt-9 flex flex-1 justify-center relative z-40">
               <VoiceControl variant="fab" />
             </div>
             {RIGHT_TABS.map((tab) => (

@@ -105,7 +105,8 @@ try {
 
   await page.goto(`${BASE}/`, { waitUntil: "networkidle0", timeout: 30000 });
   const home = await page.evaluate(() => document.body.innerText);
-  check("home renders", home.includes("Swaram") || /form/i.test(home));
+  const renders = home.includes("Swaram") || /form/i.test(home);
+  check("home renders", renders, renders ? "" : `HTML Body:\n${home}\nErrors:\n${errors.join("\n")}`);
 
   const pdfBytes = await makeTestPdf();
   const pdfPath = join(tmpdir(), "swaram-e2e-scholarship.pdf");
