@@ -30,6 +30,8 @@ export function normalizeLabel(text: string): string {
   return text
     .toLowerCase()
     .replace(/[’'`]/g, "") // father's -> fathers, so possessives match
+    // Strip leading list numbers/letters like "1.", "1.1", "a)", "(b)", "1)"
+    .replace(/^\s*(?:(?:\d+[a-z]?|\b[a-z]\b)(?:\.\d+)*[.)\]]\s*)+/g, "")
     .replace(/[^a-z0-9]+/g, " ") // slashes, colons, brackets, dashes -> space
     .replace(/\s+/g, " ")
     .trim();

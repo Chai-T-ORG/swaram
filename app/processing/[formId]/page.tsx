@@ -120,9 +120,13 @@ export default function ProcessingPage() {
 
       const result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
-        if (progress.stage === "ocr" && progress.page && progress.pageCount) {
-          const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
-          setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
+        if (progress.stage === "ocr") {
+          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
+          if (progress.page && progress.pageCount) {
+             setDetail(`page ${progress.page} of ${progress.pageCount} — ${pct}`);
+          } else {
+             setDetail(`processing with Sarvam AI — ${pct}`);
+          }
         } else {
           setDetail("");
         }

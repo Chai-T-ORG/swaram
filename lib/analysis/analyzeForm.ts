@@ -16,6 +16,7 @@ import { recognizeCanvas, type OcrLine } from "../ocr/tesseractEngine";
 import { detectShapes, loadOpenCv, preprocessForOcr, type DetectedShape } from "../vision/shapeDetector";
 import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
 import { orderFields } from "../vision/fieldClusterer";
+import { runSarvamDigitize } from "./sarvamApi";
 
 export type AnalysisStage =
   | "reading"      // opening the file
@@ -59,18 +60,21 @@ export async function analyzeForm(
       onProgress({ stage: "ordering", pct: 1 });
       return { isAcroForm: true, fields, pageDims, pageCount, shapesUnavailable: false };
     }
-    return analyzeScannedPdf(bytes, onProgress);
+    return analyzeScannedPdf(blob, bytes, onProgress);
   }
 
   return analyzeImage(blob, onProgress);
 }
 
 async function analyzeScannedPdf(
+  blob: Blob,
   bytes: ArrayBuffer,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
-  // Start warming OpenCV while pdf.js renders.
   const cvWarmup = loadOpenCv();
+  
+  // 1. Send the full document to Sarvam Document Digitization API
+  const sarvamData = await runSarvamDigitize(blob, onProgress);
 
   const pdf = await loadPdfDocument(bytes);
   const pageCount = Math.min(pdf.numPages, MAX_PAGES);
@@ -82,11 +86,6 @@ async function analyzeScannedPdf(
     const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
     pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
 
-    onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct: 0 });
-    const ocr = await recognizeCanvas(rendered.canvas, (pct) =>
-      onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct }),
-    );
-
     onProgress({ stage: "layout", page: pageIndex + 1, pageCount });
     const cv = await cvWarmup;
     let shapes: DetectedShape[] = [];
@@ -95,10 +94,48 @@ async function analyzeScannedPdf(
     } else {
       shapesUnavailable = true;
     }
+    
     onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
+    
+    // Convert Sarvam Blocks for this page into OcrLines
+    // Sarvam page numbers are 1-indexed
+    const sarvamPage = sarvamData.pages[pageIndex + 1];
+    const lines: OcrLine[] = [];
+    
+    if (sarvamPage) {
+      const scaleX = rendered.canvas.width / sarvamPage.image_width;
+      const scaleY = rendered.canvas.height / sarvamPage.image_height;
+      
+      for (const block of sarvamPage.blocks) {
+        // We'll treat each block as a single line/row for clustering.
+        // The block coordinates are (x1, y1) to (x2, y2)
+        const bbox = {
+          x0: block.coordinates.x1 * scaleX,
+          y0: block.coordinates.y1 * scaleY,
+          x1: block.coordinates.x2 * scaleX,
+          y1: block.coordinates.y2 * scaleY,
+        };
+        
+        // We simulate words by splitting the text, but keeping the same bbox 
+        // to satisfy the clustering engine without over-complicating word bounding boxes.
+        const words = block.text.split(/\s+/).map(text => ({
+            text,
+            confidence: block.confidence,
+            bbox
+        }));
+        
+        lines.push({
+          text: block.text,
+          confidence: block.confidence,
+          bbox,
+          words,
+        });
+      }
+    }
+
     allFields.push(
       ...await inferFieldsFromPage(
-        mergeLinesIntoRows(ocr.lines),
+        lines, // We pass lines directly because Sarvam blocks are already nicely grouped rows!
         shapes,
         rendered.canvas.width,
         rendered.canvas.height,
@@ -126,14 +163,11 @@ async function analyzeImage(
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
   const cvWarmup = loadOpenCv();
-  const canvas = await imageBlobToCanvas(blob);
+  
+  // 1. Send the full image to Sarvam Document Digitization API
+  const sarvamData = await runSarvamDigitize(blob, onProgress);
 
-  onProgress({ stage: "ocr", page: 1, pageCount: 1, pct: 0 });
-  // Photos benefit from lighting normalization before OCR (no-op without OpenCV).
-  const ocrCanvas = await preprocessForOcr(canvas);
-  const ocr = await recognizeCanvas(ocrCanvas, (pct) =>
-    onProgress({ stage: "ocr", page: 1, pageCount: 1, pct }),
-  );
+  const canvas = await imageBlobToCanvas(blob);
 
   onProgress({ stage: "layout" });
   const cv = await cvWarmup;
@@ -146,7 +180,40 @@ async function analyzeImage(
   }
 
   onProgress({ stage: "fields" });
-  const fields = await inferFieldsFromPage(mergeLinesIntoRows(ocr.lines), shapes, canvas.width, canvas.height, 0, canvas);
+  
+  // Convert Sarvam Blocks for this page into OcrLines
+  // Sarvam page numbers are 1-indexed (and since it's a single image, it's page 1)
+  const sarvamPage = sarvamData.pages[1];
+  const lines: OcrLine[] = [];
+  
+  if (sarvamPage) {
+    const scaleX = canvas.width / sarvamPage.image_width;
+    const scaleY = canvas.height / sarvamPage.image_height;
+    
+    for (const block of sarvamPage.blocks) {
+      const bbox = {
+        x0: block.coordinates.x1 * scaleX,
+        y0: block.coordinates.y1 * scaleY,
+        x1: block.coordinates.x2 * scaleX,
+        y1: block.coordinates.y2 * scaleY,
+      };
+      
+      const words = block.text.split(/\s+/).map(text => ({
+          text,
+          confidence: block.confidence,
+          bbox
+      }));
+      
+      lines.push({
+        text: block.text,
+        confidence: block.confidence,
+        bbox,
+        words,
+      });
+    }
+  }
+
+  const fields = await inferFieldsFromPage(lines, shapes, canvas.width, canvas.height, 0, canvas);
 
   onProgress({ stage: "ordering" });
   return {
@@ -377,9 +444,31 @@ export async function inferFieldsFromPage(
     else rows.push([box]);
   }
 
+  const validRows: DetectedShape[][] = [];
   for (const row of rows) {
     if (row.length < 2) continue; // single boxes are handled by the text pass
     row.sort((a, b) => a.x - b.x);
+    
+    // Check if this row is actually a comb field (e.g., Aadhaar, PAN)
+    // A comb field has many adjacent boxes (>= 5) with very small gaps.
+    const isComb = row.length >= 5 && row.slice(1).every((box, i) => box.x - (row[i].x + row[i].w) < box.w * 1.2);
+    
+    if (isComb) {
+      writables.push({
+        kind: "box",
+        x: row[0].x,
+        y: Math.min(...row.map(b => b.y)),
+        w: row[row.length - 1].x + row[row.length - 1].w - row[0].x,
+        h: Math.max(...row.map(b => b.h)),
+        ...( { combLength: row.length } as any )
+      });
+      row.forEach(b => usedShapes.add(b));
+    } else {
+      validRows.push(row);
+    }
+  }
+
+  for (const row of validRows) {
     const rowTop = Math.min(...row.map((b) => b.y));
     const rowBottom = Math.max(...row.map((b) => b.y + b.h));
 
@@ -392,11 +481,15 @@ export async function inferFieldsFromPage(
     const dict = labelLine ? matchLabel(labelText) : null;
     if (isNonFillableLabel(labelText)) continue;
 
+    const finalOptions = dict?.type === "choice" && dict.options?.length === row.length 
+      ? dict.options 
+      : options;
+
     fields.push({
       id: newId(),
       label: dict?.label ?? cleanLabelText(labelText),
       type: "choice",
-      options,
+      options: finalOptions,
       optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
       page: pageIndex,
       bbox: toFraction(row[0].x, row[0].y, row[0].w, row[0].h, pageW, pageH),
@@ -451,18 +544,27 @@ export async function inferFieldsFromPage(
       pendingHeader = null;
     }
 
-    // Several "Label:" tokens on one line -> one field per segment.
     const segments = splitLineSegments(line);
     if (segments.length > 1) {
       for (const segment of segments) {
-        if (!segment.labelText || segment.labelText.length < 2) continue;
-        if (isNonFillableLabel(segment.labelText)) continue;
-        const dict = matchLabel(segment.labelText);
-        if (!dict && segment.labelText.split(/\s+/).length > 6) continue;
-        if (fields.some((f) => labelsEqual(f.label, segment.labelText) || (dict && f.label === dict.label))) continue;
+        let labelText = segment.labelText;
+        if (!labelText || labelText.length < 2) continue;
+        
+        // Extract numbering prefix (e.g. "1.1 ", "(a) ")
+        const prefixMatch = labelText.match(/^\s*((?:\d+[a-z]?|\b[a-z]\b)(?:\.\d+)*[.)\]]\s*)+/i);
+        const prefix = prefixMatch ? prefixMatch[0] : "";
+        if (prefix) {
+          labelText = labelText.substring(prefix.length).trim();
+        }
+        
+        if (isNonFillableLabel(labelText)) continue;
+        const dict = matchLabel(labelText);
+        if (!dict && labelText.split(/\s+/).length > 6) continue;
+        if (fields.some((f) => labelsEqual(f.label, labelText) || (dict && f.label === dict.label))) continue;
+        
         fields.push({
           id: newId(),
-          label: dict?.label ?? cleanLabelText(segment.labelText),
+          label: prefix + (dict?.label ?? cleanLabelText(labelText)),
           type: dict?.type ?? "text",
           options: dict?.type === "choice" ? dict.options : undefined,
           page: pageIndex,
@@ -501,8 +603,16 @@ export async function inferFieldsFromPage(
       (w) => !isUnderscoreWord(w),
     );
     if (labelWords.length === 0) continue;
-    const labelPart = cleanLabelText(labelWords.map((w) => w.text).join(" "));
+    let labelPart = cleanLabelText(labelWords.map((w) => w.text).join(" "));
     if (!labelPart || labelPart.length < 2) continue;
+    
+    // Extract numbering prefix (e.g. "1.1 ", "(a) ")
+    const prefixMatch = labelPart.match(/^\s*((?:\d+[a-z]?|\b[a-z]\b)(?:\.\d+)*[.)\]]\s*)+/i);
+    const prefix = prefixMatch ? prefixMatch[0] : "";
+    if (prefix) {
+      labelPart = labelPart.substring(prefix.length).trim();
+    }
+    
     if (isNonFillableLabel(labelPart)) continue;
 
     const labelEndX = Math.max(...labelWords.map((w) => w.bbox.x1));
@@ -516,7 +626,7 @@ export async function inferFieldsFromPage(
       const postWords = words.slice(colonIdx + 1);
       const groups = groupWordsByGap(postWords, pageW);
       if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 3 || checkboxes.length > 0)) {
-        pushChoice(labelPart, dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
+        pushChoice(prefix + (dict?.label ?? labelPart), dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
         continue;
       }
     }
@@ -571,11 +681,15 @@ export async function inferFieldsFromPage(
     const labelConfidence =
       labelWords.reduce((sum, w) => sum + w.confidence, 0) / labelWords.length;
 
+    const isCombShape = shape && (shape as any).combLength;
+    const finalType = isCombShape ? "comb" : (dict?.type ?? "text");
+
     fields.push({
       id: newId(),
-      label: dict?.label ?? labelPart,
-      type: dict?.type ?? "text",
-      options: dict?.type === "choice" ? dict.options : undefined,
+      label: prefix + (dict?.label ?? labelPart),
+      type: finalType,
+      options: dict?.type === "choice" && !isCombShape ? dict.options : undefined,
+      combLength: isCombShape ? (shape as any).combLength : undefined,
       page: pageIndex,
       bbox,
       order: fields.length,
