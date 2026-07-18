@@ -76,6 +76,39 @@ function drawAnswer(
     }
   }
 
+  if (field.type === "signature") {
+    // Signatures cannot be filled digitally via text overlay
+    return;
+  }
+
+  if (field.type === "table" && field.cells) {
+    try {
+      const data = JSON.parse(field.value);
+      if (Array.isArray(data)) {
+        data.forEach((rowVals, r) => {
+          if (!Array.isArray(rowVals)) return;
+          rowVals.forEach((cellVal, c) => {
+            const cellBbox = field.cells?.[r]?.[c];
+            if (cellBbox && cellVal) {
+              const strVal = String(cellVal).trim();
+              if (!strVal) return;
+              const boxX = cellBbox.x * pw;
+              const boxW = cellBbox.w * pw;
+              const boxH = cellBbox.h * ph;
+              const boxBottom = ph - (cellBbox.y + cellBbox.h) * ph;
+              const size = fitFontSize(font, strVal, Math.max(boxW - 2, 8));
+              const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
+              page.drawText(strVal, { x: boxX + 2, y: baseline, size, font, color: INK });
+            }
+          });
+        });
+      }
+    } catch (e) {
+      // Failed to parse table data, ignore
+    }
+    return;
+  }
+
   if (!field.bbox) return;
   const boxX = field.bbox.x * pw;
   const boxW = Math.max(field.bbox.w * pw, 30);
@@ -90,6 +123,21 @@ function drawAnswer(
   }
 
   const text = field.value.trim();
+
+  if (field.type === "comb" && field.combLength) {
+    // Strip spaces that might have been typed, e.g., for Aadhaar "1234 5678" -> "12345678"
+    const chars = text.replace(/\s+/g, "").split("");
+    const cellW = boxW / field.combLength;
+    const size = fitFontSize(font, "W", cellW - 2, 12);
+    const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
+    for (let i = 0; i < Math.min(chars.length, field.combLength); i++) {
+      const charW = font.widthOfTextAtSize(chars[i], size);
+      const charX = boxX + i * cellW + (cellW - charW) / 2;
+      page.drawText(chars[i], { x: charX, y: baseline, size, font, color: INK });
+    }
+    return;
+  }
+
   const size = fitFontSize(font, text, boxW - 4);
   // The bbox bottom is the writing line — sit the text on it, not across it.
   const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);

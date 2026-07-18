@@ -248,7 +248,29 @@ export function useFillSession() {
   }
 
   async function askField(pos: number, id: number) {
-    const field = fieldAt(pos);
+    let field = fieldAt(pos);
+
+    // Automatically skip signatures and unmet dependencies
+    while (field) {
+      let skip = false;
+      if (field.type === "signature") {
+        skip = true;
+      } else if (field.dependsOn) {
+        const target = recordRef.current?.fields.find((f) => f.profileKey === field!.dependsOn!.fieldKey);
+        if (target && target.value.trim().toLowerCase() !== field.dependsOn.expectedValue.toLowerCase()) {
+          skip = true;
+        }
+      }
+
+      if (skip) {
+        field.status = "skipped";
+        pos++;
+        field = fieldAt(pos);
+      } else {
+        break;
+      }
+    }
+
     if (!field) {
       finish(id);
       return;

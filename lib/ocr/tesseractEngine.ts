@@ -3,6 +3,7 @@
  * from /public — OCR never makes a network request beyond this origin.
  */
 import type { Worker as TesseractWorker } from "tesseract.js";
+import { getVoiceSettings } from "../voice/voiceSettings";
 
 export interface OcrWord {
   text: string;
@@ -23,12 +24,35 @@ export interface OcrResult {
 }
 
 let workerPromise: Promise<TesseractWorker> | null = null;
+let currentLang = "";
 
-async function getWorker(onProgress?: (progress: number) => void): Promise<TesseractWorker> {
+function resolveOcrLang(): string {
+  if (typeof window === "undefined") return "eng";
+  const sttLang = getVoiceSettings().sttLang || "en-IN";
+  if (sttLang.startsWith("hi")) return "eng+hin";
+  if (sttLang.startsWith("ml")) return "eng+mal";
+  return "eng";
+}
+
+async function getWorker(
+  lang: string,
+  onProgress?: (progress: number) => void,
+): Promise<TesseractWorker> {
+  if (workerPromise && currentLang !== lang) {
+    try {
+      const oldWorker = await workerPromise;
+      await oldWorker.terminate();
+    } catch {
+      // ignore
+    }
+    workerPromise = null;
+  }
+
   if (!workerPromise) {
+    currentLang = lang;
     workerPromise = (async () => {
       const { createWorker, OEM } = await import("tesseract.js");
-      const worker = await createWorker("eng", OEM.LSTM_ONLY, {
+      const worker = await createWorker(lang, OEM.LSTM_ONLY, {
         workerPath: "/tesseract/worker.min.js",
         corePath: "/tesseract/core",
         langPath: "/tesseract/lang",
@@ -45,6 +69,7 @@ async function getWorker(onProgress?: (progress: number) => void): Promise<Tesse
     })();
     workerPromise.catch(() => {
       workerPromise = null;
+      currentLang = "";
     });
   }
   return workerPromise;
@@ -54,8 +79,26 @@ async function getWorker(onProgress?: (progress: number) => void): Promise<Tesse
 export async function recognizeCanvas(
   canvas: HTMLCanvasElement,
   onProgress?: (progress: number) => void,
+  options?: { whitelist?: string; psm?: number },
 ): Promise<OcrResult> {
-  const worker = await getWorker(onProgress);
+  const lang = resolveOcrLang();
+  const worker = await getWorker(lang, onProgress);
+
+  const params: Record<string, string> = {
+    preserve_interword_spaces: "1",
+  };
+  if (options?.whitelist) {
+    params.tessedit_char_whitelist = options.whitelist;
+  } else {
+    params.tessedit_char_whitelist = "";
+  }
+  if (options?.psm !== undefined) {
+    params.tessedit_pageseg_mode = String(options.psm);
+  } else {
+    params.tessedit_pageseg_mode = "3";
+  }
+
+  await worker.setParameters(params);
   const { data } = await worker.recognize(canvas);
 
   const lines: OcrLine[] = (data.lines ?? []).map((line) => ({
@@ -81,5 +124,6 @@ export async function terminateOcr(): Promise<void> {
       // already gone
     }
     workerPromise = null;
+    currentLang = "";
   }
 }
