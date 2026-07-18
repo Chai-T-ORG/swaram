@@ -7,6 +7,7 @@
 
 import Link from "next/link";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
+import { motion, useReducedMotion } from "framer-motion";
 import { StatusChip } from "@/components/ui/StatusChip";
 import ConversationLog from "@/components/ui/ConversationLog";
 import { useHistory, hasConvLog, HISTORY_FILTERS } from "@/components/screens/useHistory";
@@ -15,6 +16,7 @@ import { IconDoc, IconTrash, IconDownload, IconPlay, IconWave, IconSearch } from
 
 export default function HistoryMobile() {
   const h = useHistory();
+  const prefersReducedMotion = useReducedMotion();
 
   return (
     <div className="flex flex-col gap-5 pb-6">
@@ -81,7 +83,7 @@ export default function HistoryMobile() {
           {h.filtered.map((form) => {
             const pct = formProgress(form);
             return (
-              <li key={form.id} className="card flex flex-col gap-3.5 p-4.5">
+              <motion.li key={form.id} layout transition={prefersReducedMotion ? { duration: 0.05 } : undefined} className="card flex flex-col gap-3.5 p-4.5">
                 <div className="flex items-start gap-3">
                   <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-sunken text-soft">
                     <IconDoc className="h-5.5 w-5.5" />
@@ -139,7 +141,7 @@ export default function HistoryMobile() {
                 </div>
 
                 {h.expandedFormId === form.id && <ConversationLog formId={form.id} />}
-              </li>
+              </motion.li>
             );
           })}
         </ul>

@@ -11,11 +11,12 @@ import { useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
-import Waveform from "@/components/Waveform";
+import VoiceStrands from "@/components/ui/VoiceStrands";
 import VoiceControl from "@/components/voice/VoiceControl";
 import { useFillSession, typeLabel } from "@/components/screens/useFillSession";
 import { SpellBubbles, TypedAnswerForm, FieldsMapList } from "@/components/screens/FillParts";
 import { CLOUD_FALLBACK_NOTICE } from "@/lib/voice/speechToText";
+import { WordReveal } from "@/components/ui/motion-components";
 import {
   IconArrowLeft,
   IconKeyboard,
@@ -115,7 +116,7 @@ export default function FillMobile() {
         <Link href="/" className="grid h-11 w-11 place-items-center rounded-full text-soft" aria-label="Quit session">
           <IconX className="h-5 w-5" />
         </Link>
-        <p className="text-xs font-bold uppercase tracking-wider text-faint">
+        <p className="text-xs font-bold uppercase tracking-wider text-faint tabular-nums">
           Question {s.questionNumber} of {s.total}
         </p>
         <div className="flex items-center gap-1">
@@ -169,7 +170,7 @@ export default function FillMobile() {
                 {typeLabel(s.currentField.type)}
               </span>
               <h1 className="max-w-md font-display text-[2rem] leading-tight text-ink">
-                {s.currentField.label}
+                <WordReveal text={s.currentField.label} />
               </h1>
             </motion.div>
           )}
@@ -183,8 +184,8 @@ export default function FillMobile() {
 
         {s.phase === "listening" && !s.confirmMode && (
           <div className="flex flex-col items-center gap-3">
-            <div className="w-40">
-              <Waveform active={s.voice?.sttState === "listening"} speaking={s.voice?.ttsActive} volume={s.voice?.micVolume} />
+            <div className="w-40 h-10 overflow-hidden flex items-center">
+              <VoiceStrands width={160} height={40} />
             </div>
             <p className="text-xs font-bold uppercase tracking-wider text-accent animate-pulse">Listening — speak now</p>
           </div>

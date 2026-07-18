@@ -669,14 +669,20 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     return unsub;
   }, []);
 
-  // Detect coarse-pointer / touch input once on mount so push-to-talk can adapt
+  // Detect coarse-pointer / touch input or mobile viewport so push-to-talk can adapt
   // its interaction model (tap-toggle) and its on-screen copy ("Tap to talk").
   useEffect(() => {
-    setIsTouch(
-      (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
-        "ontouchstart" in window ||
-        navigator.maxTouchPoints > 0,
-    );
+    const checkTouch = () => {
+      setIsTouch(
+        (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
+          "ontouchstart" in window ||
+          navigator.maxTouchPoints > 0 ||
+          window.innerWidth < 768
+      );
+    };
+    checkTouch();
+    window.addEventListener("resize", checkTouch);
+    return () => window.removeEventListener("resize", checkTouch);
   }, []);
 
   // Surface real-time (Azure streaming) status so failures are visible instead
@@ -809,7 +815,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
       if (Math.hypot(e.clientX - x, e.clientY - y) > 12) moved = true;
     };
     const onUp = (e: PointerEvent) => {
-      if (e.pointerType === "mouse") return; // desktop uses hold-to-talk
+      if (e.pointerType === "mouse" && window.innerWidth >= 768) return; // desktop uses hold-to-talk
       if (moved || Date.now() - downAt > 600) return; // a scroll or long-press, not a tap
       if (!isSetupComplete() || showNotice) return; // don't fight the setup/consent UI
       const el = e.target as HTMLElement | null;
@@ -841,11 +847,15 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         }
         event.preventDefault();
         wakeMic();
-      } else if (sttState === "off" && event instanceof KeyboardEvent && event.code === "Space") {
-        const target = event.target as HTMLElement | null;
-        if (target && target !== document.body && target.tagName !== "MAIN") return;
-        event.preventDefault();
-        startListeningNow();
+      } else if (event instanceof KeyboardEvent && event.code === "Space") {
+        // Always prevent the browser from scrolling on Space, unless the
+        // user is typing in a form field.
+        if (!isTypingTarget(event.target)) {
+          event.preventDefault();
+        }
+        if (sttState === "off") {
+          startListeningNow();
+        }
       }
     }
     window.addEventListener("click", onWakeTrigger);

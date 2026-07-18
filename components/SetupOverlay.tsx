@@ -184,7 +184,7 @@ export default function SetupOverlay() {
               </h1>
               <p className="text-sm leading-relaxed text-soft">
                 {!hasStarted
-                  ? "Tap below to begin. I'll read your forms aloud and fill them in for you — just by talking."
+                  ? "Tap below to begin. I’ll read your forms aloud and fill them in for you — just by talking."
                   : state.stage === "ready"
                     ? "Your voice assistant is ready to use."
                     : "Getting your offline voice ready. This only happens once."
@@ -332,7 +332,7 @@ export default function SetupOverlay() {
                 }}
                 className="w-full text-center text-xs py-2 cursor-pointer text-soft hover:text-ink transition-colors bg-transparent border-none"
               >
-                Skip — I'll use the system voice for now
+                Skip — I’ll use the system voice for now
               </button>
             )}
           </motion.div>

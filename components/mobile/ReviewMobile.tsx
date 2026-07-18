@@ -53,11 +53,11 @@ export default function ReviewMobile() {
 
       <StatusAnnouncer message={r.status} tone={r.tone} />
 
-      <section className="grid grid-cols-2 gap-3" aria-label="Answer summary">
-        <SummaryTile label="Answered" value={r.counts.answered} cls="bg-ok-soft text-ok" />
-        <SummaryTile label="Auto-filled" value={r.counts.autofilled} cls="bg-accent-soft text-accent" />
-        <SummaryTile label="Skipped" value={r.counts.skipped + r.counts.pending} cls="bg-warn-soft text-warn" />
-        <SummaryTile label="Unclear" value={r.counts.unclear} cls="bg-sunken text-soft" />
+      <section className="grid grid-cols-2 gap-3 opacity-80 hover:opacity-100 transition-opacity" aria-label="Answer summary">
+        <SummaryTile label="Answered" value={r.counts.answered} cls="bg-sunken/40 text-soft" />
+        <SummaryTile label="Auto-filled" value={r.counts.autofilled} cls="bg-sunken/40 text-soft" />
+        <SummaryTile label="Skipped" value={r.counts.skipped + r.counts.pending} cls="bg-sunken/40 text-soft" />
+        <SummaryTile label="Unclear" value={r.counts.unclear} cls="bg-sunken/40 text-soft" />
       </section>
 
       <div className="flex flex-col gap-2.5">
@@ -81,6 +81,7 @@ export default function ReviewMobile() {
           return (
             <motion.li
               key={field.id}
+              layout
               initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={
@@ -144,7 +145,7 @@ export default function ReviewMobile() {
 function SummaryTile({ label, value, cls }: { label: string; value: number; cls: string }) {
   return (
     <div className={`flex flex-col items-center justify-center rounded-2xl border border-line p-4 text-center ${cls}`}>
-      <p className="font-display text-2xl leading-none">{value}</p>
+      <p className="font-display text-2xl leading-none tabular-nums">{value}</p>
       <p className="mt-1.5 text-[10px] font-bold uppercase leading-none tracking-wider opacity-85">{label}</p>
     </div>
   );

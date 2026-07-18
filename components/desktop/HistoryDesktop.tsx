@@ -7,6 +7,7 @@
  */
 
 import Link from "next/link";
+import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { StatusChip } from "@/components/ui/StatusChip";
 import ConversationLog from "@/components/ui/ConversationLog";
@@ -27,6 +28,7 @@ import {
 
 export default function HistoryDesktop() {
   const h = useHistory();
+  const prefersReducedMotion = useReducedMotion();
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
@@ -103,7 +105,7 @@ export default function HistoryDesktop() {
               {h.filtered.map((form) => {
                 const pct = formProgress(form);
                 return (
-                  <li key={form.id} className="card flex flex-col gap-4 p-5">
+                  <motion.li key={form.id} layout transition={prefersReducedMotion ? { duration: 0.05 } : undefined} className="card flex flex-col gap-4 p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 flex-1 gap-3.5">
                         <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-sunken text-soft">
@@ -172,7 +174,7 @@ export default function HistoryDesktop() {
                     </div>
 
                     {h.expandedFormId === form.id && <ConversationLog formId={form.id} />}
-                  </li>
+                  </motion.li>
                 );
               })}
             </ul>

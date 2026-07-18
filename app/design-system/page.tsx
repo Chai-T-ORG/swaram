@@ -6,9 +6,9 @@
  */
 
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import VoiceOrb from "@/components/ui/VoiceOrb";
-import Waveform from "@/components/Waveform";
+import VoiceStrands from "@/components/ui/VoiceStrands";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { StatusChip, FieldStatusChip } from "@/components/ui/StatusChip";
 import { SpellBubbles } from "@/components/screens/FillParts";
@@ -89,8 +89,8 @@ export default function DesignSystemPage() {
               </button>
             ))}
           </div>
-          <div className="w-56">
-            <Waveform active={orbState === "listening"} speaking={orbState === "speaking"} volume={0.5} />
+          <div className="w-56 h-10 overflow-hidden flex items-center">
+            <VoiceStrands width={224} height={40} />
           </div>
         </div>
       </section>
@@ -105,6 +105,37 @@ export default function DesignSystemPage() {
           <button className="btn-primary" disabled>
             Disabled
           </button>
+        </div>
+      </section>
+
+      <section aria-label="Button States">
+        <h2 className="eyebrow mb-4">Interactive Button States</h2>
+        <div className="card flex flex-col gap-6 p-7">
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-faint">Primary</h3>
+              <button className="btn-primary">Default</button>
+              <button className="btn-primary" disabled>Disabled</button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-faint">Secondary</h3>
+              <button className="btn-secondary">Default</button>
+              <button className="btn-secondary" disabled>Disabled</button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-faint">Ghost</h3>
+              <button className="btn-ghost">Default</button>
+              <button className="btn-ghost" disabled>Disabled</button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-faint">Danger</h3>
+              <button className="btn-danger">Default</button>
+              <button className="btn-danger" disabled>Disabled</button>
+            </div>
+          </div>
+          <p className="text-[10px] text-soft italic mt-2">
+            Tip: Press Tab to test focus-visible states (3px accent ring, 2px offset). Click/tap to test scale active states. Toggle system dark mode to verify dark-mode variants.
+          </p>
         </div>
       </section>
 
@@ -202,6 +233,7 @@ export default function DesignSystemPage() {
 
 function StaggerDemo() {
   const [trigger, setTrigger] = useState(0);
+  const prefersReducedMotion = useReducedMotion();
   const items = ["Item One", "Item Two", "Item Three", "Item Four"];
   return (
     <div className="flex flex-col items-center gap-3 w-full">
@@ -209,9 +241,13 @@ function StaggerDemo() {
         {items.map((item, i) => (
           <motion.div
             key={`${item}-${trigger}`}
-            initial={{ opacity: 0, y: 6 }}
+            initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 260, damping: 24, delay: i * 0.08 }}
+            transition={
+              prefersReducedMotion
+                ? { duration: 0.05, delay: i * 0.02 }
+                : { type: "spring", stiffness: 260, damping: 24, delay: i * 0.08 }
+            }
             className="card p-3 text-xs text-center text-ink font-semibold"
           >
             {item}
@@ -237,6 +273,7 @@ function ButtonPressDemo() {
 
 function DrawnCheckDemo() {
   const [trigger, setTrigger] = useState(0);
+  const prefersReducedMotion = useReducedMotion();
   return (
     <div className="flex flex-col items-center gap-4 w-full my-auto">
       <div className="grid h-10 w-10 place-items-center rounded-full bg-ok-soft">
@@ -254,7 +291,7 @@ function DrawnCheckDemo() {
           <motion.path
             initial={{ pathLength: 0 }}
             animate={{ pathLength: 1 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
+            transition={prefersReducedMotion ? { duration: 0.05 } : { duration: 0.5, ease: "easeOut" }}
             d="M5 13l4 4L19 7"
           />
         </svg>
@@ -268,13 +305,14 @@ function DrawnCheckDemo() {
 
 function CelebrateDemo() {
   const [trigger, setTrigger] = useState(0);
+  const prefersReducedMotion = useReducedMotion();
   return (
     <div className="flex flex-col items-center gap-4 w-full my-auto">
       <div key={trigger} className="relative grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok shadow-sm">
         <motion.div
-          initial={{ scale: 0.8, opacity: 0.6 }}
-          animate={{ scale: 1.8, opacity: 0 }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
+          initial={{ scale: prefersReducedMotion ? 1.0 : 0.8, opacity: 0.6 }}
+          animate={{ scale: prefersReducedMotion ? 1.0 : 1.8, opacity: 0 }}
+          transition={prefersReducedMotion ? { duration: 0.05 } : { duration: 0.8, ease: "easeOut" }}
           className="absolute inset-0 rounded-full bg-ok-soft pointer-events-none"
         />
         <svg
@@ -291,7 +329,7 @@ function CelebrateDemo() {
           <motion.path
             initial={{ pathLength: 0 }}
             animate={{ pathLength: 1 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
+            transition={prefersReducedMotion ? { duration: 0.05 } : { duration: 0.6, ease: "easeOut" }}
             d="M5 13l4 4L19 7"
           />
         </svg>

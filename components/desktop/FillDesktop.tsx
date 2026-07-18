@@ -10,12 +10,11 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
-import Waveform from "@/components/Waveform";
-import VoiceControl from "@/components/voice/VoiceControl";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import { useFillSession, typeLabel } from "@/components/screens/useFillSession";
 import { SpellBubbles, TypedAnswerForm, FieldsMapList } from "@/components/screens/FillParts";
 import { CLOUD_FALLBACK_NOTICE } from "@/lib/voice/speechToText";
+import { WordReveal } from "@/components/ui/motion-components";
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -44,6 +43,7 @@ export default function FillDesktop() {
   const currentPage = previewPage ?? (s.currentField?.page ?? 0) + 1;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const lastGeneratedFieldsRef = useRef<string | null>(null);
 
   // Synchronize current page preview when current field changes
   useEffect(() => {
@@ -55,10 +55,23 @@ export default function FillDesktop() {
   // Fetch original blob and generate filled PDF on field changes
   useEffect(() => {
     if (!s.formId || !s.record) return;
+    if (!showVisualForm) return;
+
+    // Skip generation while actively asking or listening
+    if (s.phase === "asking" || s.phase === "listening") {
+      return;
+    }
+
+    // Check if fields have actually changed since last generation
+    const fieldsStr = JSON.stringify(s.record.fields);
+    if (lastGeneratedFieldsRef.current === fieldsStr) {
+      return;
+    }
+
     let active = true;
     let localUrl: string | null = null;
 
-    const updatePdf = async () => {
+    const debounceId = setTimeout(async () => {
       try {
         const { getFile } = await import("@/lib/storage/localHistoryStore");
         const originalBlob = await getFile(s.formId, "original");
@@ -70,7 +83,9 @@ export default function FillDesktop() {
           isAcroForm: s.record!.isAcroForm,
         });
         if (!active) return;
+
         localUrl = URL.createObjectURL(filledBlob);
+        lastGeneratedFieldsRef.current = fieldsStr;
 
         setDocUrl((prev) => {
           if (prev) {
@@ -83,19 +98,18 @@ export default function FillDesktop() {
       } catch (err) {
         console.error("PDF filling error:", err);
       }
-    };
-
-    updatePdf();
+    }, 800);
 
     return () => {
       active = false;
+      clearTimeout(debounceId);
       if (localUrl) {
         try {
           URL.revokeObjectURL(localUrl);
         } catch {}
       }
     };
-  }, [s.formId, s.record?.fields]);
+  }, [s.formId, s.record?.fields, showVisualForm, s.phase]);
 
   // Smooth scroll container to center active field
   useEffect(() => {
@@ -196,7 +210,7 @@ export default function FillDesktop() {
           </div>
 
           <div className="flex items-center gap-5">
-            <p className="text-xs font-bold uppercase tracking-wider text-faint">
+            <p className="text-xs font-bold uppercase tracking-wider text-faint tabular-nums">
               Question {s.questionNumber} of {s.total}
             </p>
             <Link href="/" className="link-plain inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider">
@@ -376,7 +390,7 @@ export default function FillDesktop() {
                       {typeLabel(s.currentField.type)}
                     </span>
                     <h2 className="max-w-xl font-display text-3xl leading-tight text-ink lg:text-4xl">
-                      {s.currentField.label}
+                      <WordReveal text={s.currentField.label} />
                     </h2>
                   </motion.div>
                 )}

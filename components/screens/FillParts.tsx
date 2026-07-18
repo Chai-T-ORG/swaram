@@ -129,8 +129,9 @@ export function FieldsMapList({ s, onJump }: { s: FillSession; onJump?: () => vo
   return (
     <>
       {s.record?.fields.map((f, i) => (
-        <button
+        <motion.button
           key={f.id}
+          layout
           type="button"
           onClick={() => {
             s.jumpToField(i);
@@ -152,7 +153,7 @@ export function FieldsMapList({ s, onJump }: { s: FillSession; onJump?: () => vo
           ) : f.status === "skipped" ? (
             <IconAlertCircle className="h-4 w-4 shrink-0 text-warn" aria-label="skipped" />
           ) : null}
-        </button>
+        </motion.button>
       ))}
     </>
   );

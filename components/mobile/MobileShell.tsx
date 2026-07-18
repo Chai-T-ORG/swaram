@@ -16,6 +16,7 @@ import { useVoice, useVoiceShell } from "@/components/voice/VoiceProvider";
 import VoiceControl from "@/components/voice/VoiceControl";
 import ConsentDialog from "@/components/voice/ConsentDialog";
 import { IconWave, IconSun, IconMoon, IconHome, IconDoc, IconCamera, IconUser } from "@/components/icons";
+import AuroraField from "@/components/ui/AuroraField";
 
 const LEFT_TABS = [
   { label: "Home", href: "/", icon: IconHome },
@@ -50,7 +51,8 @@ export default function MobileShell({ children }: { children: ReactNode }) {
   const toast = voice?.toast ?? "";
 
   return (
-    <div className="flex h-dvh w-full flex-col bg-surface text-ink">
+    <div className="flex h-dvh w-full flex-col bg-surface text-ink relative z-10">
+      <AuroraField />
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-full focus:bg-accent focus:px-5 focus:py-2.5 focus:text-sm focus:font-bold focus:text-on-accent"
@@ -92,7 +94,7 @@ export default function MobileShell({ children }: { children: ReactNode }) {
       {!exclusive && (
         <nav
           aria-label="Main"
-          className="relative z-30 shrink-0 mx-auto w-[calc(100%-2rem)] max-w-md mb-[calc(1.25rem+env(safe-area-inset-bottom))] rounded-3xl border border-line bg-raised/95 px-4 py-2.5 shadow-lg backdrop-blur-sm"
+          className="relative z-30 shrink-0 mx-auto w-[calc(100%-2rem)] max-w-md mb-[calc(1.25rem+env(safe-area-inset-bottom))] rounded-3xl glass-raised px-4 py-2.5"
         >
           {/* Live transcript / status toast floats just above the tab bar */}
           {toast && (

@@ -39,6 +39,7 @@ export function CharReveal({ text, className = "" }: { text: string; className?:
 
   return (
     <motion.span
+      key={text}
       className={`inline-block overflow-hidden ${className}`}
       variants={container}
       initial="hidden"
@@ -52,6 +53,61 @@ export function CharReveal({ text, className = "" }: { text: string; className?:
           style={{ whiteSpace: char === " " ? "pre" : "normal" }}
         >
           {char}
+        </motion.span>
+      ))}
+    </motion.span>
+  );
+}
+
+/**
+ * WordReveal: splits text into words and animates them upwards in a stagger.
+ */
+export function WordReveal({ text, className = "" }: { text: string; className?: string }) {
+  const shouldReduce = useReducedMotion();
+
+  if (shouldReduce) {
+    return <span className={className}>{text}</span>;
+  }
+
+  const words = text.split(" ");
+
+  const container = {
+    hidden: {},
+    visible: {
+      transition: {
+        staggerChildren: 0.05,
+      },
+    },
+  };
+
+  const child = {
+    hidden: { y: "60%", opacity: 0 },
+    visible: {
+      y: 0,
+      opacity: 1,
+      transition: {
+        type: "spring" as const,
+        stiffness: 180,
+        damping: 18,
+      },
+    },
+  };
+
+  return (
+    <motion.span
+      key={text}
+      className={`inline-flex flex-wrap gap-x-[0.25em] overflow-hidden ${className}`}
+      variants={container}
+      initial="hidden"
+      animate="visible"
+    >
+      {words.map((word, index) => (
+        <motion.span
+          key={index}
+          variants={child}
+          className="inline-block"
+        >
+          {word}
         </motion.span>
       ))}
     </motion.span>

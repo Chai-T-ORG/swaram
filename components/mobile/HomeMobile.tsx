@@ -6,27 +6,18 @@
  * lists recent work. Targets 56px+.
  */
 
-import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useVoiceShell } from "@/components/voice/VoiceProvider";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { useHomeData, routeForForm, formProgress, formatFormDate } from "@/components/screens/useHomeData";
 import { IconUpload, IconCamera, IconDoc, IconPlay, IconChevronRight, IconInfo } from "@/components/icons";
-import { CharReveal } from "@/components/ui/motion-components";
-
-const VOICE_COMMANDS = [
-  { phrase: "Upload", help: "Go to file uploader to upload a PDF or image." },
-  { phrase: "Scan", help: "Open the camera to scan a paper form with voice guidance." },
-  { phrase: "Read back", help: "Read all your verified answers out loud." },
-  { phrase: "Profile", help: "Review or edit your saved auto-fill details." },
-] as const;
+import { WordReveal } from "@/components/ui/motion-components";
 
 export default function HomeMobile() {
   const router = useRouter();
   const { greeting, userName, isTouch } = useVoiceShell();
   const { recent, activeForm } = useHomeData();
-  const [selectedCommand, setSelectedCommand] = useState<string | null>(null);
 
   const welcomeText = `${greeting || "Hello"}${userName && userName !== "User" ? `, ${userName}` : ""}.`;
 
@@ -34,7 +25,7 @@ export default function HomeMobile() {
     <div className="flex flex-col gap-6 pb-8">
       <section className="text-center" aria-label="Welcome">
         <h1 className="font-display text-[2rem] leading-tight text-ink">
-          <CharReveal text={welcomeText} />
+          <WordReveal text={welcomeText} />
         </h1>
         <p className="mt-2 text-sm text-soft">
           {isTouch ? "Tap the orb below and tell me what you need." : "Hold the space bar and tell me what you need."}
@@ -78,9 +69,8 @@ export default function HomeMobile() {
               <span className="block text-xs text-soft mt-0.5">PDF or photos already on your phone</span>
             </div>
           </div>
-          {/* Visual Badge Illustration */}
-          <div className="flex items-center gap-1 shrink-0 bg-sunken/60 px-2 py-1 rounded-md border border-line">
-            <span className="text-[9px] font-mono font-bold text-accent uppercase">PDF</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <IconChevronRight className="h-5 w-5 text-faint" />
           </div>
         </button>
 
@@ -98,36 +88,8 @@ export default function HomeMobile() {
               <span className="block text-xs text-soft mt-0.5">Use camera with scanning guidance</span>
             </div>
           </div>
-          <div className="lens-iris scale-[0.45] -mx-8 -my-6 shrink-0" aria-hidden="true" />
+          <IconChevronRight className="h-5 w-5 text-faint shrink-0" />
         </button>
-      </section>
-
-      {/* Voice commands helper card */}
-      <section aria-label="Voice commands cheat sheet" className="rounded-3xl border border-line bg-raised p-5 shadow-sm">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-faint mb-3 text-center">Swaram Voice commands</h2>
-        <div className="flex flex-wrap justify-center gap-2">
-          {VOICE_COMMANDS.map((cmd) => (
-            <button
-              key={cmd.phrase}
-              onClick={() => setSelectedCommand(selectedCommand === cmd.phrase ? null : cmd.phrase)}
-              className={`chip text-[11px] font-semibold cursor-pointer border ${
-                selectedCommand === cmd.phrase
-                  ? "bg-accent-soft border-accent text-accent"
-                  : "bg-sunken border-line text-soft hover:border-accent/40"
-              }`}
-            >
-              “{cmd.phrase}”
-            </button>
-          ))}
-        </div>
-        {selectedCommand && (
-          <div className="mt-3 rounded-2xl border border-accent-soft bg-accent-soft/20 p-4 text-xs text-ink animate-slide-up">
-            <p className="font-bold text-accent">“{selectedCommand}”</p>
-            <p className="mt-1 leading-relaxed text-soft">
-              {VOICE_COMMANDS.find((c) => c.phrase === selectedCommand)?.help}
-            </p>
-          </div>
-        )}
       </section>
 
       {/* Private by Design Security indicator */}
@@ -139,7 +101,9 @@ export default function HomeMobile() {
         </span>
         <div>
           <h3 className="font-display text-sm font-semibold text-ink">On-device privacy</h3>
-          <p className="text-[11px] text-soft mt-0.5 leading-normal">Privacy by design — no forms, audio, or metadata ever leave this phone.</p>
+          <p className="text-[11px] text-soft mt-0.5 leading-normal">
+            Your forms are read and filled on this device. Voice uses a cloud service by default — a fully offline mode is available in Settings.
+          </p>
         </div>
       </section>
 
@@ -173,7 +137,6 @@ export default function HomeMobile() {
         </section>
       )}
 
-      <p className="text-center text-xs text-faint">Private by design — everything stays on this device.</p>
     </div>
   );
 }
