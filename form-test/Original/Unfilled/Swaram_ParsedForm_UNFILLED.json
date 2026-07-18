@@ -1,0 +1,1188 @@
+[
+  {
+    "id": "da1581c7-f4fe-4309-9766-42230e3b261a",
+    "label": "Full Name",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.1128,
+      "y": 0.3258,
+      "w": 0.5689,
+      "h": 0.0086
+    },
+    "order": 0,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "full_name",
+    "question": "What is your full name?",
+    "help": "Speak your full name as printed on official documents.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "efc30b90-1d15-41f4-b65b-d0f7391400b5",
+    "label": "Date of Birth",
+    "type": "date",
+    "page": 0,
+    "bbox": {
+      "x": 0.1128,
+      "y": 0.38,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "order": 1,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "date_of_birth",
+    "question": "What is your date of birth?",
+    "help": "Say your date of birth in day, month, year format (for example, 25 August 2007).",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "86ce47d5-afa9-4c54-ab80-e38205515848",
+    "label": "Gender",
+    "type": "choice",
+    "page": 0,
+    "bbox": {
+      "x": 0.32,
+      "y": 0.38,
+      "w": 0.28,
+      "h": 0.0086
+    },
+    "order": 2,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "gender",
+    "options": [
+      "Male",
+      "Female",
+      "Other"
+    ],
+    "question": "What is your gender? Male, Female, or Other?",
+    "help": "Select one of the gender options.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "91d2341a-6cb6-467f-9fa4-15ee998063da",
+    "label": "Father's Name",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.4169,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 3,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "father_name",
+    "question": "What is your father's or guardian's name?",
+    "help": "Speak your father's full name.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "70acd171-384e-48b9-8ea6-4906aecaa374",
+    "label": "Mother's Name",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.448,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 4,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "mother_name",
+    "question": "What is your mother's name?",
+    "help": "Speak your mother's full name.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "30158e0a-bc41-41ab-8c9e-2b5052f13664",
+    "label": "Community / Category",
+    "type": "choice",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.479,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 5,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "community",
+    "options": [
+      "General",
+      "OBC",
+      "SC",
+      "ST",
+      "EWS"
+    ],
+    "question": "Which category do you belong to? General, OBC, SC, ST, or EWS?",
+    "help": "Select your community category.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "d30041d7-2dfc-42ce-b5aa-a0b6a376f0ae",
+    "label": "Aadhaar Number",
+    "type": "comb",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.51,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 6,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "aadhaar",
+    "sensitive": true,
+    "combLength": 12,
+    "question": "What is your twelve-digit Aadhaar number?",
+    "help": "Enter the twelve digits without spaces.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "de0c5572-36e2-409d-b7bb-012f58da7d40",
+    "label": "PAN",
+    "type": "comb",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.541,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 7,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "pan",
+    "sensitive": true,
+    "combLength": 10,
+    "question": "What is your PAN card number?",
+    "help": "Enter your ten-digit alphanumeric PAN card number.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "8bc40f0b-5f1e-49ce-a31c-b27965a4b3a4",
+    "label": "Mobile Number",
+    "type": "comb",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.572,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 8,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "phone",
+    "combLength": 10,
+    "question": "What is your mobile number?",
+    "help": "Speak your ten-digit mobile number.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "837ec145-7502-4902-af59-fa54fba9078b",
+    "label": "Email Address",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.603,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 9,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "email",
+    "question": "What is your email address?",
+    "help": "Speak or type your email address.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "867c2c66-3f9f-43f4-a40a-c3c7feeeecb6",
+    "label": "Permanent Address",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.639,
+      "w": 0.5706,
+      "h": 0.045
+    },
+    "order": 10,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "address",
+    "question": "What is your permanent address?",
+    "help": "Speak your house name, street, city or town details.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "90218a3f-54c2-47b4-abe0-28014c2ed28e",
+    "label": "PIN Code",
+    "type": "comb",
+    "page": 0,
+    "bbox": {
+      "x": 0.15,
+      "y": 0.718,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "order": 11,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "pincode",
+    "combLength": 6,
+    "question": "What is your six-digit PIN code?",
+    "help": "Say the six digits of your PIN code.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "931c9dc5-f8ca-4c85-a086-1bfcea0c2006",
+    "label": "District",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.4,
+      "y": 0.718,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "order": 12,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "district",
+    "question": "What is your district?",
+    "help": "Speak the name of your district.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "e8e4e1bd-a261-48f8-b1f2-ab753a78dc71",
+    "label": "State",
+    "type": "text",
+    "page": 0,
+    "bbox": {
+      "x": 0.68,
+      "y": 0.718,
+      "w": 0.244,
+      "h": 0.0086
+    },
+    "order": 13,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "state",
+    "question": "What is your state?",
+    "help": "Speak the name of your state.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "4007b3a6-c070-474a-a03d-7db063f51a6d",
+    "label": "Address for Correspondence Same",
+    "type": "choice",
+    "page": 0,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.755,
+      "w": 0.224,
+      "h": 0.0086
+    },
+    "order": 14,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "correspondence_same",
+    "options": [
+      "Yes",
+      "No"
+    ],
+    "question": "Is your correspondence address the same as your permanent address? Yes or No?",
+    "help": "Select Yes or No.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "fda88297-a30c-4bbc-8103-b6b3f9da90b7",
+    "label": "Name of Institution",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.14,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 15,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "institution",
+    "question": "What is the name of your institution?",
+    "help": "Speak the full name of your college or school.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "e6e20850-0241-493a-a407-0101081a4066",
+    "label": "Course / Programme",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.171,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "order": 16,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "course",
+    "question": "What is your course or programme?",
+    "help": "Speak your degree name, like B.Tech or B.Sc.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "1c472363-3367-4ade-bb15-d476bafbd2ba",
+    "label": "Branch",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.171,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "order": 17,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is your branch or specialization?",
+    "help": "Speak your stream or department, like Computer Science.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "acedc209-e88e-4f30-aedb-51650448c48a",
+    "label": "Register Number",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.202,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 18,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "register_number",
+    "question": "What is your college register or roll number?",
+    "help": "Speak your university registration number.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "0fac3da3-5b5d-4699-b4b8-879c9f7e9534",
+    "label": "Current Semester",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.233,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "order": 19,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is your current semester or year?",
+    "help": "Say the semester number, like Semester 3.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "73d7220e-5ed5-4843-a7df-a89d2b4a9d0d",
+    "label": "Year of Admission",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.233,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "order": 20,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "admission_year",
+    "question": "What was your year of admission?",
+    "help": "Speak the four-digit year, like 2024.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "cd00f8ad-e172-4e04-9f7c-dac3b09477eb",
+    "label": "Academic Records",
+    "type": "table",
+    "page": 1,
+    "bbox": null,
+    "order": 21,
+    "confidence": 100,
+    "source": "ocr",
+    "columns": [
+      "Board",
+      "Year",
+      "Max Marks",
+      "Marks Obtained",
+      "Percentage"
+    ],
+    "rows": [
+      "SSLC",
+      "HSE",
+      "Semester 1",
+      "Semester 2"
+    ],
+    "cells": [
+      [
+        {
+          "x": 0.3539,
+          "y": 0.31,
+          "w": 0.18,
+          "h": 0.0086
+        },
+        {
+          "x": 0.54,
+          "y": 0.31,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.65,
+          "y": 0.31,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.76,
+          "y": 0.31,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.87,
+          "y": 0.31,
+          "w": 0.0546,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.3539,
+          "y": 0.332,
+          "w": 0.18,
+          "h": 0.0086
+        },
+        {
+          "x": 0.54,
+          "y": 0.332,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.65,
+          "y": 0.332,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.76,
+          "y": 0.332,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.87,
+          "y": 0.332,
+          "w": 0.0546,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.3539,
+          "y": 0.354,
+          "w": 0.18,
+          "h": 0.0086
+        },
+        {
+          "x": 0.54,
+          "y": 0.354,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.65,
+          "y": 0.354,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.76,
+          "y": 0.354,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.87,
+          "y": 0.354,
+          "w": 0.0546,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.3539,
+          "y": 0.376,
+          "w": 0.18,
+          "h": 0.0086
+        },
+        {
+          "x": 0.54,
+          "y": 0.376,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.65,
+          "y": 0.376,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.76,
+          "y": 0.376,
+          "w": 0.1,
+          "h": 0.0086
+        },
+        {
+          "x": 0.87,
+          "y": 0.376,
+          "w": 0.0546,
+          "h": 0.0086
+        }
+      ]
+    ],
+    "question": "Let's fill out your Academic Records. Please provide details for SSLC, HSE, and your semesters.",
+    "help": "For each row, provide the Board, Year, Max Marks, Marks Obtained, and Percentage.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "b5f0473e-5940-4bda-87b2-dbe11639aac9",
+    "label": "Annual Family Income (Figures)",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.45,
+      "y": 0.442,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "order": 22,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "annual_income",
+    "question": "What is your annual family income in figures?",
+    "help": "Say the numeric amount in Rupees.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "4236d932-7945-40dd-8cb4-4eace02bf586",
+    "label": "Annual Family Income (Words)",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.45,
+      "y": 0.468,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "order": 23,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is your annual family income in words?",
+    "help": "Say the amount in words (for example: Rupees Two Lakh Fifty Thousand Only).",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "e6f8a326-e8d7-4995-93f2-78c653d4ad18",
+    "label": "Occupation of Father / Guardian",
+    "type": "choice",
+    "page": 1,
+    "bbox": {
+      "x": 0.45,
+      "y": 0.52,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "order": 24,
+    "confidence": 100,
+    "source": "ocr",
+    "options": [
+      "Salaried",
+      "Self-employed",
+      "Agriculture",
+      "Daily wage",
+      "Pensioner",
+      "Unemployed",
+      "Deceased",
+      "Other (specify)"
+    ],
+    "question": "What is the occupation of your father or guardian?",
+    "help": "Select from the options or specify under other.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "f8dd7051-baa4-4680-a65d-5d1578055f6f",
+    "label": "Bank Account Number",
+    "type": "comb",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.6,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 25,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "bank_account",
+    "sensitive": true,
+    "combLength": 16,
+    "question": "What is your bank account number?",
+    "help": "Speak your bank account digits.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "cbd0e034-c2f7-4971-98bf-eece3e95ab85",
+    "label": "IFSC Code",
+    "type": "comb",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.631,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "order": 26,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "ifsc",
+    "sensitive": true,
+    "combLength": 11,
+    "question": "What is your bank's eleven-character IFSC code?",
+    "help": "Enter the eleven letters and digits.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "4a86c847-4d6c-45d5-b784-943b8f1f01ed",
+    "label": "Account Type",
+    "type": "choice",
+    "page": 1,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.631,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "order": 27,
+    "confidence": 100,
+    "source": "ocr",
+    "options": [
+      "Savings",
+      "Current"
+    ],
+    "question": "Is your account type Savings or Current?",
+    "help": "Select Savings or Current.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "94f60b85-6db8-4693-aa36-c4f0831b93e1",
+    "label": "Bank Name & Branch",
+    "type": "text",
+    "page": 1,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.662,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 28,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "bank_name",
+    "question": "What is your bank name and branch?",
+    "help": "Speak the bank name and branch location.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "59eb61cb-b801-470a-92de-332f2e179bf2",
+    "label": "Scholarship Category",
+    "type": "choice",
+    "page": 2,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.14,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 29,
+    "confidence": 100,
+    "source": "ocr",
+    "options": [
+      "Merit-based",
+      "Means-based (financial need)",
+      "Sports Quota",
+      "Persons with Disability"
+    ],
+    "question": "Which scholarship category are you applying for? Merit-based, Means-based, Sports Quota, or Persons with Disability?",
+    "help": "Select one category option.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "515a45db-f6bb-4aa8-817e-df142350f633",
+    "label": "Documents Enclosed",
+    "type": "choice",
+    "page": 2,
+    "bbox": {
+      "x": 0.3539,
+      "y": 0.191,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "order": 30,
+    "confidence": 100,
+    "source": "ocr",
+    "options": [
+      "Income Certificate",
+      "Caste / Community Certificate",
+      "Bank Passbook (first page)",
+      "Aadhaar copy",
+      "Mark lists (all)",
+      "Bonafide Certificate",
+      "Disability Certificate"
+    ],
+    "question": "Which documents have you enclosed? Select all that apply.",
+    "help": "Select each document you are enclosing with this application.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "5e1a4999-ee00-4e84-8d47-7199c3044ab0",
+    "label": "Receiving Other Scholarship",
+    "type": "choice",
+    "page": 2,
+    "bbox": {
+      "x": 0.6,
+      "y": 0.29,
+      "w": 0.3246,
+      "h": 0.0086
+    },
+    "order": 31,
+    "confidence": 100,
+    "source": "ocr",
+    "options": [
+      "Yes",
+      "No"
+    ],
+    "question": "Are you receiving any other scholarship or stipend this academic year? Yes or No?",
+    "help": "Select Yes or No.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "4f3454ae-3264-4805-8095-e27d510d0f5c",
+    "label": "Other Scholarship Name",
+    "type": "text",
+    "page": 2,
+    "bbox": {
+      "x": 0.3,
+      "y": 0.312,
+      "w": 0.3,
+      "h": 0.0086
+    },
+    "order": 32,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is the name of that scholarship scheme?",
+    "help": "Leave blank or speak NA if none.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "73506adc-436a-4f7b-9adb-17f8ecec6242",
+    "label": "Other Scholarship Amount",
+    "type": "text",
+    "page": 2,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.312,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "order": 33,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is the amount in Rupees of that scholarship?",
+    "help": "Leave blank or speak NA if none.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "2c022447-64f8-4575-95e5-f82c8015a6fb",
+    "label": "Particulars of Family Members",
+    "type": "table",
+    "page": 2,
+    "bbox": null,
+    "order": 34,
+    "confidence": 100,
+    "source": "ocr",
+    "columns": [
+      "Name",
+      "Relationship",
+      "Age",
+      "Occupation",
+      "Annual Income"
+    ],
+    "rows": [
+      "Member 1",
+      "Member 2",
+      "Member 3",
+      "Member 4",
+      "Member 5"
+    ],
+    "cells": [
+      [
+        {
+          "x": 0.15,
+          "y": 0.44,
+          "w": 0.25,
+          "h": 0.0086
+        },
+        {
+          "x": 0.41,
+          "y": 0.44,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.57,
+          "y": 0.44,
+          "w": 0.08,
+          "h": 0.0086
+        },
+        {
+          "x": 0.66,
+          "y": 0.44,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.82,
+          "y": 0.44,
+          "w": 0.1046,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.15,
+          "y": 0.462,
+          "w": 0.25,
+          "h": 0.0086
+        },
+        {
+          "x": 0.41,
+          "y": 0.462,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.57,
+          "y": 0.462,
+          "w": 0.08,
+          "h": 0.0086
+        },
+        {
+          "x": 0.66,
+          "y": 0.462,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.82,
+          "y": 0.462,
+          "w": 0.1046,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.15,
+          "y": 0.484,
+          "w": 0.25,
+          "h": 0.0086
+        },
+        {
+          "x": 0.41,
+          "y": 0.484,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.57,
+          "y": 0.484,
+          "w": 0.08,
+          "h": 0.0086
+        },
+        {
+          "x": 0.66,
+          "y": 0.484,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.82,
+          "y": 0.484,
+          "w": 0.1046,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.15,
+          "y": 0.506,
+          "w": 0.25,
+          "h": 0.0086
+        },
+        {
+          "x": 0.41,
+          "y": 0.506,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.57,
+          "y": 0.506,
+          "w": 0.08,
+          "h": 0.0086
+        },
+        {
+          "x": 0.66,
+          "y": 0.506,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.82,
+          "y": 0.506,
+          "w": 0.1046,
+          "h": 0.0086
+        }
+      ],
+      [
+        {
+          "x": 0.15,
+          "y": 0.528,
+          "w": 0.25,
+          "h": 0.0086
+        },
+        {
+          "x": 0.41,
+          "y": 0.528,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.57,
+          "y": 0.528,
+          "w": 0.08,
+          "h": 0.0086
+        },
+        {
+          "x": 0.66,
+          "y": 0.528,
+          "w": 0.15,
+          "h": 0.0086
+        },
+        {
+          "x": 0.82,
+          "y": 0.528,
+          "w": 0.1046,
+          "h": 0.0086
+        }
+      ]
+    ],
+    "question": "Please provide the particulars of your dependent family members.",
+    "help": "For each member, speak their Name, Relationship, Age, Occupation, and Annual Income.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "b65daca0-f044-48a5-b95d-eb086581156c",
+    "label": "Correspondence PIN Code",
+    "type": "comb",
+    "page": 3,
+    "bbox": {
+      "x": 0.15,
+      "y": 0.22,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "order": 35,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "pincode",
+    "combLength": 6,
+    "dependsOn": {
+      "fieldKey": "correspondence_same",
+      "expectedValue": "No"
+    },
+    "question": "What is your correspondence six-digit PIN code?",
+    "help": "Enter the PIN code for your mailing address.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "8db918eb-2862-47c3-b8db-90b2fcb4bf01",
+    "label": "Correspondence District",
+    "type": "text",
+    "page": 3,
+    "bbox": {
+      "x": 0.4,
+      "y": 0.22,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "order": 36,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "district",
+    "dependsOn": {
+      "fieldKey": "correspondence_same",
+      "expectedValue": "No"
+    },
+    "question": "What is your correspondence district?",
+    "help": "Mailing district name.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "bd959c70-efab-42a2-9569-9f80862fd0f6",
+    "label": "Correspondence State",
+    "type": "text",
+    "page": 3,
+    "bbox": {
+      "x": 0.68,
+      "y": 0.22,
+      "w": 0.244,
+      "h": 0.0086
+    },
+    "order": 37,
+    "confidence": 100,
+    "source": "ocr",
+    "profileKey": "state",
+    "dependsOn": {
+      "fieldKey": "correspondence_same",
+      "expectedValue": "No"
+    },
+    "question": "What is your correspondence state?",
+    "help": "Mailing state name.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "f3cc0ade-5edc-485e-a135-1e7cfda72805",
+    "label": "Place",
+    "type": "text",
+    "page": 3,
+    "bbox": {
+      "x": 0.15,
+      "y": 0.459,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "order": 38,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What place are you signing this declaration from?",
+    "help": "Speak the name of your current city or town.",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "ba071f7e-d7c1-4ced-98ff-b42a0553cff4",
+    "label": "Date",
+    "type": "date",
+    "page": 3,
+    "bbox": {
+      "x": 0.45,
+      "y": 0.459,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "order": 39,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "What is the date of signing this declaration?",
+    "help": "Speak the current date (for example, 16 July 2026).",
+    "value": "",
+    "status": "pending"
+  },
+  {
+    "id": "ee4511d0-343b-4b79-aaa8-d730467abf01",
+    "label": "Applicant Signature",
+    "type": "signature",
+    "page": 3,
+    "bbox": {
+      "x": 0.7,
+      "y": 0.45,
+      "w": 0.2,
+      "h": 0.05
+    },
+    "order": 40,
+    "confidence": 100,
+    "source": "ocr",
+    "question": "Please sign in the applicant signature box.",
+    "help": "This field requires a physical signature. It cannot be filled digitally.",
+    "value": "",
+    "status": "pending"
+  }
+]

@@ -125,7 +125,7 @@ async function main() {
     { kind: "checkbox" as const, x: 120, y: 395, w: 24, h: 24 },
     { kind: "checkbox" as const, x: 320, y: 395, w: 24, h: 24 },
   ];
-  const inferred = inferFieldsFromPage(lines, shapes, 1000, 1400, 0);
+  const inferred = await inferFieldsFromPage(lines, shapes, 1000, 1400, 0);
   const labels = inferred.map((f) => `${f.label}(${f.type})`).join(", ");
   check("finds Full Name", inferred.some((f) => f.label === "Full Name" && f.type === "text"), labels);
   check("finds Date of Birth as date", inferred.some((f) => f.label === "Date of Birth" && f.type === "date"), labels);
@@ -221,7 +221,7 @@ async function main() {
       { text: "______", confidence: 60, bbox: { x0: 490, y0: 500, x1: 860, y1: 524 } },
     ],
   };
-  const multiFields = inferFieldsFromPage([multiLine], [], 1000, 1400, 0);
+  const multiFields = await inferFieldsFromPage([multiLine], [], 1000, 1400, 0);
   check(
     "splits into two fields",
     multiFields.length === 2,
@@ -276,7 +276,7 @@ async function main() {
     bbox: { x0: 50, y0: 500, x1: 940, y1: 524 },
     words: occupationWords,
   };
-  const occFields = inferFieldsFromPage([occupationLine], [], 1000, 1400, 0);
+  const occFields = await inferFieldsFromPage([occupationLine], [], 1000, 1400, 0);
   const occChoice = occFields.find((f) => f.type === "choice");
   check("occupation row becomes one choice field", occFields.length === 1 && Boolean(occChoice), JSON.stringify(occFields.map((f) => f.label)));
   check("occupation options read from gaps", occChoice?.options?.length === 4 && occChoice.options.includes("Salaried") && occChoice.options.includes("Other"), JSON.stringify(occChoice?.options));
@@ -302,7 +302,7 @@ async function main() {
       mkWord("Disability", 800, 150),
     ],
   };
-  const catFields = inferFieldsFromPage([headerLine, optionsLine], [], 1000, 1400, 0);
+  const catFields = await inferFieldsFromPage([headerLine, optionsLine], [], 1000, 1400, 0);
   const catChoice = catFields.find((f) => f.type === "choice");
   check("tick-one header yields a choice", Boolean(catChoice), JSON.stringify(catFields.map((f) => `${f.label}:${f.type}`)));
   check("category options detected", (catChoice?.options?.length ?? 0) >= 3, JSON.stringify(catChoice?.options));
@@ -316,7 +316,7 @@ async function main() {
     bbox: { x0: 50, y0: 300, x1: 480, y1: 324 },
     words: [mkWord("Mother's", 50, 300), mkWord("Name:", 145, 300), { text: "____________", confidence: 50, bbox: { x0: 215, y0: 300, x1: 480, y1: 324 } }],
   };
-  const motherFields = inferFieldsFromPage([motherLine], [], 1000, 1400, 0);
+  const motherFields = await inferFieldsFromPage([motherLine], [], 1000, 1400, 0);
   const mother = motherFields[0];
   check("mother's name field found", mother?.label === "Mother's Name", mother?.label);
   check(

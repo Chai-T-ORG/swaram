@@ -293,3 +293,136 @@ export async function checkDocumentInFrame(canvas: HTMLCanvasElement): Promise<F
     lap.delete();
   }
 }
+
+function sortCorners(points: number[]): number[] {
+  const pts = [];
+  for (let i = 0; i < 8; i += 2) {
+    pts.push({ x: points[i], y: points[i + 1] });
+  }
+
+  const sum = pts.map((p) => p.x + p.y);
+  const diff = pts.map((p) => p.y - p.x);
+
+  const tl = pts[sum.indexOf(Math.min(...sum))];
+  const br = pts[sum.indexOf(Math.max(...sum))];
+  const tr = pts[diff.indexOf(Math.min(...diff))];
+  const bl = pts[diff.indexOf(Math.max(...diff))];
+
+  return [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y];
+}
+
+export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[] | null> {
+  const cv = await loadOpenCv();
+  if (!cv) return null;
+
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const blurred = new cv.Mat();
+  const edges = new cv.Mat();
+  const approx = new cv.Mat();
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    cv.Canny(blurred, edges, 60, 180);
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let bestArea = 0;
+    let bestPoints: number[] | null = null;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const contour = contours.get(i);
+      const peri = cv.arcLength(contour, true);
+      cv.approxPolyDP(contour, approx, 0.03 * peri, true);
+      if ((approx as any).rows === 4) {
+        const rect = cv.boundingRect(approx);
+        const area = rect.width * rect.height;
+        if (area > bestArea && area > canvas.width * canvas.height * 0.15) {
+          bestArea = area;
+          const pts: number[] = [];
+          for (let j = 0; j < 4; j++) {
+            pts.push((approx as any).data32S[j * 2], (approx as any).data32S[j * 2 + 1]);
+          }
+          bestPoints = pts;
+        }
+      }
+      contour.delete();
+    }
+
+    approx.delete();
+    contours.delete();
+    hierarchy.delete();
+
+    if (!bestPoints) return null;
+    return sortCorners(bestPoints);
+  } catch (error) {
+    console.warn("[swaram] detectCorners failed:", error);
+    return null;
+  } finally {
+    src.delete();
+    gray.delete();
+    blurred.delete();
+    edges.delete();
+  }
+}
+
+export async function warpPerspectiveCanvas(
+  canvas: HTMLCanvasElement,
+  corners: number[],
+): Promise<HTMLCanvasElement> {
+  const cv = await loadOpenCv();
+  if (!cv) return canvas;
+
+  const src = cv.imread(canvas);
+  const dst = new cv.Mat();
+
+  try {
+    const tl = { x: corners[0], y: corners[1] };
+    const tr = { x: corners[2], y: corners[3] };
+    const br = { x: corners[4], y: corners[5] };
+    const bl = { x: corners[6], y: corners[7] };
+
+    const widthA = Math.hypot(br.x - bl.x, br.y - bl.y);
+    const widthB = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+    const width = Math.round(Math.max(widthA, widthB));
+
+    const heightA = Math.hypot(tr.x - br.x, tr.y - br.y);
+    const heightB = Math.hypot(tl.x - bl.x, tl.y - bl.y);
+    const height = Math.round(Math.max(heightA, heightB));
+
+    if (width < 50 || height < 50) return canvas;
+
+    const srcCornersMat = cv.matFromArray(4, 1, cv.CV_32FC2, corners);
+    const dstCorners = [
+      0, 0,
+      width, 0,
+      width, height,
+      0, height,
+    ];
+    const dstCornersMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstCorners);
+
+    const M = cv.getPerspectiveTransform(srcCornersMat, dstCornersMat);
+    const dsize = new cv.Size(width, height);
+    cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+    const out = document.createElement("canvas");
+    out.width = width;
+    out.height = height;
+    cv.imshow(out, dst);
+
+    srcCornersMat.delete();
+    dstCornersMat.delete();
+    M.delete();
+
+    return out;
+  } catch (error) {
+    console.warn("[swaram] warpPerspectiveCanvas failed:", error);
+    return canvas;
+  } finally {
+    src.delete();
+    dst.delete();
+  }
+}
