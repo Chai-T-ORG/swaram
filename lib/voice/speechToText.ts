@@ -11,6 +11,7 @@
 // SpeechRecognition is not in TypeScript's DOM lib, so declare what we use.
 import { getVoiceSettings } from "./voiceSettings";
 import { normalizeTranscript } from "./transcriptNormalizer";
+import { detectNoise } from "./noiseFilter";
 import {
   isWhisperReady,
   loadWhisper,
@@ -346,6 +347,13 @@ let usingGroq = false;
 
 /** Shared: normalize, play the earcon, reset silence timer, and fan out. */
 function emitTranscript(source: string, text: string, confidence: number): void {
+  // ── Noise filter: drop hallucinations / silence before normalization ──
+  const noiseCheck = detectNoise(text);
+  if (noiseCheck.isNoise) {
+    console.log(`[STT/${source}] Noise filtered (reason: ${noiseCheck.reason}): "${text.slice(0, 50)}"`);
+    return;
+  }
+
   const normalized = normalizeTranscript(text);
   if (!normalized) return;
   console.log(`[STT/${source}] Recognized: "${normalized}" (confidence: ${confidence})`);

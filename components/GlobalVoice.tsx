@@ -21,6 +21,7 @@ import {
   subscribeKokoroStatus,
   addSpeechListener,
   addTtsStateListener,
+  isSpeaking,
 } from "@/lib/voice/textToSpeech";
 import { motion, AnimatePresence } from "framer-motion";
 import { getVoiceSettings, setVoiceSettings, migrateVoiceSettings } from "@/lib/voice/voiceSettings";
@@ -47,6 +48,9 @@ import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
 import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from "@/lib/voice/modelManager";
+import { classifyIntent } from "@/lib/voice/intentClassifier";
+import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
+import { logClassification } from "@/lib/voice/intentMetrics";
 import SetupOverlay from "./SetupOverlay";
 import {
   IconMic,
@@ -115,6 +119,15 @@ interface VoiceContextValue {
   setActiveFormId: (id: string | null) => void;
   micVolume: number;
   ttsActive: boolean;
+  /** Current fill page context for intent classification. */
+  fillContext?: {
+    phase: string;
+    currentFieldLabel?: string;
+    currentFieldType?: string;
+    formName?: string;
+  };
+  /** Set by fill page to provide context. */
+  setFillContext?: (ctx: VoiceContextValue["fillContext"]) => void;
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
@@ -176,6 +189,8 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
   const [activeFormId, setActiveFormId] = useState<string | null>(null);
   const [micVolume, setMicVolume] = useState(0);
   const [ttsActive, setTtsActive] = useState(false);
+
+  const [fillContext, setFillContext] = useState<VoiceContextValue["fillContext"]>(undefined);
 
   // One-time: move legacy installs off the old (silent-on-mobile) Kokoro default.
   useEffect(() => {
@@ -519,27 +534,64 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     });
 
     const handleTranscript = (text: string, confidence: number) => {
-      // Ignore empty/noise fragments so we don't nag "sorry" at stray sounds.
       const trimmed = text.trim();
       if (trimmed.length < 2) return;
-      flashToast(`“${text}”`);
 
-      if (pathname.startsWith("/fill/")) {
-        addMessage("user", text);
+      // ── Intent classification (local, no LLM) ──
+      const intent = classifyIntent(trimmed, {
+        phase: fillContext?.phase,
+        currentFieldLabel: fillContext?.currentFieldLabel,
+        currentFieldType: fillContext?.currentFieldType,
+        formName: fillContext?.formName,
+        lang: getVoiceSettings().sttLang,
+      });
+      logClassification(intent, pathname.startsWith("/fill/") ? "fill" : "global");
+
+      // Noise: defensive (speechToText.ts already filters), but safe to drop
+      if (intent.type === "noise") return;
+
+      // Command: pass through to page/global handlers as before
+      if (intent.type === "command") {
+        flashToast(`"${trimmed}"`);
+        const consumedByPage = pageListenerRef.current
+          ? pageListenerRef.current(trimmed, confidence)
+          : false;
+        if (!consumedByPage) runGlobalTranscript(trimmed);
+        return;
       }
 
-      // Route transcript: the page dialogue gets first refusal; anything it
-      // doesn't consume falls through to the global commands, so "go home"
-      // or "help" always works — even mid-form.
+      // Answer: pass through (page dialogue handles validation / confirmation)
+      if (intent.type === "answer") {
+        flashToast(`"${trimmed}"`);
+        if (pathname.startsWith("/fill/")) addMessage("user", trimmed);
+        pageListenerRef.current?.(trimmed, confidence);
+        return;
+      }
+
+      // Off-topic: speak a polite redirect, don't route to page/global
+      if (intent.type === "off_topic") {
+        if (!isSpeaking()) {
+          const redirect = offTopicRedirect({
+            transcript: trimmed,
+            topic: intent.topic,
+            inFillMode: !!pageListenerRef.current,
+            formName: fillContext?.formName,
+            currentFieldLabel: fillContext?.currentFieldLabel,
+          });
+          speak(redirect);
+        }
+        return;
+      }
+
+      // Unknown: route to page/global, then LLM fallback if needed
+      if (pathname.startsWith("/fill/")) addMessage("user", trimmed);
       const consumedByPage = pageListenerRef.current
-        ? pageListenerRef.current(text, confidence)
+        ? pageListenerRef.current(trimmed, confidence)
         : false;
       if (!consumedByPage) {
-        const handled = runGlobalTranscript(text);
-        // The fill screen runs its own rich dialogue; don't second-guess it.
-        // Only escalate to the LLM for a real phrase (avoids "sorry" spam).
-        if (!handled && !pageListenerRef.current && !pathname.startsWith("/fill/") && trimmed.length >= 3) {
-          void resolveWithLlm(text);
+        const handled = runGlobalTranscript(trimmed);
+        if (!handled && !pageListenerRef.current && trimmed.length >= 3) {
+          void resolveWithLlm(trimmed);
         }
       }
     };
@@ -922,6 +974,8 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     setActiveFormId,
     micVolume,
     ttsActive,
+    fillContext,
+    setFillContext,
   };
 
   const isHome = pathname === "/";

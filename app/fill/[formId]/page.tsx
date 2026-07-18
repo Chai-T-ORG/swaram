@@ -9,11 +9,14 @@ import { useVoice, useVoicePage } from "@/components/GlobalVoice";
 import { isLlmAvailable, assist, correctTranscript } from "@/lib/voice/llm";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
-import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
+import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS, isSpeaking } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
 import { parseFillCommand, isNameField, needsConfirmation, plausibleAnswer } from "@/lib/voice/fillCommands";
 import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
+import { classifyIntent } from "@/lib/voice/intentClassifier";
+import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
+import { logClassification } from "@/lib/voice/intentMetrics";
 import {
   isSttSupported,
   needsCloudNotice,
@@ -98,6 +101,18 @@ export default function FillPage() {
     };
   }, [formId]);
 
+  // Expose fill context to GlobalVoice for intent classification
+  useEffect(() => {
+    voice?.setFillContext?.({
+      phase,
+      currentFieldLabel: currentField?.label,
+      currentFieldType: currentField?.type,
+      formName: record?.name,
+    });
+    return () => voice?.setFillContext?.(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, currentField, record?.name]);
+
   // Hook transcript listeners to handle incoming voice inputs. Commands work
   // in EVERY phase — not just while actively listening for an answer — so
   // "start", "resume", and "use voice" all respond by voice.
@@ -105,6 +120,35 @@ export default function FillPage() {
     function onTranscript(text: string, confidence: number) {
       const clean = text.toLowerCase().trim();
 
+      // ── Intent classification (local, no LLM) ──
+      const intent = classifyIntent(text, {
+        phase,
+        currentFieldLabel: currentField?.label,
+        currentFieldType: currentField?.type,
+        formName: record?.name,
+        lang: getVoiceSettings().sttLang,
+      });
+      logClassification(intent, "fill");
+
+      // Noise: defensive (speechToText.ts already filters)
+      if (intent.type === "noise") return;
+
+      // Off-topic: speak a polite redirect, skip fill logic
+      if (intent.type === "off_topic") {
+        if (!isSpeaking()) {
+          const redirect = offTopicRedirect({
+            transcript: text,
+            topic: intent.topic,
+            inFillMode: true,
+            formName: record?.name,
+            currentFieldLabel: currentField?.label,
+          });
+          speak(redirect);
+        }
+        return;
+      }
+
+      // ── Phase-specific command matching (existing logic) ──
       if (phase === "start" || phase === "notice") {
         if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.start)) {
           handleStart();
