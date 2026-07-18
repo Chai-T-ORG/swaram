@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
+import AdmZip from 'adm-zip';
 export async function GET(req: NextRequest) {
   try {
     const jobId = req.nextUrl.searchParams.get("job_id");
@@ -56,8 +56,6 @@ export async function GET(req: NextRequest) {
         const zipRes = await fetch(targetUrl);
         const arrayBuffer = await zipRes.arrayBuffer();
         
-        // Dynamic import because this is a server module
-        const AdmZip = (await import('adm-zip')).default;
         const zip = new AdmZip(Buffer.from(arrayBuffer));
         const entries = zip.getEntries();
         
