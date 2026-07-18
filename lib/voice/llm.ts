@@ -198,6 +198,51 @@ export async function interpretCommand(
   }
 }
 
+/* ----------------------- dynamic action routing ------------------------ */
+
+export interface ResolvedIntent {
+  /** An action id from the provided registry, or "chat", or "none". */
+  action: string;
+  /** Spoken answer, only when action === "chat". */
+  reply?: string;
+}
+
+/**
+ * Map a spoken sentence onto ONE of the actions available on screen right now,
+ * or answer it as chat. This is the "adapt in the moment" path: the model does
+ * a constrained classification over the exact action list (temperature 0), so
+ * arbitrary phrasings and any language resolve to a real capability without
+ * that command ever being hand-coded. The caller validates the returned id.
+ */
+export async function resolveAction(
+  transcript: string,
+  context: { pageLabel?: string; lang?: string },
+  actions: { id: string; description: string }[],
+): Promise<ResolvedIntent> {
+  if (!isLlmAvailable() || !transcript.trim() || actions.length === 0) return { action: "none" };
+  const list = actions.map((a) => `- ${a.id}: ${a.description}`).join("\n");
+  const sys = `You are the intent router for Swaram, a warm voice-first form assistant for blind and low-vision users in India.
+Map the user's spoken sentence to exactly ONE action id from this list, or answer as chat.
+
+Available actions:
+${list}
+
+Reply ONLY with JSON: {"action":"<id | chat | none>","reply":"<only when action is chat>"}.
+- Choose the action whose description best fits what the user wants; return its exact id.
+- The user may speak in any language or phrasing — match on meaning, not exact words.
+- If it's a question or remark that no action covers, use "chat" and put a genuinely helpful 1-2 sentence spoken answer in "reply", written in ${langName(context.lang)}, then gently steer back to their task.
+- Use "none" only for pure noise with no meaning.`;
+  const raw = await chatJson<ResolvedIntent>(
+    [
+      { role: "system", content: sys },
+      { role: "user", content: `Current screen: ${context.pageLabel ?? "Swaram"}. User said: "${transcript}"` },
+    ],
+    { maxTokens: 220 },
+  );
+  if (!raw || typeof raw.action !== "string") return { action: "none" };
+  return raw;
+}
+
 /* ------------------------------- assist -------------------------------- */
 
 /**

@@ -1,4 +1,4 @@
-export type FieldType = "text" | "date" | "choice" | "checkbox";
+export type FieldType = "text" | "date" | "choice" | "checkbox" | "comb" | "table" | "signature";
 
 export type FieldStatus =
   | "pending"
@@ -45,6 +45,21 @@ export interface FormField {
   help?: string;
   value: string;
   status: FieldStatus;
+  
+  // Specific to "comb" fields (letter-by-letter)
+  combLength?: number;
+
+  // Specific to "table" fields
+  columns?: string[];
+  rows?: string[];
+  /** 2D array of cells: cells[rowIndex][colIndex] */
+  cells?: (BBox | null)[][];
+  
+  // Conditional logic
+  dependsOn?: {
+    fieldKey: string;
+    expectedValue: string;
+  };
 }
 
 /** Page size in PDF points (for PDFs) or pixels (for captured images). */

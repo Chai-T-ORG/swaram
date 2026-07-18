@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useVoicePage } from "@/components/GlobalVoice";
+import { intentRegex } from "@/lib/voice/intlCommands";
 import { getFile, getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import { analyzeForm, type AnalysisStage } from "@/lib/analysis/analyzeForm";
 import { enhanceFieldsWithLlm } from "@/lib/analysis/enhanceFields";
@@ -57,8 +58,29 @@ export default function ProcessingPage() {
         : "I am analyzing your form. This takes under a minute.",
       commands: done
         ? [
-            [/start( filling)?|begin|let'?s go/, () => router.push(`/fill/${formId}`), "start filling"],
+            // English fast lane + the multilingual "start" keywords (hi/ml/fr).
+            [
+              new RegExp(`start( filling)?|begin|let'?s go|${intentRegex("start").source}`, "iu"),
+              () => router.push(`/fill/${formId}`),
+              "start filling",
+            ],
             [/preview|review fields/, () => router.push(`/review/${formId}`), "preview fields"],
+          ]
+        : [],
+      // Adaptive router: any phrasing / language for "begin filling" resolves
+      // here even if the fast lane above misses (e.g. "പൂരിപ്പിക്കൽ ആരംഭിക്കുക").
+      actions: done
+        ? [
+            {
+              id: "start_filling",
+              description: "Begin filling this form by voice, question by question.",
+              run: () => router.push(`/fill/${formId}`),
+            },
+            {
+              id: "preview_fields",
+              description: "Preview or review the detected form fields before filling.",
+              run: () => router.push(`/review/${formId}`),
+            },
           ]
         : [],
     },

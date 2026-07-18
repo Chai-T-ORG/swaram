@@ -65,7 +65,26 @@ export default function UploadPage() {
     description:
       "Upload page. Pick a PDF or a photo of your form, up to fifty megabytes. Say choose file and then tap anywhere to open the picker, or say scan to use the camera instead.",
     commands: [
-      [/choose (a )?file|pick (a )?file|browse|open file|select (a )?file/, () => armPicker(), "choose file"],
+      // Page commands are matched before the global nav commands, so this also
+      // claims the regional words for "file" (which otherwise read as "go to
+      // upload") and opens the picker instead. The adaptive router covers any
+      // other phrasing.
+      [
+        /choose (a )?file|pick (a )?file|browse|open( the)? file|select (a )?file|फ़ाइल|फाइल चुन|फाइल खोल|ഫയൽ|തിരഞ്ഞെടുക്ക|fichier|choisir|parcourir/iu,
+        () => armPicker(),
+        "choose file",
+      ],
+    ],
+    // Adaptive router vocabulary: any phrasing / language for "pick a file"
+    // resolves here without a hand-written keyword (e.g. Malayalam, or
+    // "open the file browser", "let me select my document").
+    actions: [
+      {
+        id: "choose_file",
+        description:
+          "Open the file picker to choose a PDF or photo of the form saved on this device.",
+        run: () => armPicker(),
+      },
     ],
   });
 

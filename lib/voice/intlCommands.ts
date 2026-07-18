@@ -4,18 +4,17 @@
  *
  * The regex command matchers elsewhere are authored in English, so when the
  * recognizer runs in Hindi / Malayalam / French (which return native script for
- * hi & ml, Latin for fr) a spoken command matches nothing and the fill flow —
- * which has no LLM fallback — silently drops it. These keyword lists let the
- * same commands be recognised in every supported language, instantly and
- * offline (no translate/LLM round-trip).
+ * hi & ml, Latin for fr) a spoken command matches nothing and the fill flow
+ * silently drops it. These keyword lists let the same commands be recognised in
+ * every supported language, instantly and offline (no translate/LLM round-trip).
  *
  * Matching is deliberately conservative: a command is only recognised when the
  * utterance is SHORT (commands are terse) and the keyword appears as a whole
  * token or phrase, so a long spoken answer that merely contains a command word
  * is not mistaken for a command.
  *
- * Note: the translations are pragmatic, common phrasings — a native speaker
- * should review/extend them. English stays covered by the existing regexes.
+ * Note: these are pragmatic, common phrasings — a native speaker should
+ * review/extend them. English stays covered by the existing regexes.
  */
 
 export type IntlIntent =
@@ -47,94 +46,108 @@ export type IntlIntent =
  */
 export const INTL_KEYWORDS: Record<IntlIntent, string[]> = {
   repeat: [
-    "दोहराओ", "दोहरा", "दुबारा", "फिर से", "फिर से बोलो", "दुबारा बोलो",
-    "ആവർത്തിക്കുക", "വീണ്ടും", "വീണ്ടും പറയൂ", "വീണ്ടും പറയുക", "ഒന്നുകൂടി",
-    "répète", "répéter", "redis",
+    "दोहराओ", "दोहरा", "दोहराइए", "दुबारा", "दुबारा बोलो", "दुबारा बोलिए",
+    "फिर से", "फिर से बोलो", "फिर से बोलिए", "फिर से कहो", "एक बार फिर", "एक बार और",
+    "ആവർത്തിക്കുക", "ആവർത്തിക്കൂ", "വീണ്ടും", "വീണ്ടും പറയൂ", "വീണ്ടും പറയുക",
+    "വീണ്ടും പറയാമോ", "ഒന്നുകൂടി", "ഒന്നുകൂടി പറയൂ", "ഒരിക്കൽ കൂടി",
+    "répète", "répétez", "répéter", "encore", "encore une fois", "redis", "redites",
   ],
   skip: [
-    "छोड़ो", "छोड़ दो", "आगे", "अगला", "आगे बढ़ो",
-    "ഒഴിവാക്കുക", "ഒഴിവാക്കൂ", "അടുത്തത്", "അടുത്തതിലേക്ക്",
-    "passer", "suivant", "sauter", "ignorer",
+    "छोड़ो", "छोड़ दो", "छोड़ दीजिए", "छोड़ें", "आगे", "आगे बढ़ो", "अगला",
+    "अगला सवाल", "इसे छोड़ो", "यह छोड़ो", "स्किप",
+    "ഒഴിവാക്കുക", "ഒഴിവാക്കൂ", "ഒഴിവാക്കാം", "അടുത്തത്", "അടുത്തതിലേക്ക്",
+    "അടുത്ത ചോദ്യം", "ഇത് വിടുക", "വിട്ടേക്കൂ", "സ്കിപ്പ്",
+    "passer", "passe", "passez", "suivant", "suivante", "sauter", "ignorer", "ignore",
   ],
   back: [
-    "पीछे", "वापस", "पिछला", "पीछे जाओ", "वापस जाओ",
-    "പിന്നോട്ട്", "തിരികെ", "മുൻപത്തേത്", "പിന്നിലേക്ക്", "തിരിച്ചു പോകൂ",
-    "retour", "précédent", "arrière", "reviens", "retourne",
+    "पीछे", "पीछे जाओ", "पीछे जाइए", "वापस", "वापस जाओ", "वापस जाइए", "पिछला",
+    "पिछला सवाल", "बदलो", "बदलना है", "ठीक करो", "सुधारो",
+    "പിന്നോട്ട്", "പിന്നിലേക്ക്", "തിരികെ", "തിരിച്ചു", "തിരിച്ചു പോകൂ",
+    "മുൻപത്തേത്", "മുമ്പത്തെ ചോദ്യം", "മാറ്റണം", "മാറ്റുക", "തിരുത്തുക", "തിരുത്തണം",
+    "retour", "retourne", "précédent", "précédente", "arrière", "reviens", "revenir",
+    "corriger", "modifier", "changer",
   ],
   type: [
-    "टाइप", "टाइप करूँगा", "कीबोर्ड", "लिखूँगा",
-    "ടൈപ്പ്", "ടൈപ്പ് ചെയ്യാം", "കീബോർഡ്", "എഴുതാം",
-    "taper", "clavier", "écrire",
+    "टाइप", "टाइप करूँगा", "टाइप करना है", "कीबोर्ड", "लिखूँगा", "लिखना है",
+    "ടൈപ്പ്", "ടൈപ്പ് ചെയ്യാം", "ടൈപ്പ് ചെയ്യണം", "കീബോർഡ്", "എഴുതാം", "എഴുതണം",
+    "taper", "je tape", "clavier", "écrire", "saisir",
   ],
   pause: [
-    "रुको", "रुकिए", "ठहरो", "रुक जाओ",
-    "നിർത്തുക", "നിർത്തൂ", "കാത്തിരിക്കൂ", "ഒന്ന് നിർത്തൂ",
-    "attends", "attendez", "un instant",
+    "रुको", "रुकिए", "रुक जाओ", "ठहरो", "ठहरिए", "एक मिनट", "एक पल", "थोड़ा रुको",
+    "നിർത്തുക", "നിർത്തൂ", "കാത്തിരിക്കൂ", "ഒന്ന് നിർത്തൂ", "ഒരു നിമിഷം", "തൽക്കാലം നിർത്തൂ",
+    "attends", "attendez", "un instant", "un moment", "patiente",
   ],
   help: [
-    "मदद", "सहायता", "क्या बोलूँ", "क्या कह सकता हूँ", "मदद करो",
-    "സഹായം", "സഹായിക്കൂ", "സഹായിക്കുക", "എന്ത് പറയാം",
-    "aide", "aidez-moi", "aide-moi", "au secours",
+    "मदद", "मदद करो", "मदद चाहिए", "सहायता", "सहायता करो", "क्या बोलूँ", "क्या कहूँ",
+    "क्या कह सकता हूँ", "क्या कर सकता हूँ", "विकल्प",
+    "സഹായം", "സഹായിക്കൂ", "സഹായിക്കുക", "സഹായം വേണം", "എന്ത് പറയാം",
+    "എന്ത് ചെയ്യാം", "എന്ത് പറയണം", "ഓപ്ഷനുകൾ",
+    "aide", "aidez-moi", "aide-moi", "à l'aide", "au secours", "que dire", "quoi dire", "options",
   ],
   spell: [
-    "वर्तनी", "अक्षर से", "अक्षर दर अक्षर", "स्पेल",
-    "അക്ഷരം", "അക്ഷരമായി", "അക്ഷരം അക്ഷരമായി", "സ്പെൽ",
-    "épeler", "épelle", "lettre par lettre",
+    "वर्तनी", "अक्षर से", "अक्षर दर अक्षर", "एक एक अक्षर", "स्पेल", "स्पेलिंग",
+    "അക്ഷരം", "അക്ഷരമായി", "അക്ഷരം അക്ഷരമായി", "ഓരോ അക്ഷരം", "സ്പെൽ", "സ്പെല്ലിംഗ്",
+    "épeler", "épelle", "épelez", "lettre par lettre", "en lettres",
   ],
   yes: [
-    "haan", "हाँ", "हां", "जी", "जी हाँ", "सही", "ठीक", "ठीक है", "बिल्कुल",
-    "അതെ", "ശരി", "ഉവ്വ്", "ശരിയാണ്", "അതെയതെ",
-    "oui", "exact", "c'est juste", "c'est correct",
+    "haan", "हाँ", "हां", "जी", "जी हाँ", "जी हां", "सही", "सही है", "ठीक", "ठीक है",
+    "बिल्कुल", "बिलकुल", "सच", "ओके", "कर दो",
+    "അതെ", "ശരി", "ശരിയാണ്", "ഉവ്വ്", "അതെയതെ", "ആയിക്കോട്ടെ", "ശരിയാ", "മതി",
+    "കറക്റ്റ്", "ഓകെ", "ശരി തന്നെ",
+    "oui", "correct", "exact", "c'est juste", "c'est correct", "c'est ça", "tout à fait",
+    "d'accord", "ouais", "valider",
   ],
   no: [
-    "nahi", "नहीं", "नही", "ना", "गलत", "ग़लत", "गलत है",
-    "അല്ല", "അല്ലാ", "തെറ്റ്", "വേണ്ട", "തെറ്റാണ്",
-    "non", "faux", "c'est faux",
+    "nahi", "नहीं", "नही", "ना", "नाहीं", "गलत", "ग़लत", "गलत है", "नहीं जी",
+    "बिल्कुल नहीं", "रहने दो",
+    "അല്ല", "അല്ലാ", "തെറ്റ്", "തെറ്റാണ്", "തെറ്റി", "വേണ്ട", "വേണ്ടാ", "ശരിയല്ല", "അല്ലല്ലോ",
+    "non", "faux", "c'est faux", "incorrect", "pas correct", "pas ça", "ce n'est pas ça",
   ],
   home: [
-    "होम", "मुख्य", "होम पेज", "मुख्य मेनू",
-    "ഹോം", "ഹോം പേജ്", "പ്രധാന താൾ", "മുഖ്യതാൾ",
-    "accueil", "menu principal", "page d'accueil",
+    "होम", "होम पेज", "मुख्य", "मुख्य पेज", "मुख्य मेनू", "घर", "होम स्क्रीन", "शुरुआत",
+    "ഹോം", "ഹോം പേജ്", "പ്രധാന താൾ", "മുഖ്യതാൾ", "പ്രധാന പേജ്", "ഹോമിലേക്ക്", "തുടക്കത്തിലേക്ക്",
+    "accueil", "page d'accueil", "menu principal", "à l'accueil", "écran d'accueil",
   ],
   upload: [
-    "अपलोड", "फ़ाइल चुनें", "नया फॉर्म",
-    "അപ്‌ലോഡ്", "അപ്ലോഡ്", "ഫയൽ", "പുതിയ ഫോം",
-    "télécharger", "importer", "nouveau formulaire", "fichier",
+    "अपलोड", "अपलोड करो", "फ़ाइल", "फ़ाइल चुनें", "फाइल अपलोड", "नया फॉर्म", "पीडीएफ",
+    "അപ്‌ലോഡ്", "അപ്ലോഡ്", "അപ്‌ലോഡ് ചെയ്യുക", "ഫയൽ", "ഫയൽ തിരഞ്ഞെടുക്കുക", "പുതിയ ഫോം", "പിഡിഎഫ്",
+    "télécharger", "téléverser", "importer", "fichier", "choisir un fichier", "nouveau formulaire", "pdf",
   ],
   scan: [
-    "स्कैन", "कैमरा", "फोटो", "तस्वीर",
-    "സ്കാൻ", "ക്യാമറ", "ഫോട്ടോ",
-    "scanner", "caméra", "numériser",
+    "स्कैन", "स्कैन करो", "कैमरा", "फोटो", "फोटो खींचो", "तस्वीर", "कागज़", "कैमरे से",
+    "സ്കാൻ", "സ്കാൻ ചെയ്യുക", "ക്യാമറ", "ഫോട്ടോ", "ഫോട്ടോ എടുക്കുക", "ചിത്രം", "കടലാസ്",
+    "scanner", "scanne", "numériser", "caméra", "appareil photo", "photo", "prendre une photo",
   ],
   history: [
-    "मेरे फॉर्म", "इतिहास", "दस्तावेज़",
-    "എന്റെ ഫോമുകൾ", "ചരിത്രം", "രേഖകൾ",
-    "mes formulaires", "historique", "mes documents",
+    "मेरे फॉर्म", "फॉर्म", "इतिहास", "हिस्ट्री", "हाल के फॉर्म", "दस्तावेज़", "मेरे दस्तावेज़", "पुराने फॉर्म",
+    "എന്റെ ഫോമുകൾ", "ഫോമുകൾ", "ചരിത്രം", "രേഖകൾ", "എന്റെ രേഖകൾ", "പഴയ ഫോമുകൾ", "ഹിസ്റ്ററി",
+    "mes formulaires", "formulaires", "historique", "mes documents", "documents", "anciens formulaires",
   ],
   profile: [
-    "प्रोफ़ाइल", "सेटिंग", "मेरी जानकारी", "प्राथमिकताएं",
-    "പ്രൊഫൈൽ", "ക്രമീകരണങ്ങൾ", "സെറ്റിംഗ്സ്", "എന്റെ വിവരങ്ങൾ",
-    "profil", "paramètres", "réglages", "mes détails",
+    "प्रोफ़ाइल", "प्रोफाइल", "सेटिंग", "सेटिंग्स", "सेटिंग्स खोलो", "मेरी जानकारी", "प्राथमिकताएं", "आवाज़ सेटिंग",
+    "പ്രൊഫൈൽ", "പ്രൊഫൈൽ തുറക്കുക", "ക്രമീകരണങ്ങൾ", "സെറ്റിംഗ്സ്", "സെറ്റിംഗ്", "എന്റെ വിവരങ്ങൾ", "വോയ്സ് ക്രമീകരണം",
+    "profil", "paramètres", "réglages", "mes détails", "mes informations", "préférences",
   ],
   stop: [
-    "चुप", "बंद करो", "चुप रहो",
-    "മിണ്ടരുത്", "നിശ്ശബ്ദം", "സംസാരം നിർത്തൂ",
-    "tais-toi", "arrête de parler",
+    "चुप", "चुप रहो", "चुप हो जाओ", "बंद करो", "बंद", "रोको", "बोलना बंद करो", "शांत",
+    "മിണ്ടരുത്", "നിശ്ശബ്ദം", "സംസാരം നിർത്തൂ", "മിണ്ടാതിരിക്കൂ", "ശബ്ദം നിർത്തൂ",
+    "silence", "tais-toi", "taisez-vous", "arrête de parler", "arrêtez", "chut",
   ],
   read_page: [
-    "यह पेज पढ़ो", "मैं कहाँ हूँ", "पेज पढ़ो",
-    "ഈ പേജ് വായിക്കൂ", "ഞാൻ എവിടെയാണ്", "പേജ് വായിക്കുക",
-    "lis cette page", "où suis-je", "lire la page",
+    "यह पेज पढ़ो", "पेज पढ़ो", "पढ़ो", "मैं कहाँ हूँ", "यह क्या है", "यहाँ क्या है", "स्क्रीन पढ़ो",
+    "ഈ പേജ് വായിക്കൂ", "പേജ് വായിക്കുക", "വായിക്കൂ", "ഞാൻ എവിടെയാണ്", "ഇത് എന്താണ്", "സ്ക്രീൻ വായിക്കൂ",
+    "lis cette page", "lire la page", "lis", "où suis-je", "c'est quoi", "lis l'écran",
   ],
   start: [
-    "shuru", "शुरू", "शुरू करो", "चलो", "भरना शुरू", "तैयार",
-    "തുടങ്ങുക", "തുടങ്ങാം", "തുടങ്ങൂ", "ആരംഭിക്കുക", "തയ്യാർ",
-    "commencer", "démarrer", "c'est parti", "allons-y", "prêt", "remplir",
+    "shuru", "शुरू", "शुरू करो", "शुरू करें", "शुरू करते हैं", "चलो", "चलिए", "भरना शुरू",
+    "फॉर्म भरो", "तैयार", "हाँ शुरू करो",
+    "തുടങ്ങുക", "തുടങ്ങാം", "തുടങ്ങൂ", "ആരംഭിക്കുക", "ആരംഭിക്കാം", "ഫോം പൂരിപ്പിക്കാം", "തയ്യാർ", "തയ്യാറാണ്",
+    "commencer", "commençons", "démarrer", "démarre", "c'est parti", "allons-y", "prêt", "prête", "remplir",
   ],
   resume: [
-    "फिर शुरू", "जारी रखो", "आगे बढ़ो", "चालू करो",
-    "തുടരുക", "തുടരൂ", "വീണ്ടും തുടങ്ങൂ",
-    "reprendre", "continuer", "reprends",
+    "फिर शुरू", "जारी रखो", "जारी रखें", "आगे बढ़ो", "चालू करो", "वापस शुरू", "चलते रहो",
+    "തുടരുക", "തുടരൂ", "തുടരാം", "വീണ്ടും തുടങ്ങൂ", "തുടർന്ന് പോകൂ", "മുന്നോട്ട് പോകൂ",
+    "reprendre", "reprends", "reprenez", "continuer", "continue", "continuez", "poursuivre",
   ],
 };
 
@@ -142,11 +155,17 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Normalize an utterance for keyword matching (lowercase, strip punctuation). */
+/**
+ * Normalize an utterance for keyword matching. The NFC pass is essential for
+ * Indic scripts: the recognizer and our source literals can encode the same
+ * Malayalam/Hindi word with different Unicode code-point sequences, which would
+ * otherwise never compare equal.
+ */
 function normalize(utterance: string): string {
   return utterance
+    .normalize("NFC")
     .toLowerCase()
-    .replace(/[.,!?;:]+/g, " ")
+    .replace(/[.,!?;:।॥]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

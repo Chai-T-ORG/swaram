@@ -126,8 +126,10 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
 async function transcribe(pcm: Float32Array, sampleRate: number): Promise<void> {
   const provider = getVoiceSettings().sttProvider;
   // Azure's REST endpoint only accepts 16 kHz mono WAV; Groq resamples the
-  // native-rate clip itself, so only pay the downsample cost for Azure.
-  const wav = provider === "azure" ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
+  // native-rate clip itself, so only pay the downsample cost for Azure. (The
+  // "azure-stream" provider lands here only as its REST fallback.)
+  const azure = provider === "azure" || provider === "azure-stream";
+  const wav = azure ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
   const headers: Record<string, string> = {
     "Content-Type": "audio/wav",
     "x-language": getVoiceSettings().sttLang || "en-IN",
