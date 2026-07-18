@@ -1,0 +1,1552 @@
+[
+  {
+    "label": "Full Name",
+    "page": 0,
+    "type": "text",
+    "value": "A N J A L I S N A I R",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.1128,
+      "y": 0.3258,
+      "w": 0.5689,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.118,
+      "y": 0.316,
+      "w": 0.284,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Date of Birth",
+    "page": 0,
+    "type": "date",
+    "value": "1 4 /",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.1128,
+      "y": 0.38,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.259,
+      "y": 0.369,
+      "w": 0.047,
+      "h": 0.012
+    },
+    "explanation": "Bounding box coordinates shifted by dx=14.6%, dy=1.1%."
+  },
+  {
+    "label": "Gender",
+    "page": 0,
+    "type": "choice",
+    "value": "0 7 / 2 0 0 7",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.32,
+      "y": 0.38,
+      "w": 0.28,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.318,
+      "y": 0.369,
+      "w": 0.136,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Father's Name",
+    "page": 0,
+    "type": "text",
+    "value": "Suresh Kumar S",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.4169,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.412,
+      "w": 0.111,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Mother's Name",
+    "page": 0,
+    "type": "text",
+    "value": "Latha Nair",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.448,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.443,
+      "w": 0.07,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Community / Category",
+    "page": 0,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.479,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Aadhaar Number",
+    "page": 0,
+    "type": "comb",
+    "value": "4 8 2 1 7 7 3 4 9 2 1 0",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.51,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.36,
+      "y": 0.502,
+      "w": 0.289,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "PAN",
+    "page": 0,
+    "type": "comb",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.541,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Mobile Number",
+    "page": 0,
+    "type": "comb",
+    "value": "9 8 4 7 2 1 3 5 6 0",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.572,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.36,
+      "y": 0.563,
+      "w": 0.213,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Email Address",
+    "page": 0,
+    "type": "text",
+    "value": "anjali.nair2007@gmail.com",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.603,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.597,
+      "w": 0.183,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Permanent Address",
+    "page": 0,
+    "type": "text",
+    "value": "Chembakassery House, 24/118",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.639,
+      "w": 0.5706,
+      "h": 0.045
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.628,
+      "w": 0.209,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "PIN Code",
+    "page": 0,
+    "type": "comb",
+    "value": "6 8 3 1 0 1",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.718,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.214,
+      "y": 0.704,
+      "w": 0.123,
+      "h": 0.012
+    },
+    "explanation": "Bounding box coordinates shifted by dx=6.4%, dy=1.4%."
+  },
+  {
+    "label": "District",
+    "page": 0,
+    "type": "text",
+    "value": "Ernakulam",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.4,
+      "y": 0.718,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.452,
+      "y": 0.707,
+      "w": 0.073,
+      "h": 0.01
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.2%, dy=1.1%."
+  },
+  {
+    "label": "State",
+    "page": 0,
+    "type": "text",
+    "value": "Kerala",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.68,
+      "y": 0.718,
+      "w": 0.244,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.728,
+      "y": 0.707,
+      "w": 0.044,
+      "h": 0.01
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.8%, dy=1.1%."
+  },
+  {
+    "label": "Address for Correspondence Same",
+    "page": 0,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.755,
+      "w": 0.224,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Name of Institution",
+    "page": 1,
+    "type": "text",
+    "value": "Adi Shankara Institute of Engg. & Technology",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.14,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.129,
+      "w": 0.31,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Course / Programme",
+    "page": 1,
+    "type": "text",
+    "value": "B.Tech",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.171,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.16,
+      "w": 0.048,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Branch",
+    "page": 1,
+    "type": "text",
+    "value": "Computer Science and Engg.",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.171,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.686,
+      "y": 0.16,
+      "w": 0.198,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Register Number",
+    "page": 1,
+    "type": "text",
+    "value": "A S E 2 3 C S 4 5 2 0",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.202,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.359,
+      "y": 0.188,
+      "w": 0.322,
+      "h": 0.043
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Current Semester",
+    "page": 1,
+    "type": "text",
+    "value": "0 4",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.233,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.36,
+      "y": 0.219,
+      "w": 0.032,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Year of Admission",
+    "page": 1,
+    "type": "text",
+    "value": "2 3",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.233,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.694,
+      "y": 0.219,
+      "w": 0.032,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Academic Records [SSLC - Board]",
+    "page": 1,
+    "type": "text",
+    "value": "Kerala State Board 2022",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.31,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.305,
+      "y": 0.309,
+      "w": 0.229,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.9%, dy=0.1%."
+  },
+  {
+    "label": "Academic Records [SSLC - Year]",
+    "page": 1,
+    "type": "text",
+    "value": "500",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.54,
+      "y": 0.31,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.599,
+      "y": 0.309,
+      "w": 0.02,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.9%, dy=0.1%."
+  },
+  {
+    "label": "Academic Records [SSLC - Max Marks]",
+    "page": 1,
+    "type": "text",
+    "value": "489",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.65,
+      "y": 0.31,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.708,
+      "y": 0.309,
+      "w": 0.02,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.8%, dy=0.1%."
+  },
+  {
+    "label": "Academic Records [SSLC - Marks Obtained]",
+    "page": 1,
+    "type": "text",
+    "value": "97.8%",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.76,
+      "y": 0.31,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.817,
+      "y": 0.309,
+      "w": 0.035,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.7%, dy=0.1%."
+  },
+  {
+    "label": "Academic Records [SSLC - Percentage]",
+    "page": 1,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.87,
+      "y": 0.31,
+      "w": 0.0546,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Academic Records [HSE - Board]",
+    "page": 1,
+    "type": "text",
+    "value": "Kerala State Board 2024",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.332,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.305,
+      "y": 0.329,
+      "w": 0.229,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.9%, dy=0.3%."
+  },
+  {
+    "label": "Academic Records [HSE - Year]",
+    "page": 1,
+    "type": "text",
+    "value": "500",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.54,
+      "y": 0.332,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.599,
+      "y": 0.329,
+      "w": 0.02,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.9%, dy=0.3%."
+  },
+  {
+    "label": "Academic Records [HSE - Max Marks]",
+    "page": 1,
+    "type": "text",
+    "value": "465",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.65,
+      "y": 0.332,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.708,
+      "y": 0.329,
+      "w": 0.02,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.8%, dy=0.3%."
+  },
+  {
+    "label": "Academic Records [HSE - Marks Obtained]",
+    "page": 1,
+    "type": "text",
+    "value": "93.0%",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.76,
+      "y": 0.332,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.817,
+      "y": 0.329,
+      "w": 0.035,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.7%, dy=0.3%."
+  },
+  {
+    "label": "Academic Records [HSE - Percentage]",
+    "page": 1,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.87,
+      "y": 0.332,
+      "w": 0.0546,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Academic Records [Semester 1 - Board]",
+    "page": 1,
+    "type": "text",
+    "value": "APJAKTU 2024",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.354,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.305,
+      "y": 0.349,
+      "w": 0.229,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.9%, dy=0.5%."
+  },
+  {
+    "label": "Academic Records [Semester 1 - Year]",
+    "page": 1,
+    "type": "text",
+    "value": "-",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.54,
+      "y": 0.354,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.599,
+      "y": 0.349,
+      "w": 0.004,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.9%, dy=0.5%."
+  },
+  {
+    "label": "Academic Records [Semester 1 - Max Marks]",
+    "page": 1,
+    "type": "text",
+    "value": "-",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.65,
+      "y": 0.354,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.708,
+      "y": 0.349,
+      "w": 0.004,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.8%, dy=0.5%."
+  },
+  {
+    "label": "Academic Records [Semester 1 - Marks Obtained]",
+    "page": 1,
+    "type": "text",
+    "value": "9.13",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.76,
+      "y": 0.354,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.817,
+      "y": 0.349,
+      "w": 0.024,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.7%, dy=0.5%."
+  },
+  {
+    "label": "Academic Records [Semester 1 - Percentage]",
+    "page": 1,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.87,
+      "y": 0.354,
+      "w": 0.0546,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Academic Records [Semester 2 - Board]",
+    "page": 1,
+    "type": "text",
+    "value": "APJAKTU 2025",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.376,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.305,
+      "y": 0.369,
+      "w": 0.229,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.9%, dy=0.7%."
+  },
+  {
+    "label": "Academic Records [Semester 2 - Year]",
+    "page": 1,
+    "type": "text",
+    "value": "-",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.54,
+      "y": 0.376,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.599,
+      "y": 0.369,
+      "w": 0.004,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.9%, dy=0.7%."
+  },
+  {
+    "label": "Academic Records [Semester 2 - Max Marks]",
+    "page": 1,
+    "type": "text",
+    "value": "-",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.65,
+      "y": 0.376,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.708,
+      "y": 0.369,
+      "w": 0.004,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.8%, dy=0.7%."
+  },
+  {
+    "label": "Academic Records [Semester 2 - Marks Obtained]",
+    "page": 1,
+    "type": "text",
+    "value": "9.48",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.76,
+      "y": 0.376,
+      "w": 0.1,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.817,
+      "y": 0.369,
+      "w": 0.024,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=5.7%, dy=0.7%."
+  },
+  {
+    "label": "Academic Records [Semester 2 - Percentage]",
+    "page": 1,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.87,
+      "y": 0.376,
+      "w": 0.0546,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Annual Family Income (Figures)",
+    "page": 1,
+    "type": "text",
+    "value": "2 8 5 0 0 0",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.45,
+      "y": 0.442,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.445,
+      "y": 0.432,
+      "w": 0.123,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Annual Family Income (Words)",
+    "page": 1,
+    "type": "text",
+    "value": "Rupees Two Lakh Eighty Five Thousand Only",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.45,
+      "y": 0.468,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.409,
+      "y": 0.465,
+      "w": 0.309,
+      "h": 0.01
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.1%, dy=0.3%."
+  },
+  {
+    "label": "Occupation of Father / Guardian",
+    "page": 1,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.45,
+      "y": 0.52,
+      "w": 0.4746,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Bank Account Number",
+    "page": 1,
+    "type": "comb",
+    "value": "1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.6,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.359,
+      "y": 0.592,
+      "w": 0.312,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "IFSC Code",
+    "page": 1,
+    "type": "comb",
+    "value": "S B I N 0 0 0 1 2 3 4",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.631,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.359,
+      "y": 0.623,
+      "w": 0.237,
+      "h": 0.012
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Account Type",
+    "page": 1,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.631,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Bank Name & Branch",
+    "page": 1,
+    "type": "text",
+    "value": "State Bank of India, Aluva Branch",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.662,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.358,
+      "y": 0.657,
+      "w": 0.229,
+      "h": 0.01
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Scholarship Category",
+    "page": 2,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.14,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Documents Enclosed",
+    "page": 2,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.3539,
+      "y": 0.191,
+      "w": 0.5706,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Receiving Other Scholarship",
+    "page": 2,
+    "type": "choice",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.6,
+      "y": 0.29,
+      "w": 0.3246,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Other Scholarship Name",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.3,
+      "y": 0.312,
+      "w": 0.3,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Other Scholarship Amount",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.312,
+      "w": 0.2246,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 1 - Name]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.44,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 1 - Relationship]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.41,
+      "y": 0.44,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 1 - Age]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.57,
+      "y": 0.44,
+      "w": 0.08,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 1 - Occupation]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.66,
+      "y": 0.44,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 1 - Annual Income]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.82,
+      "y": 0.44,
+      "w": 0.1046,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 2 - Name]",
+    "page": 2,
+    "type": "text",
+    "value": "Anjali S Nair Self",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.462,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.16,
+      "y": 0.454,
+      "w": 0.266,
+      "h": 0.009
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Particulars of Family Members [Member 2 - Relationship]",
+    "page": 2,
+    "type": "text",
+    "value": "19",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.41,
+      "y": 0.462,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.547,
+      "y": 0.454,
+      "w": 0.014,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.7%, dy=0.8%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 2 - Age]",
+    "page": 2,
+    "type": "text",
+    "value": "Student",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.57,
+      "y": 0.462,
+      "w": 0.08,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.614,
+      "y": 0.454,
+      "w": 0.046,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.4%, dy=0.8%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 2 - Occupation]",
+    "page": 2,
+    "type": "text",
+    "value": "0",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.66,
+      "y": 0.462,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.79,
+      "y": 0.454,
+      "w": 0.007,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.0%, dy=0.8%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 2 - Annual Income]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.82,
+      "y": 0.462,
+      "w": 0.1046,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 3 - Name]",
+    "page": 2,
+    "type": "text",
+    "value": "Suresh Kumar S Father",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.484,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.16,
+      "y": 0.475,
+      "w": 0.281,
+      "h": 0.009
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Particulars of Family Members [Member 3 - Relationship]",
+    "page": 2,
+    "type": "text",
+    "value": "52",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.41,
+      "y": 0.484,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.547,
+      "y": 0.475,
+      "w": 0.014,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.7%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 3 - Age]",
+    "page": 2,
+    "type": "text",
+    "value": "Driver, KSRTC",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.57,
+      "y": 0.484,
+      "w": 0.08,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.614,
+      "y": 0.475,
+      "w": 0.084,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.4%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 3 - Occupation]",
+    "page": 2,
+    "type": "text",
+    "value": "210000",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.66,
+      "y": 0.484,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.79,
+      "y": 0.475,
+      "w": 0.041,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.0%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 3 - Annual Income]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.82,
+      "y": 0.484,
+      "w": 0.1046,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 4 - Name]",
+    "page": 2,
+    "type": "text",
+    "value": "Latha Nair Mother",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.506,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.16,
+      "y": 0.497,
+      "w": 0.284,
+      "h": 0.009
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Particulars of Family Members [Member 4 - Relationship]",
+    "page": 2,
+    "type": "text",
+    "value": "48",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.41,
+      "y": 0.506,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.547,
+      "y": 0.497,
+      "w": 0.014,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.7%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 4 - Age]",
+    "page": 2,
+    "type": "text",
+    "value": "Homemaker",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.57,
+      "y": 0.506,
+      "w": 0.08,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.614,
+      "y": 0.497,
+      "w": 0.07,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.4%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 4 - Occupation]",
+    "page": 2,
+    "type": "text",
+    "value": "0",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.66,
+      "y": 0.506,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.79,
+      "y": 0.497,
+      "w": 0.007,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.0%, dy=0.9%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 4 - Annual Income]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.82,
+      "y": 0.506,
+      "w": 0.1046,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Particulars of Family Members [Member 5 - Name]",
+    "page": 2,
+    "type": "text",
+    "value": "Arjun S Nair Brother",
+    "status": "success",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.528,
+      "w": 0.25,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.16,
+      "y": 0.518,
+      "w": 0.288,
+      "h": 0.009
+    },
+    "explanation": "Field successfully mapped and aligned."
+  },
+  {
+    "label": "Particulars of Family Members [Member 5 - Relationship]",
+    "page": 2,
+    "type": "text",
+    "value": "15",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.41,
+      "y": 0.528,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.547,
+      "y": 0.518,
+      "w": 0.014,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.7%, dy=1.0%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 5 - Age]",
+    "page": 2,
+    "type": "text",
+    "value": "Student",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.57,
+      "y": 0.528,
+      "w": 0.08,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.614,
+      "y": 0.518,
+      "w": 0.046,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.4%, dy=1.0%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 5 - Occupation]",
+    "page": 2,
+    "type": "text",
+    "value": "0",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.66,
+      "y": 0.528,
+      "w": 0.15,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.79,
+      "y": 0.518,
+      "w": 0.007,
+      "h": 0.009
+    },
+    "explanation": "Bounding box coordinates shifted by dx=13.0%, dy=1.0%."
+  },
+  {
+    "label": "Particulars of Family Members [Member 5 - Annual Income]",
+    "page": 2,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.82,
+      "y": 0.528,
+      "w": 0.1046,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Correspondence PIN Code",
+    "page": 3,
+    "type": "comb",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.22,
+      "w": 0.18,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Correspondence District",
+    "page": 3,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.4,
+      "y": 0.22,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Correspondence State",
+    "page": 3,
+    "type": "text",
+    "value": "",
+    "status": "missing",
+    "expectedBbox": {
+      "x": 0.68,
+      "y": 0.22,
+      "w": 0.244,
+      "h": 0.0086
+    },
+    "actualBbox": null,
+    "explanation": "No user-input text segments detected overlapping these coordinate bounds."
+  },
+  {
+    "label": "Place",
+    "page": 3,
+    "type": "text",
+    "value": "Aluva, Ernakulam",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.15,
+      "y": 0.459,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.179,
+      "y": 0.445,
+      "w": 0.12,
+      "h": 0.01
+    },
+    "explanation": "Bounding box coordinates shifted by dx=2.9%, dy=1.4%."
+  },
+  {
+    "label": "Date",
+    "page": 3,
+    "type": "date",
+    "value": "1 5 / 0 8 /",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.45,
+      "y": 0.459,
+      "w": 0.2,
+      "h": 0.0086
+    },
+    "actualBbox": {
+      "x": 0.533,
+      "y": 0.442,
+      "w": 0.106,
+      "h": 0.012
+    },
+    "explanation": "Bounding box coordinates shifted by dx=8.3%, dy=1.7%."
+  },
+  {
+    "label": "Applicant Signature",
+    "page": 3,
+    "type": "signature",
+    "value": "2 0 2 6",
+    "status": "shift",
+    "expectedBbox": {
+      "x": 0.7,
+      "y": 0.45,
+      "w": 0.2,
+      "h": 0.05
+    },
+    "actualBbox": {
+      "x": 0.651,
+      "y": 0.442,
+      "w": 0.077,
+      "h": 0.012
+    },
+    "explanation": "Bounding box coordinates shifted by dx=4.9%, dy=0.8%."
+  }
+]
