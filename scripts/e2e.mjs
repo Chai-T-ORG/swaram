@@ -60,8 +60,8 @@ async function makeTestPdf() {
   const options = [
     ["Salaried", 210],
     ["Self-employed", 300],
-    ["Farmer", 420],
-    ["Other", 500],
+    ["Farmer", 400],
+    ["Other", 495],
   ];
   for (const [label, x] of options) {
     page.drawRectangle({ x, y: 495, width: 13, height: 13, borderColor: black, borderWidth: 1.2 });

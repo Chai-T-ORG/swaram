@@ -20,6 +20,9 @@ import {
   titleCase,
   wordsToDigits,
   spellTokensToText,
+  editDistance,
+  mergeSpelledCorrection,
+  applySpokenEdit,
 } from "../lib/voice/transcriptFormat";
 import { fillAcroformPdf, fillFlatPdf } from "../lib/pdf/pdfWriter";
 import { parseFillCommand, needsConfirmation, isNameField } from "../lib/voice/fillCommands";
@@ -255,6 +258,47 @@ async function main() {
   check("letter homophones", spellTokensToText("bee ee en") === "ben", spellTokensToText("bee ee en"));
   check("double letters", spellTokensToText("double el o") === "llo", spellTokensToText("double el o"));
   check("digits in spelling", spellTokensToText("a k nine eight") === "ak98");
+  check("uppercase dotted letters (Saaras style)", spellTokensToText("T. W. I. N. S. H. A.") === "twinsha", spellTokensToText("T. W. I. N. S. H. A."));
+  check("merged letter cluster expands", spellTokensToText("tw i n s h a") === "twinsha", spellTokensToText("tw i n s h a"));
+  check("anchor word emits letter once", spellTokensToText("a for apple") === "a", spellTokensToText("a for apple"));
+  check("anchor alphabet phrase", spellTokensToText("d for delhi e f for france") === "def", spellTokensToText("d for delhi e f for france"));
+  check("bare anchor-style word yields first letter", spellTokensToText("apple ball") === "ab", spellTokensToText("apple ball"));
+
+  console.log("11b. Spell-repair merge");
+  check("edit distance basic", editDistance("Tilkan", "Thilakan") === 2, String(editDistance("Tilkan", "Thilakan")));
+  check(
+    "repairs only the wrong word",
+    mergeSpelledCorrection("Twinsha T Tilkan", "thilakan") === "Twinsha T thilakan",
+    mergeSpelledCorrection("Twinsha T Tilkan", "thilakan"),
+  );
+  check(
+    "identical word leaves value unchanged",
+    mergeSpelledCorrection("Twinsha T Thilakan", "thilakan") === "Twinsha T Thilakan",
+    mergeSpelledCorrection("Twinsha T Thilakan", "thilakan"),
+  );
+  check(
+    "dissimilar spelling replaces whole value",
+    mergeSpelledCorrection("Rahul Kumar", "meera") === "meera",
+    mergeSpelledCorrection("Rahul Kumar", "meera"),
+  );
+  check(
+    "multi-word spelling replaces whole value",
+    mergeSpelledCorrection("Rahul Kumar", "meera nair") === "meera nair",
+    mergeSpelledCorrection("Rahul Kumar", "meera nair"),
+  );
+  check("single-word heard value gets replaced", mergeSpelledCorrection("Tilkan", "thilakan") === "thilakan");
+
+  console.log("11c. Spoken edit commands");
+  check("swap single letter keeps case", applySpokenEdit("Tilkan", "change t to d") === "Dilkan", String(applySpokenEdit("Tilkan", "change t to d")));
+  check("positional letter edit", applySpokenEdit("Twinsha", "the third letter is e") === "Twensha", String(applySpokenEdit("Twinsha", "the third letter is e")));
+  check("ordinal number form", applySpokenEdit("Twinsha", "3rd letter is e") === "Twensha", String(applySpokenEdit("Twinsha", "3rd letter is e")));
+  check("last letter edit", applySpokenEdit("Ravi", "the last letter is a") === "Rava", String(applySpokenEdit("Ravi", "the last letter is a")));
+  check("word swap by similarity", applySpokenEdit("Twinsha T Tilkan", "replace tilkan with thilakan") === "Twinsha T thilakan", String(applySpokenEdit("Twinsha T Tilkan", "replace tilkan with thilakan")));
+  check("letter homophone replacement", applySpokenEdit("Kavya", "change k to sea") === "Cavya", String(applySpokenEdit("Kavya", "change k to sea")));
+  check("swap-form positional target", applySpokenEdit("Meena", "change the second letter to i") === "Miena", String(applySpokenEdit("Meena", "change the second letter to i")));
+  check("plain answer is not an edit", applySpokenEdit("Ravi", "hello there") === null);
+  check("yes-like answer is not an edit", applySpokenEdit("Ravi", "yes") === null);
+  check("dissimilar word target rejected", applySpokenEdit("Ravi Kumar", "replace xylophone with piano") === null);
 
   console.log("12. Options printed on the label line -> choice field");
   const mkWord = (text: string, x0: number, y0 = 500, w = text.length * 11) => ({

@@ -134,6 +134,9 @@ export function spellTokensToText(raw: string): string {
   const tokens = raw.toLowerCase().replace(/[.,;:!?]/g, " ").split(/\s+/).filter(Boolean);
   let out = "";
   let repeat = 1;
+  // "a for apple": the word after an anchor filler repeats the letter it
+  // anchors — it must not emit a second copy of that letter.
+  let anchorPending = false;
   for (const token of tokens) {
     if (token === "double") { repeat = 2; continue; }
     if (token === "triple") { repeat = 3; continue; }
@@ -149,8 +152,21 @@ export function spellTokensToText(raw: string): string {
     else if (token in LETTER_HOMOPHONES) piece = LETTER_HOMOPHONES[token];
     else if (token in DIGIT_WORDS) piece = DIGIT_WORDS[token];
     else if (/^\d+$/.test(token)) piece = token;
-    else if (SPELL_FILLERS.has(token)) { repeat = 1; continue; }
-    else if (/^[a-z]{2,}$/.test(token)) piece = token[0]; // "a for apple" style
+    else if (SPELL_FILLERS.has(token)) {
+      repeat = 1;
+      if (token === "for" || token === "as" || token === "like" || token === "in") anchorPending = true;
+      continue;
+    }
+    // STT often merges quickly-spoken letters into one token ("t w" -> "tw",
+    // "TWN" -> "twn"). A vowelless cluster is never a real word, so expand it
+    // back into its letters instead of collapsing to the first one.
+    else if (/^[bcdfghjklmnpqrstvwxz]{2,6}$/.test(token)) piece = token;
+    else if (/^[a-z]{2,}$/.test(token)) {
+      // Anchor word ("apple" after "a for") — the letter was already emitted.
+      if (anchorPending && out.endsWith(token[0])) { anchorPending = false; repeat = 1; continue; }
+      piece = token[0];
+    }
+    anchorPending = false;
     if (piece) {
       out += piece.repeat(piece.length === 1 ? repeat : 1);
       repeat = 1;
@@ -159,6 +175,192 @@ export function spellTokensToText(raw: string): string {
     }
   }
   return out.replace(/\s+/g, " ").trim();
+}
+
+/** Classic Levenshtein distance, case-insensitive. Small strings only. */
+export function editDistance(a: string, b: string): number {
+  const s = a.toLowerCase();
+  const t = b.toLowerCase();
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= s.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= t.length; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1),
+      );
+    }
+    prev = cur;
+  }
+  return prev[t.length];
+}
+
+/**
+ * Merge a spelled correction into a previously-heard value, so the user can
+ * fix just the wrong word instead of re-spelling everything:
+ *
+ *   heard "Twinsha T Tilkan", spelled "thilakan" -> "Twinsha T Thilakan"
+ *
+ * A spelled string containing a space is a full re-spell and replaces the
+ * whole value. Otherwise the closest word of `heard` (by edit distance) is
+ * replaced — but only when it's actually similar; a completely different
+ * spelling also replaces the whole value.
+ */
+export function mergeSpelledCorrection(heard: string, spelled: string): string {
+  const fix = spelled.trim();
+  const base = heard.trim();
+  if (!base) return fix;
+  if (!fix) return base;
+  if (/\s/.test(fix)) return fix; // multi-word spelling = full re-spell
+  const words = base.split(/\s+/);
+  if (words.length < 2) return fix;
+
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < words.length; i++) {
+    const d = editDistance(words[i], fix);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  // Similar enough to be a correction of that word (more than half the
+  // letters survive) — otherwise treat the spelling as a full replacement.
+  const threshold = Math.max(1, Math.floor(Math.max(words[bestIdx].length, fix.length) * 0.6));
+  if (bestIdx >= 0 && bestDist > 0 && bestDist <= threshold) {
+    words[bestIdx] = fix;
+    return words.join(" ");
+  }
+  if (bestDist === 0) return base; // already right — nothing to change
+  return fix;
+}
+
+/* ------------------------- spoken edit commands --------------------------- */
+
+const ORDINALS: Record<string, number> = {
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+  sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10, last: -1,
+};
+
+function ordinalToIndex(word: string): number | null {
+  const w = word.toLowerCase();
+  // Word ordinals first — "first"/"third"/"last" must not lose their tails
+  // to the digit-suffix strip ("3rd" -> 3).
+  if (w in ORDINALS) return ORDINALS[w];
+  const n = Number(w.replace(/^(\d+)(st|nd|rd|th)$/, "$1"));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** Give `ch` the letter case of the character it replaces. */
+function matchCase(original: string, ch: string): string {
+  return original === original.toUpperCase() && original !== original.toLowerCase()
+    ? ch.toUpperCase()
+    : ch.toLowerCase();
+}
+
+/** Replace the Nth letter/digit of `value` (1-based; -1 = last), keeping spaces. */
+function setLetterAt(value: string, ord: number, ch: string): string | null {
+  const chars = [...value];
+  const positions: number[] = [];
+  for (let i = 0; i < chars.length; i++) {
+    if (/[\p{L}\p{N}]/u.test(chars[i])) positions.push(i);
+  }
+  if (positions.length === 0) return null;
+  const idx = ord === -1 ? positions[positions.length - 1] : positions[ord - 1];
+  if (idx === undefined) return null;
+  chars[idx] = matchCase(chars[idx], ch);
+  return chars.join("");
+}
+
+/** Does this phrase read as spelled letters ("tee aitch" / "t h") rather than a word? */
+function looksSpelled(phrase: string): boolean {
+  const tokens = phrase.toLowerCase().split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every(
+    (t) => /^[a-z]$/.test(t) || t in LETTER_HOMOPHONES || t in DIGIT_WORDS || /^\d$/.test(t),
+  );
+}
+
+/** A phrase used as replacement text: spelled letters are decoded, words kept. */
+function resolveReplacement(phrase: string): string {
+  const clean = phrase.trim().replace(/[.,!?]+$/, "");
+  return looksSpelled(clean) ? spellTokensToText(clean) : clean;
+}
+
+/**
+ * Apply an IVR-style spoken correction to a confirmed-but-wrong value:
+ *
+ *   "change k to c"                    -> first "k" becomes "c"
+ *   "the third letter is e"            -> positional letter edit
+ *   "replace tilkan with thilakan"     -> closest word swapped
+ *
+ * Returns the edited value, or null when the utterance isn't an edit command
+ * (so the caller can fall through to yes/no handling).
+ */
+export function applySpokenEdit(value: string, utterance: string): string | null {
+  const u = utterance.toLowerCase().trim().replace(/[.,!?]+$/, "");
+  if (!value.trim() || !u) return null;
+
+  // "the third letter is e" / "3rd letter should be m" / "last letter is n"
+  const positional = u.match(
+    /^(?:the\s+)?([a-z]+|\d+(?:st|nd|rd|th)?)\s+letter\s+(?:is|should be|becomes|to)\s+(.+)$/,
+  );
+  if (positional) {
+    const ord = ordinalToIndex(positional[1]);
+    const ch = resolveReplacement(positional[2]);
+    if (ord !== null && ch.length === 1) {
+      const edited = setLetterAt(value, ord, ch);
+      return edited && edited !== value ? edited : null;
+    }
+    return null;
+  }
+
+  // "change/replace/make X with/to/into Y"
+  const swap = u.match(/^(?:change|replace|make)\s+(?:the\s+)?(.+?)\s+(?:with|to|into)\s+(.+)$/);
+  if (!swap) return null;
+  const targetRaw = swap[1].trim();
+  const replacement = resolveReplacement(swap[2]);
+  if (!replacement) return null;
+
+  // Target "third letter" inside the swap form.
+  const ordTarget = targetRaw.match(/^([a-z]+|\d+(?:st|nd|rd|th)?)\s+letter$/);
+  if (ordTarget) {
+    const ord = ordinalToIndex(ordTarget[1]);
+    if (ord !== null && replacement.length === 1) {
+      const edited = setLetterAt(value, ord, replacement);
+      return edited && edited !== value ? edited : null;
+    }
+    return null;
+  }
+
+  // Single-letter target: replace its first occurrence, keeping its case.
+  const targetLetter = looksSpelled(targetRaw) ? spellTokensToText(targetRaw) : targetRaw;
+  if (targetLetter.length === 1 && replacement.length >= 1) {
+    const idx = value.toLowerCase().indexOf(targetLetter.toLowerCase());
+    if (idx < 0) return null;
+    const cased = matchCase(value[idx], replacement[0]) + replacement.slice(1);
+    return value.slice(0, idx) + cased + value.slice(idx + 1);
+  }
+
+  // Word target: swap the closest word of the value.
+  const words = value.split(/\s+/);
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < words.length; i++) {
+    const d = editDistance(words[i], targetLetter);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  const tolerance = Math.max(1, Math.floor(Math.max(1, targetLetter.length) * 0.4));
+  if (bestIdx < 0 || bestDist > tolerance) return null;
+  words[bestIdx] = replacement;
+  const edited = words.join(" ");
+  return edited !== value ? edited : null;
 }
 
 const MONTHS: Record<string, number> = {

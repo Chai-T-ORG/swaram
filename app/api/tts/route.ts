@@ -9,9 +9,15 @@
  *   POST /api/tts   -> body: { text, lang?, voice? } -> audio/(wav|mpeg) | { error }
  *
  * Engine chain (first success wins, so one hiccup is never fatal):
+ *   Sarvam Bulbul v3 (Indic langs, if SARVAM_API_KEY)  — natural Indian voices
  *   Azure Neural (only if AZURE_SPEECH_KEY set)        — all languages, premium
  *   Kokoro server-side (English only, when loaded)     — natural, free, all devices
  *   Google Translate TTS                               — all languages, free
+ *
+ * Cost control for Sarvam (billed per character): it is only tried for Hindi /
+ * Malayalam — where its voices are clearly better — never for English or
+ * French; long texts skip it; and the LRU cache below means each distinct
+ * prompt is billed at most once per server lifetime.
  *
  * Multilingual: the app's lines are authored in English, so for a non-English
  * language we first translate the text (keyless Google endpoint, sl=auto — text
@@ -145,6 +151,37 @@ async function synthesizeGoogle(text: string, tl: string): Promise<Buffer> {
   return Buffer.concat(buffers);
 }
 
+/* ---------------------- Sarvam Bulbul v3 (Indic langs) -------------------- */
+
+/** Google-translate lang code -> Sarvam BCP-47 code, for supported languages. */
+const SARVAM_TTS_LANGS: Record<string, string> = { hi: "hi-IN", ml: "ml-IN" };
+
+/** Skip Sarvam for long texts — Azure/Google handle those at no marginal cost. */
+const SARVAM_TTS_MAX_CHARS = 600;
+
+async function synthesizeSarvam(text: string, langCode: string): Promise<Buffer> {
+  const res = await fetch("https://api.sarvam.ai/text-to-speech", {
+    method: "POST",
+    headers: {
+      "api-subscription-key": process.env.SARVAM_API_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text,
+      target_language_code: langCode,
+      speaker: process.env.SARVAM_TTS_SPEAKER || "priya",
+      model: "bulbul:v3",
+      speech_sample_rate: 22050,
+      output_audio_codec: "mp3",
+      enable_cached_responses: true,
+    }),
+  });
+  if (!res.ok) throw new Error("sarvam-" + res.status);
+  const data = (await res.json()) as { audios?: string[] };
+  if (!data.audios?.[0]) throw new Error("sarvam-empty");
+  return Buffer.from(data.audios[0], "base64");
+}
+
 /* --------------------------- Azure (premium, opt-in) ---------------------- */
 
 async function synthesizeAzure(text: string, voice: string): Promise<Buffer> {
@@ -238,7 +275,22 @@ export async function POST(req: NextRequest) {
   const azureVoice = body.voice || langVoice.azure;
   let lastError = "";
 
-  // 1) Azure (premium, all languages) when a key is configured.
+  // 1) Sarvam Bulbul v3 — natural Indian voices, only for Indic languages.
+  const sarvamLang = SARVAM_TTS_LANGS[tl];
+  if (process.env.SARVAM_API_KEY && sarvamLang && speakText.length <= SARVAM_TTS_MAX_CHARS) {
+    try {
+      const audio = await synthesizeSarvam(speakText, sarvamLang);
+      if (audio.length > 0) {
+        const out = { audio, contentType: "audio/mpeg", provider: "sarvam" };
+        cacheSet(cacheKey, out);
+        return audioResponse(out.audio, out.provider, out.contentType);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // 2) Azure (premium, all languages) when a key is configured.
   if (process.env.AZURE_SPEECH_KEY) {
     try {
       const audio = await synthesizeAzure(speakText, azureVoice);
@@ -252,7 +304,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 2) Kokoro server-side — natural English voice, once the model is loaded.
+  // 3) Kokoro server-side — natural English voice, once the model is loaded.
   if (tl === "en" && isKokoroReady()) {
     try {
       const audio = await synthesizeKokoro(speakText);
@@ -266,7 +318,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 3) Google Translate TTS — free, every language.
+  // 4) Google Translate TTS — free, every language.
   try {
     const audio = await synthesizeGoogle(speakText, tl);
     if (audio.length > 0) {

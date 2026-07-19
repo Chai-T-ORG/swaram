@@ -17,8 +17,11 @@ import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
-import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
+import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit } from "@/lib/voice/transcriptFormat";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { setSttFieldHint } from "@/lib/voice/groqSTT";
+import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
+import { transliterateForSpeech } from "@/lib/voice/transliterate";
 import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
@@ -78,6 +81,9 @@ export function useFillSession() {
   const listenKindRef = useRef<"answer" | "confirm">("answer");
   /** When true, the next answer utterance is dictated letters (spell mode). */
   const spellInputRef = useRef(false);
+  /** True while the value awaiting confirmation came from spelling — a "no"
+   * then re-enters spell-repair instead of asking the question over. */
+  const spelledPendingRef = useRef(false);
 
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
@@ -93,6 +99,7 @@ export function useFillSession() {
     load();
     return () => {
       cancelSpeech();
+      setSttFieldHint("");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formId]);
@@ -283,6 +290,16 @@ export function useFillSession() {
     retriesRef.current = 0;
     noSpeechRef.current = 0;
     unclearTriedRef.current = false;
+    // A stale value from the previous field must never seed a spell-repair.
+    pendingConfirmRef.current = null;
+    spelledPendingRef.current = false;
+    // Tell the STT router what kind of clip is coming: name-field audio runs
+    // the server's multi-engine ensemble with this label + the user's known
+    // names as biasing context.
+    setSttFieldHint(
+      smartLane(field).kind === "name" ? "name" : "",
+      { label: field.label, names: knownNames() },
+    );
     setPhase("asking");
     setTone("info");
     setStatus(questionFor(field));
@@ -311,7 +328,8 @@ export function useFillSession() {
     // Commands work in both answer and confirm modes.
     if (cmd === "help") {
       await speak(
-        "Just say your answer. You can also say: repeat, skip, go back, let me spell, type instead, or pause.",
+        "Just say your answer. You can also say: repeat, skip, go back, let me spell, type instead, or pause. " +
+          "While confirming, you can say things like: change K to C, or: the third letter is E.",
       );
       if (alive(id)) setPhase("listening");
       return;
@@ -337,7 +355,14 @@ export function useFillSession() {
         if (alive(id)) { spellInputRef.current = true; setPhase("listening"); }
         return;
       }
-      const value = field && isNameField(field) ? titleCase(spelled) : spelled;
+      // Repair, don't restart: when the user spells right after rejecting a
+      // heard value, splice the spelling into it — fixing only the wrong word
+      // ("Twinsha T Tilkan" + "t h i l a k a n" -> "Twinsha T Thilakan").
+      const prior = pendingConfirmRef.current;
+      const merged = prior && field?.type === "text" ? mergeSpelledCorrection(prior, spelled) : spelled;
+      const value = field && isNameField(field) ? titleCase(merged) : merged;
+      setSttFieldHint("");
+      spelledPendingRef.current = true;
       pendingConfirmRef.current = value;
       setConfirmValue(value);
       setHeard(value);
@@ -385,9 +410,19 @@ export function useFillSession() {
   function enterSpellMode(id: number) {
     spellInputRef.current = true;
     listenKindRef.current = "answer";
+    setSttFieldHint("spell", { label: fieldAt(posRef.current)?.label });
     setTone("info");
-    setStatus("Spell it letter by letter. Say “space” between words.");
-    speak("Go ahead — spell it letter by letter. Say space between words.").then(() => {
+    const repairing = Boolean(pendingConfirmRef.current);
+    setStatus(
+      repairing
+        ? "Spell just the wrong word — or the whole answer. Say “space” between words."
+        : "Spell it letter by letter. Say “space” between words.",
+    );
+    speak(
+      repairing
+        ? "Go ahead — spell just the word I got wrong, letter by letter. Or spell the whole answer with space between words."
+        : "Go ahead — spell it letter by letter. Say space between words.",
+    ).then(() => {
       if (alive(id)) setPhase("listening");
     });
   }
@@ -395,7 +430,6 @@ export function useFillSession() {
   async function handleAnswer(pos: number, raw: string, confidence: number, id: number) {
     const field = fieldAt(pos);
     if (!field) return;
-    let value: string;
 
     if (field.type === "checkbox") {
       const yn = parseYesNo(raw);
@@ -432,17 +466,23 @@ export function useFillSession() {
     // touches digits, and deterministic formatting + spell-back handles those.
     const lane = smartLane(field);
     let source = raw;
-    if (lane.correct && isLlmAvailable()) {
+    // A name the user already confirmed once beats any model: snap to it
+    // deterministically and skip the LLM round-trip entirely.
+    const snapped = lane.kind === "name" ? snapToKnownName(raw, field.profileKey) : null;
+    if (snapped) {
+      source = snapped;
+    } else if (lane.correct && isLlmAvailable()) {
       const corrected = await correctTranscript(
         raw,
         { label: field.label, kind: lane.kind, help: field.help },
         getVoiceSettings().sttLang,
+        lane.kind === "name" ? knownNames() : [],
       );
       if (!alive(id)) return;
       if (corrected) source = corrected;
     }
 
-    value = formatAnswer(source, field);
+    const value = formatAnswer(source, field);
     if (!value) {
       await speak("I didn't catch that. Could you repeat it?");
       if (alive(id)) setPhase("listening");
@@ -455,15 +495,26 @@ export function useFillSession() {
     }
 
     pendingConfirmRef.current = value;
+    spelledPendingRef.current = false;
     setConfirmValue(value);
     setHeard(value);
     listenKindRef.current = "confirm";
+    setSttFieldHint("");
     setPhase("confirming");
     setStatus(`I heard: “${value}”. Correct?`);
     // For names, emails, and numbers, read it back character-by-character so
     // the user can actually verify it — this is where mishearings hide.
     const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
-    const readback = spellItBack ? `I heard: ${value}. That's ${spellOut(value)}. Correct?` : `I heard: ${value}. Correct?`;
+    // In Hindi/Malayalam, speak the name in its phonetic native script so the
+    // voice pronounces it the Indian way; the spelled-back letters stay Latin
+    // because that's what lands on the printed form.
+    const spokenValue = isNameField(field)
+      ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
+      : value;
+    if (!alive(id)) return;
+    const readback = spellItBack
+      ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
+      : `I heard: ${spokenValue}. Correct?`;
     await speak(readback + (field.type === "text" ? " You can also say: let me spell." : ""));
     if (alive(id)) {
       setPhase("listening");
@@ -492,15 +543,45 @@ export function useFillSession() {
         if (alive(id)) setPhase("typing");
         return;
       }
+      // A rejected SPELLED value goes straight back to spell-repair — the user
+      // was already spelling; making them start over is the old, broken flow.
+      if (spelledPendingRef.current && field.type === "text") {
+        enterSpellMode(id);
+        return;
+      }
       setPhase("confirming");
       const spellHint =
-        field.type === "text" ? " You can also say: let me spell." : "";
+        field.type === "text"
+          ? " You can also say: let me spell, or: change a letter."
+          : "";
       await speak("Okay, once more. " + questionFor(field) + spellHint);
       if (alive(id)) {
         listenKindRef.current = "answer";
+        setSttFieldHint(smartLane(field).kind === "name" ? "name" : "", {
+          label: field.label,
+          names: knownNames(),
+        });
         setPhase("listening");
       }
       return;
+    }
+
+    // Not a yes and not a no — maybe a surgical edit: "change k to c",
+    // "the third letter is e", "replace tilkan with thilakan".
+    const pending = pendingConfirmRef.current;
+    if (pending && field.type === "text") {
+      const edited = applySpokenEdit(pending, transcript);
+      if (edited) {
+        const value = isNameField(field) ? titleCase(edited) : edited;
+        pendingConfirmRef.current = value;
+        setConfirmValue(value);
+        setHeard(value);
+        setPhase("confirming");
+        setStatus(`Changed to: “${value}”. Correct?`);
+        await speak(`Changed. Now I have: ${spellOut(value)}. Correct?`);
+        if (alive(id)) setPhase("listening");
+        return;
+      }
     }
 
     retriesRef.current += 1;
@@ -521,10 +602,15 @@ export function useFillSession() {
       field.status = "answered";
       syncRecord();
 
+      // A confirmed name is learned for good: future STT snaps to it, the LLM
+      // corrector sees it, and Azure's phrase list is biased toward it.
+      if (isNameField(field)) rememberName(field.profileKey, val);
+
       if (voice) {
         voice.addMessage("user", val);
       }
     }
+    setSttFieldHint("");
     const nextPos = pos + 1;
     const isLast = nextPos >= queueRef.current.length;
     const speechText = isLast ? `${speakPrefix} All questions answered.` : `${speakPrefix} Got it.`;
@@ -563,6 +649,7 @@ export function useFillSession() {
   async function finish(id: number) {
     const rec = recordRef.current;
     if (!rec) return;
+    setSttFieldHint("");
     setPhase("done");
     setTone("success");
     rec.status = "review";
