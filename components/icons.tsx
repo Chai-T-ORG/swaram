@@ -48,4 +48,5 @@ export {
   User as IconUser,
   AudioLines as IconWave,
   X as IconX,
+  RotateCcw as IconRefresh,
 } from "lucide-react";
