@@ -99,7 +99,14 @@ export default function PreviewMobile() {
         </p>
       </header>
 
-      <StatusAnnouncer message={pv.status} tone={pv.tone} />
+      {/* Status Announcer: sr-only for initial info, visible for status updates */}
+      {pv.tone === "info" ? (
+        <div className="sr-only">
+          <StatusAnnouncer message={pv.status} tone={pv.tone} />
+        </div>
+      ) : (
+        <StatusAnnouncer message={pv.status} tone={pv.tone} />
+      )}
 
       {/* Collapsible Document Card */}
       <div className="card overflow-hidden p-0">
@@ -149,7 +156,7 @@ export default function PreviewMobile() {
                 )
               )}
 
-              {/* Bounding box overlays (skip bbox === null) */}
+              {/* Bounding box overlays */}
               <div className="absolute inset-0 pointer-events-none">
                 {pageFields.map((field) => {
                   if (!field.bbox) return null;
@@ -213,139 +220,144 @@ export default function PreviewMobile() {
         </button>
       </div>
 
-      {/* Field Inspection List */}
-      <ul className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Detected fields list">
-        {pv.sortedFields.map((field, index) => {
-          const isSelected = pv.selectedFieldId === field.id;
-          const isEditing = pv.editingId === field.id;
-          const isUnclear = field.confidence < 60 && field.source === "ocr";
-          const isAutofill = Boolean(field.profileKey && !field.sensitive);
+      {/* Field Inspection Compact Checklist */}
+      <div className="card overflow-hidden p-0">
+        <ul className="m-0 flex list-none flex-col divide-y divide-line/50 p-0" aria-label="Detected fields list">
+          {pv.sortedFields.map((field, index) => {
+            const isSelected = pv.selectedFieldId === field.id;
+            const isEditing = pv.editingId === field.id;
+            const isUnclear = field.confidence < 60 && field.source === "ocr";
+            const isAutofill = Boolean(field.profileKey && !field.sensitive);
 
-          return (
-            <motion.li
-              key={field.id}
-              layout
-              initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              onClick={() => pv.selectField(field.id)}
-              className={`card p-4 transition-all cursor-pointer ${
-                isSelected ? "ring-2 ring-accent border-accent/40 bg-surface shadow-sm" : ""
-              }`}
-            >
-              {isEditing ? (
-                <div className="flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-faint">{index + 1}.</span>
-                    <input
-                      type="text"
-                      value={pv.editLabel}
-                      onChange={(e) => pv.setEditLabel(e.target.value)}
-                      className="input-field flex-1 text-sm font-semibold"
-                      placeholder="Field label"
-                      autoFocus
-                    />
-                  </div>
+            return (
+              <motion.li
+                key={field.id}
+                data-selected={isSelected}
+                layout
+                initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                onClick={() => pv.selectField(field.id)}
+                className={`group relative flex flex-col justify-center min-h-14 p-3.5 transition-all cursor-pointer ${
+                  isSelected ? "bg-accent/5 ring-1 ring-inset ring-accent/30" : "hover:bg-sunken/40"
+                }`}
+              >
+                {isEditing ? (
+                  <div className="flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-faint">{index + 1}.</span>
+                      <input
+                        type="text"
+                        value={pv.editLabel}
+                        onChange={(e) => pv.setEditLabel(e.target.value)}
+                        className="input-field flex-1 text-sm font-semibold"
+                        placeholder="Field label"
+                        autoFocus
+                      />
+                    </div>
 
-                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-line/50">
-                    <div className="flex items-center gap-1.5">
-                      <label className="text-xs font-semibold text-soft">Type:</label>
-                      {EDITABLE_TYPES.includes(field.type) ? (
-                        <select
-                          value={pv.editType}
-                          onChange={(e) => pv.setEditType(e.target.value as FieldType)}
-                          className="input-field text-xs py-1 px-2"
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-line/50">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-semibold text-soft">Type:</label>
+                        {EDITABLE_TYPES.includes(field.type) ? (
+                          <select
+                            value={pv.editType}
+                            onChange={(e) => pv.setEditType(e.target.value as FieldType)}
+                            className="input-field text-xs py-1 px-2"
+                          >
+                            <option value="text">text</option>
+                            <option value="date">date</option>
+                            <option value="choice">choice</option>
+                            <option value="checkbox">checkbox</option>
+                          </select>
+                        ) : (
+                          <span className="chip text-[10px] font-medium bg-sunken text-soft">
+                            {field.type}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="btn-secondary min-h-8 px-2.5 text-xs"
+                          onClick={pv.cancelEdit}
                         >
-                          <option value="text">text</option>
-                          <option value="date">date</option>
-                          <option value="choice">choice</option>
-                          <option value="checkbox">checkbox</option>
-                        </select>
-                      ) : (
-                        <span className="chip text-[10px] font-medium bg-sunken text-soft">
-                          {field.type}
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-primary min-h-8 px-3 text-xs"
+                          onClick={() => pv.saveEdit(field.id)}
+                        >
+                          <IconCheck className="h-3 w-3" />
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+                        <span className="text-xs font-bold uppercase text-faint shrink-0">{index + 1}.</span>
+                        <span className="text-sm font-semibold leading-snug text-ink truncate">
+                          {field.label}
                         </span>
-                      )}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="chip bg-sunken text-[10px] font-semibold text-soft">
+                            {field.type}
+                          </span>
+                          {isAutofill && (
+                            <span className="chip bg-accent-soft text-[10px] font-bold text-accent">
+                              <IconSparkle className="h-3 w-3" aria-hidden="true" />
+                              auto-fill
+                            </span>
+                          )}
+                          {isUnclear && (
+                            <span className="chip bg-warn-soft text-[10px] font-bold text-warn">
+                              <IconAlertCircle className="h-3 w-3" aria-hidden="true" />
+                              unclear
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Icon-only Actions: visible on hover, focus-within, or selected */}
+                      <div
+                        className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100 transition-opacity"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-soft hover:text-ink focus:outline-none focus:ring-2 focus:ring-accent rounded-lg"
+                          onClick={() => pv.startEdit(field)}
+                          aria-label={`Rename ${field.label}`}
+                        >
+                          <IconEdit className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-warn hover:text-warn-soft focus:outline-none focus:ring-2 focus:ring-warn rounded-lg"
+                          onClick={() => pv.removeField(field)}
+                          aria-label={`Remove field ${field.label}`}
+                        >
+                          <IconTrash className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        className="btn-secondary min-h-8 px-2.5 text-xs"
-                        onClick={pv.cancelEdit}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-primary min-h-8 px-3 text-xs"
-                        onClick={() => pv.saveEdit(field.id)}
-                      >
-                        <IconCheck className="h-3 w-3" />
-                        Save
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="text-xs font-bold uppercase text-faint">{index + 1}.</span>
-                      <h2 className="text-sm font-semibold leading-snug text-ink truncate">
-                        {field.label}
-                      </h2>
-                    </div>
-
-                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="btn-secondary min-h-8 px-2 text-xs"
-                        onClick={() => pv.startEdit(field)}
-                        aria-label={`Rename ${field.label}`}
-                      >
-                        <IconEdit className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary min-h-8 px-2 text-xs text-warn hover:bg-warn-soft/40"
-                        onClick={() => pv.removeField(field)}
-                        aria-label={`Remove field ${field.label}`}
-                      >
-                        <IconTrash className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Chips & Spoken Question */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="chip bg-sunken text-[10px] font-semibold text-soft">
-                      {field.type}
-                    </span>
-                    {isAutofill && (
-                      <span className="chip bg-accent-soft text-[10px] font-bold text-accent">
-                        <IconSparkle className="h-3 w-3" aria-hidden="true" />
-                        auto-fill
-                      </span>
-                    )}
-                    {isUnclear && (
-                      <span className="chip bg-warn-soft text-[10px] font-bold text-warn">
-                        <IconAlertCircle className="h-3 w-3" aria-hidden="true" />
-                        unclear
-                      </span>
+                    {field.question && (
+                      <p className="text-xs text-soft leading-relaxed italic pl-5">
+                        &ldquo;{field.question}&rdquo;
+                      </p>
                     )}
                   </div>
-
-                  {field.question && (
-                    <p className="text-xs text-soft leading-relaxed italic">
-                      &ldquo;{field.question}&rdquo;
-                    </p>
-                  )}
-                </div>
-              )}
-            </motion.li>
-          );
-        })}
-      </ul>
+                )}
+              </motion.li>
+            );
+          })}
+        </ul>
+      </div>
 
       {/* Home link */}
       <div className="pt-2">
