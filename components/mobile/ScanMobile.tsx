@@ -6,21 +6,29 @@
  * and interactive confirm screen with draggable corner handles.
  */
 
-import { useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import { useScanCapture } from "@/components/screens/useScanCapture";
-import { IconCamera, IconUpload, IconAlertCircle, IconCheck, IconRepeat } from "@/components/icons";
+import { IconCamera, IconAlertCircle, IconCheck, IconRepeat } from "@/components/icons";
 import { Zap, ZapOff, RefreshCw, RotateCw, Move } from "lucide-react";
 
 export default function ScanMobile() {
   const sc = useScanCapture();
   const prefersReducedMotion = useReducedMotion();
-  const confirmContainerRef = useRef<HTMLDivElement>(null);
+  const adjustBoxRef = useRef<HTMLDivElement>(null);
   const [activeHandle, setActiveHandle] = useState<number | null>(null);
+  const [adjusting, setAdjusting] = useState(false);
 
   const isConfirm = sc.cameraState === "confirm";
+  const rawW = sc.rawCanvasRef.current?.width ?? 0;
+  const rawH = sc.rawCanvasRef.current?.height ?? 0;
+
+  // When detection failed, drop the user straight into corner adjustment.
+  useEffect(() => {
+    if (sc.cameraState !== "confirm") setAdjusting(false);
+    else if (sc.detectionFailed) setAdjusting(true);
+  }, [sc.cameraState, sc.detectionFailed]);
 
   function handlePointerDown(index: number, e: React.PointerEvent) {
     e.preventDefault();
@@ -29,8 +37,10 @@ export default function ScanMobile() {
   }
 
   function handlePointerMove(index: number, e: React.PointerEvent) {
-    if (activeHandle !== index || !confirmContainerRef.current || !sc.rawCanvasRef.current) return;
-    const rect = confirmContainerRef.current.getBoundingClientRect();
+    if (activeHandle !== index || !adjustBoxRef.current || !sc.rawCanvasRef.current) return;
+    // The adjust box wraps the raw image exactly, so box-relative position
+    // maps linearly onto raw-canvas coordinates.
+    const rect = adjustBoxRef.current.getBoundingClientRect();
     const rawCanvas = sc.rawCanvasRef.current;
 
     const relX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -243,102 +253,139 @@ export default function ScanMobile() {
           )}
         </>
       ) : (
-        /* Confirm State Screen */
-        <div className="flex flex-col gap-4">
-          <div
-            ref={confirmContainerRef}
-            className="-mx-5 relative aspect-[3/4] overflow-hidden bg-ink select-none touch-none rounded-b-2xl"
-          >
-            {/* Warped Preview or Raw Canvas Image */}
-            {sc.warpedPreviewUrl ? (
-              <img
-                src={sc.warpedPreviewUrl}
-                alt="Scan preview"
-                className="absolute inset-0 h-full w-full object-contain pointer-events-none"
-              />
-            ) : null}
+        /* Confirm state — straightened result by default; corner adjustment is
+           an explicit mode on the RAW photo so handles and image always agree. */
+        <div className="flex flex-col gap-4 pb-24">
+          {!adjusting ? (
+            <>
+              <div className="-mx-5 relative aspect-[3/4] overflow-hidden bg-ink">
+                {sc.warpedPreviewUrl && (
+                  <img
+                    src={sc.warpedPreviewUrl}
+                    alt="Straightened scan preview"
+                    className="absolute inset-0 h-full w-full object-contain"
+                  />
+                )}
+              </div>
 
-            {/* Corner handle overlay on raw image coordinates */}
-            {sc.rawCanvasRef.current && sc.corners.length === 8 && (
-              <svg viewBox={`0 0 ${sc.rawCanvasRef.current.width} ${sc.rawCanvasRef.current.height}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full pointer-events-none z-10">
-                <polygon
-                  points={`${sc.corners[0]},${sc.corners[1]} ${sc.corners[2]},${sc.corners[3]} ${sc.corners[4]},${sc.corners[5]} ${sc.corners[6]},${sc.corners[7]}`}
-                  fill="rgba(30, 81, 56, 0.2)"
-                  stroke="var(--accent)"
-                  strokeWidth={sc.rawCanvasRef.current.width * 0.005}
-                />
-              </svg>
-            )}
+              <div className="flex items-center justify-between px-1">
+                <button
+                  type="button"
+                  onClick={sc.rotate90}
+                  className="btn-secondary min-h-11 px-4 text-xs font-semibold"
+                >
+                  <RotateCw className="h-4 w-4 mr-1.5" />
+                  Rotate 90°
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdjusting(true)}
+                  className="btn-secondary min-h-11 px-4 text-xs font-semibold"
+                >
+                  <Move className="h-4 w-4 mr-1.5" />
+                  Adjust corners
+                </button>
+              </div>
 
-            {/* Interactive Corner Drag Handles (44px min hit target) */}
-            {sc.rawCanvasRef.current &&
-              sc.corners.length === 8 &&
-              [0, 1, 2, 3].map((idx) => {
-                const rawW = sc.rawCanvasRef.current!.width;
-                const rawH = sc.rawCanvasRef.current!.height;
-                const leftPct = (sc.corners[idx * 2] / rawW) * 100;
-                const topPct = (sc.corners[idx * 2 + 1] / rawH) * 100;
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    aria-label={`Adjust corner ${idx + 1}`}
-                    onPointerDown={(e) => handlePointerDown(idx, e)}
-                    onPointerMove={(e) => handlePointerMove(idx, e)}
-                    onPointerUp={(e) => handlePointerUp(idx, e)}
-                    style={{ left: `${leftPct}%`, top: `${topPct}%` }}
-                    className="absolute -translate-x-1/2 -translate-y-1/2 grid h-11 w-11 place-items-center z-30 cursor-grab active:cursor-grabbing touch-none focus:outline-none"
-                  >
-                    <span className="h-4 w-4 rounded-full bg-accent ring-4 ring-white/80 shadow-md transition-transform active:scale-125" />
-                  </button>
-                );
-              })}
-          </div>
+              <button
+                type="button"
+                onClick={sc.retake}
+                className="btn-secondary min-h-13 w-full text-sm"
+              >
+                <IconRepeat className="h-4 w-4 mr-1.5" />
+                Retake photo
+              </button>
 
-          {/* Tools & Failure Banner */}
-          <div className="flex items-center justify-between px-1">
-            <button
-              type="button"
-              onClick={sc.rotate90}
-              className="btn-secondary min-h-11 px-4 text-xs font-semibold"
-            >
-              <RotateCw className="h-4 w-4 mr-1.5" />
-              Rotate 90°
-            </button>
-            <span className="text-xs text-soft">
-              <Move className="h-3.5 w-3.5 inline mr-1" />
-              Drag corners to adjust
-            </span>
-          </div>
+              {/* Sticky primary above the orb dock */}
+              <div className="sticky bottom-2 z-20 -mx-1 rounded-full bg-surface/60 p-1 backdrop-blur">
+                <button
+                  type="button"
+                  onClick={sc.accept}
+                  className="btn-primary min-h-14 w-full text-base font-bold shadow-float"
+                >
+                  <IconCheck className="h-5 w-5 mr-1.5" />
+                  Use this scan
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {sc.detectionFailed && (
+                <div className="card flex gap-3 border-warn/25 bg-warn-soft p-3.5 text-warn" role="status">
+                  <IconAlertCircle className="h-5 w-5 shrink-0" />
+                  <p className="text-xs font-semibold leading-relaxed">
+                    I couldn't find the edges — drag the corners to the paper, or retake.
+                  </p>
+                </div>
+              )}
 
-          {sc.detectionFailed && (
-            <div className="card flex gap-3 border-warn/25 bg-warn-soft p-3.5 text-warn" role="status">
-              <IconAlertCircle className="h-5 w-5 shrink-0" />
-              <p className="text-xs font-semibold leading-relaxed">
-                I couldn't find the edges — drag the corners to the paper, or retake.
+              {/* Raw photo with the quad + handles in its exact coordinate space */}
+              <div className="-mx-5 flex justify-center bg-ink py-3">
+                <div ref={adjustBoxRef} className="relative touch-none select-none">
+                  {sc.rawPreviewUrl && (
+                    <img
+                      src={sc.rawPreviewUrl}
+                      alt="Original photo for corner adjustment"
+                      draggable={false}
+                      className="block h-auto w-auto max-h-[58vh] max-w-full"
+                    />
+                  )}
+
+                  {rawW > 0 && sc.corners.length === 8 && (
+                    <svg
+                      viewBox={`0 0 ${rawW} ${rawH}`}
+                      preserveAspectRatio="none"
+                      className="absolute inset-0 h-full w-full pointer-events-none z-10"
+                    >
+                      <polygon
+                        points={`${sc.corners[0]},${sc.corners[1]} ${sc.corners[2]},${sc.corners[3]} ${sc.corners[4]},${sc.corners[5]} ${sc.corners[6]},${sc.corners[7]}`}
+                        fill="rgba(30, 81, 56, 0.2)"
+                        stroke="var(--accent)"
+                        strokeWidth={rawW * 0.005}
+                      />
+                    </svg>
+                  )}
+
+                  {rawW > 0 &&
+                    sc.corners.length === 8 &&
+                    [0, 1, 2, 3].map((idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        aria-label={`Adjust corner ${idx + 1}`}
+                        onPointerDown={(e) => handlePointerDown(idx, e)}
+                        onPointerMove={(e) => handlePointerMove(idx, e)}
+                        onPointerUp={(e) => handlePointerUp(idx, e)}
+                        style={{
+                          left: `${(sc.corners[idx * 2] / rawW) * 100}%`,
+                          top: `${(sc.corners[idx * 2 + 1] / rawH) * 100}%`,
+                        }}
+                        className="absolute -translate-x-1/2 -translate-y-1/2 grid h-11 w-11 place-items-center z-30 cursor-grab active:cursor-grabbing touch-none focus:outline-none"
+                      >
+                        <span className="h-4 w-4 rounded-full bg-accent ring-4 ring-white/80 shadow-md transition-transform active:scale-125" />
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              <p className="text-center text-xs text-soft">
+                <Move className="h-3.5 w-3.5 inline mr-1" />
+                Drag the dots onto the paper&rsquo;s corners
               </p>
-            </div>
-          )}
 
-          {/* Confirm Actions */}
-          <div className="flex flex-col gap-2.5 pt-2">
-            <button
-              type="button"
-              onClick={sc.accept}
-              className="btn-primary min-h-14 w-full text-base font-bold shadow-float"
-            >
-              <IconCheck className="h-5 w-5 mr-1.5" />
-              Use this scan
-            </button>
-            <button
-              type="button"
-              onClick={sc.retake}
-              className="btn-secondary min-h-13 w-full text-sm"
-            >
-              <IconRepeat className="h-4 w-4 mr-1.5" />
-              Retake photo
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => {
+                  sc.commitCornerChange();
+                  setAdjusting(false);
+                }}
+                className="btn-primary min-h-13 w-full"
+              >
+                <IconCheck className="h-4.5 w-4.5 mr-1.5" />
+                Done adjusting
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
