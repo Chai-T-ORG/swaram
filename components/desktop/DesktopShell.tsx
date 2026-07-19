@@ -33,7 +33,7 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
   const prefersReducedMotion = useReducedMotion();
 
   const yOffset = prefersReducedMotion ? 0 : 12;
-  const trans = prefersReducedMotion ? { duration: 0.05 } : { duration: 0.25, ease: "easeInOut" as const };
+  const trans = prefersReducedMotion ? { duration: 0.05 } : { duration: 0.12, ease: "easeOut" as const };
 
   return (
     <div className="flex h-dvh w-full flex-col bg-surface text-ink ambient-grid relative z-10">
@@ -49,11 +49,9 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
         <header className="sticky top-4 z-30 mx-auto flex w-[calc(100%-2.5rem)] max-w-5xl shrink-0 items-center justify-between rounded-2xl glass-raised px-6 py-3">
           <Link
             href="/"
-            className="flex items-center gap-3 text-ink no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent rounded-full"
+            className="flex items-center gap-3 text-ink no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent rounded-xl"
           >
-            <span className="grid h-9 w-9 place-items-center rounded-full bg-accent text-on-accent shadow-sm">
-              <IconWave className="h-4.5 w-4.5" />
-            </span>
+            <img src="/logo.png" alt="" className="h-8.5 w-8.5 rounded-xl object-contain shadow-xs" />
             <span className="font-display text-xl tracking-tight">Swaram</span>
           </Link>
 
@@ -64,22 +62,31 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`rounded-full px-4.5 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-                    active ? "bg-accent-soft text-accent" : "text-soft hover:text-ink hover:bg-sunken"
+                  className={`relative rounded-full px-4.5 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                    active ? "text-accent" : "text-soft hover:text-ink hover:bg-sunken"
                   }`}
                 >
+                  {active && (
+                    <motion.div
+                      layoutId="active-desktop-nav-pill"
+                      className="absolute inset-0 rounded-full bg-accent-soft -z-10"
+                      transition={{ type: "spring", stiffness: 350, damping: 28 }}
+                    />
+                  )}
                   {link.label}
                 </Link>
               );
             })}
             <span className="mx-2 h-4 w-px bg-line" aria-hidden="true" />
-            <button
+            <motion.button
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
               onClick={toggleTheme}
-              className="grid h-10 w-10 place-items-center rounded-full border border-line bg-raised text-soft shadow-sm transition-colors hover:text-ink cursor-pointer"
+              className="grid h-10 w-10 place-items-center rounded-full border border-line bg-raised text-soft shadow-sm transition-colors hover:text-ink cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
             >
               {theme === "light" ? <IconMoon className="h-4.5 w-4.5" /> : <IconSun className="h-4.5 w-4.5" />}
-            </button>
+            </motion.button>
           </nav>
         </header>
       )}
@@ -93,13 +100,14 @@ export default function DesktopShell({ children }: { children: ReactNode }) {
               : "mx-auto w-full max-w-5xl px-8 pb-44 pt-10"
           }
         >
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="popLayout">
             <motion.div
               key={pathname}
-              initial={{ opacity: 0, y: yOffset }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -yOffset }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={trans}
+              style={{ willChange: "opacity" }}
               className="w-full h-full flex flex-col flex-1"
             >
               {children}

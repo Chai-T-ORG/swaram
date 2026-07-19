@@ -48,6 +48,8 @@ export interface VoiceSettings {
   micMode: MicMode;
   /** Whether the first-time model setup has completed successfully. */
   setupComplete: boolean;
+  /** Dedicated flag for whether first-run onboarding has been completed by the user. */
+  onboardingComplete: boolean;
 }
 
 const KEY = "swaram_voice_settings";
@@ -61,6 +63,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   sttProvider: "groq",        // Cloud Whisper (Groq) — accurate & instant; native is the fallback
   micMode: "ptt",             // Push-to-talk by default — reliable in noisy rooms
   setupComplete: false,
+  onboardingComplete: false,
 };
 
 export function getVoiceSettings(): VoiceSettings {
@@ -78,6 +81,7 @@ export function getVoiceSettings(): VoiceSettings {
       sttProvider: isValidSttProvider(parsed.sttProvider) ? parsed.sttProvider! : DEFAULT_VOICE_SETTINGS.sttProvider,
       micMode: parsed.micMode === "continuous" || parsed.micMode === "ptt" ? parsed.micMode : DEFAULT_VOICE_SETTINGS.micMode,
       setupComplete: typeof parsed.setupComplete === "boolean" ? parsed.setupComplete : DEFAULT_VOICE_SETTINGS.setupComplete,
+      onboardingComplete: typeof parsed.onboardingComplete === "boolean" ? parsed.onboardingComplete : Boolean(parsed.setupComplete),
     };
   } catch {
     return DEFAULT_VOICE_SETTINGS;
@@ -89,6 +93,18 @@ export function setVoiceSettings(update: Partial<VoiceSettings>): VoiceSettings 
   next.rate = clampRate(next.rate);
   localStorage.setItem(KEY, JSON.stringify(next));
   return next;
+}
+
+export function isOnboardingComplete(): boolean {
+  return getVoiceSettings().onboardingComplete;
+}
+
+export function markOnboardingComplete(): void {
+  setVoiceSettings({ onboardingComplete: true });
+}
+
+export function resetOnboarding(): void {
+  setVoiceSettings({ onboardingComplete: false });
 }
 
 function clampRate(rate: number): number {

@@ -7,13 +7,23 @@
  */
 
 import { speak } from "@/lib/voice/textToSpeech";
-import type { TtsProvider, SttProvider, MicMode } from "@/lib/voice/voiceSettings";
+import { resetOnboarding, type TtsProvider, type SttProvider, type MicMode } from "@/lib/voice/voiceSettings";
 import { PROFILE_FIELDS, STT_LANGS, type ProfileSettings } from "./useProfileSettings";
-import { IconCheck, IconInfo, IconShield, IconTrash, IconUser, IconWave } from "@/components/icons";
+import { IconCheck, IconInfo, IconShield, IconTrash, IconUser, IconWave, IconRefresh } from "@/components/icons";
 
 export function VoiceSection({ p }: { p: ProfileSettings }) {
   return (
     <div className="flex flex-col gap-6">
+      <section className="card flex items-center justify-between p-5 border border-line bg-raised shadow-sm">
+        <div className="flex items-center gap-3.5">
+          <img src="/logo.png" alt="Swaram Logo" className="h-11 w-11 rounded-2xl object-contain shadow-xs" />
+          <div>
+            <h2 className="font-display text-lg text-ink leading-tight">Swaram Voice Assistant</h2>
+            <p className="text-xs text-soft">Voice-first form engine for blind and low-vision users.</p>
+          </div>
+        </div>
+      </section>
+
       <section className="card flex flex-col gap-5">
         <h2 className="border-b border-line pb-3 font-display text-lg text-ink">Voice &amp; speech</h2>
 
@@ -166,6 +176,26 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
           <p className="max-w-sm text-[11px] leading-normal text-faint">
             In a noisy room push-to-talk is far more reliable — the microphone only records while you hold or tap it.
           </p>
+        </div>
+
+        <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
+          <label className="text-xs font-bold uppercase text-soft">
+            First-run welcome setup
+          </label>
+          <p className="max-w-sm text-xs leading-relaxed text-soft">
+            Replay the initial voice onboarding flow to test your microphone or change listening options. Your saved profile details and model caches will not be lost.
+          </p>
+          <button
+            type="button"
+            className="btn-secondary min-h-12 max-w-sm text-xs self-start flex items-center gap-2"
+            onClick={() => {
+              resetOnboarding();
+              window.dispatchEvent(new Event("swaram_replay_onboarding"));
+            }}
+          >
+            <IconRefresh className="h-4 w-4 text-accent" />
+            <span>Replay welcome onboarding</span>
+          </button>
         </div>
 
         <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
