@@ -31,21 +31,17 @@ function PdfPageCanvas({
   pageIndex: number;
   renderPdfPage: (index: number) => Promise<HTMLCanvasElement | null>;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    renderPdfPage(pageIndex).then((canvas) => {
-      if (!active || !canvas || !containerRef.current) return;
-      containerRef.current.innerHTML = "";
-      const clone = canvas.cloneNode(true) as HTMLCanvasElement;
-      const ctx = clone.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(canvas, 0, 0);
-      }
-      clone.className = "w-full h-auto block rounded border border-line shadow-sm bg-white";
-      containerRef.current.appendChild(clone);
+    renderPdfPage(pageIndex).then((source) => {
+      const target = canvasRef.current;
+      if (!active || !source || !target) return;
+      target.width = source.width;
+      target.height = source.height;
+      target.getContext("2d")?.drawImage(source, 0, 0);
       setLoading(false);
     });
     return () => {
@@ -54,12 +50,16 @@ function PdfPageCanvas({
   }, [pageIndex, renderPdfPage]);
 
   return (
-    <div ref={containerRef} className="relative w-full">
+    <div className="relative w-full">
       {loading && (
         <div className="flex h-48 w-full items-center justify-center rounded border border-line bg-sunken">
           <div className="skeleton-text h-5 w-24 rounded" />
         </div>
       )}
+      <canvas
+        ref={canvasRef}
+        className={`w-full h-auto block rounded border border-line shadow-sm bg-white ${loading ? "hidden" : ""}`}
+      />
     </div>
   );
 }

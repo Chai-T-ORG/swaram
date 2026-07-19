@@ -6,7 +6,7 @@
  * and hear fields read aloud.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { intentRegex } from "@/lib/voice/intlCommands";
@@ -89,21 +89,24 @@ export function usePreview() {
   }, [formId]);
 
   // Lazy PDF page renderer
-  async function renderPdfPage(pageIndex: number): Promise<HTMLCanvasElement | null> {
-    if (!pdfDoc) return null;
-    if (pageCacheRef.current.has(pageIndex)) {
-      return pageCacheRef.current.get(pageIndex)!;
-    }
-    try {
-      const pageNum = Math.min(Math.max(1, pageIndex + 1), pdfDoc.numPages);
-      const rendered = await renderPageToCanvas(pdfDoc, pageNum, 1400);
-      pageCacheRef.current.set(pageIndex, rendered.canvas);
-      return rendered.canvas;
-    } catch (err) {
-      console.error("Failed to render page", pageIndex, err);
-      return null;
-    }
-  }
+  const renderPdfPage = useCallback(
+    async (pageIndex: number): Promise<HTMLCanvasElement | null> => {
+      if (!pdfDoc) return null;
+      if (pageCacheRef.current.has(pageIndex)) {
+        return pageCacheRef.current.get(pageIndex)!;
+      }
+      try {
+        const pageNum = Math.min(Math.max(1, pageIndex + 1), pdfDoc.numPages);
+        const rendered = await renderPageToCanvas(pdfDoc, pageNum, 1400);
+        pageCacheRef.current.set(pageIndex, rendered.canvas);
+        return rendered.canvas;
+      } catch (err) {
+        console.error("Failed to render page", pageIndex, err);
+        return null;
+      }
+    },
+    [pdfDoc],
+  );
 
   const fieldCount = record?.fields.length ?? 0;
 
