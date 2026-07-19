@@ -6,7 +6,7 @@
  * shutter progress ring, folded tips line, and interactive confirm screen with corner handles.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
@@ -17,10 +17,34 @@ import { Zap, ZapOff, RefreshCw, RotateCw, Move } from "lucide-react";
 export default function ScanDesktop() {
   const sc = useScanCapture();
   const prefersReducedMotion = useReducedMotion();
-  const confirmContainerRef = useRef<HTMLDivElement>(null);
+  const adjustBoxRef = useRef<HTMLDivElement>(null);
   const [activeHandle, setActiveHandle] = useState<number | null>(null);
+  const [adjusting, setAdjusting] = useState(false);
 
   const isConfirm = sc.cameraState === "confirm";
+  const rawW = sc.rawCanvasRef.current?.width ?? 0;
+  const rawH = sc.rawCanvasRef.current?.height ?? 0;
+
+  // When detection failed, drop the user straight into corner adjustment.
+  useEffect(() => {
+    if (sc.cameraState !== "confirm") setAdjusting(false);
+    else if (sc.detectionFailed) setAdjusting(true);
+  }, [sc.cameraState, sc.detectionFailed]);
+
+  // The desktop video is object-contain inside a 16:9 card, so the visible
+  // camera pixels occupy a letterboxed inner box; the live outline must be
+  // positioned over that box, not the whole card.
+  const contentBox = (() => {
+    const va = sc.videoAspect;
+    const ca = 16 / 9;
+    if (!va) return { left: "0%", top: "0%", width: "100%", height: "100%" };
+    if (va >= ca) {
+      const h = (ca / va) * 100;
+      return { left: "0%", top: `${(100 - h) / 2}%`, width: "100%", height: `${h}%` };
+    }
+    const w = (va / ca) * 100;
+    return { left: `${(100 - w) / 2}%`, top: "0%", width: `${w}%`, height: "100%" };
+  })();
 
   function handlePointerDown(index: number, e: React.PointerEvent) {
     e.preventDefault();
@@ -29,8 +53,10 @@ export default function ScanDesktop() {
   }
 
   function handlePointerMove(index: number, e: React.PointerEvent) {
-    if (activeHandle !== index || !confirmContainerRef.current || !sc.rawCanvasRef.current) return;
-    const rect = confirmContainerRef.current.getBoundingClientRect();
+    if (activeHandle !== index || !adjustBoxRef.current || !sc.rawCanvasRef.current) return;
+    // The adjust box wraps the raw image exactly, so box-relative position
+    // maps linearly onto raw-canvas coordinates.
+    const rect = adjustBoxRef.current.getBoundingClientRect();
     const rawCanvas = sc.rawCanvasRef.current;
 
     const relX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -106,18 +132,20 @@ export default function ScanDesktop() {
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
             />
 
-            {/* Live Document Outline SVG Overlay */}
+            {/* Live Document Outline SVG Overlay — over the letterboxed content box */}
             {sc.cameraState === "active" && sc.liveCorners && sc.liveCorners.length === 8 && (
-              <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full pointer-events-none z-10">
-                <polygon
-                  points={`${sc.liveCorners[0] * 100},${sc.liveCorners[1] * 100} ${sc.liveCorners[2] * 100},${sc.liveCorners[3] * 100} ${sc.liveCorners[4] * 100},${sc.liveCorners[5] * 100} ${sc.liveCorners[6] * 100},${sc.liveCorners[7] * 100}`}
-                  className="transition-colors duration-200"
-                  fill="rgba(30, 81, 56, 0.18)"
-                  stroke={sc.isDocumentDetected ? "var(--accent)" : "var(--warn)"}
-                  strokeWidth="1.5"
-                  strokeDasharray={sc.isDocumentDetected ? "none" : "3,3"}
-                />
-              </svg>
+              <div className="absolute pointer-events-none z-10" style={contentBox}>
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+                  <polygon
+                    points={`${sc.liveCorners[0] * 100},${sc.liveCorners[1] * 100} ${sc.liveCorners[2] * 100},${sc.liveCorners[3] * 100} ${sc.liveCorners[4] * 100},${sc.liveCorners[5] * 100} ${sc.liveCorners[6] * 100},${sc.liveCorners[7] * 100}`}
+                    className="transition-colors duration-200"
+                    fill="rgba(30, 81, 56, 0.18)"
+                    stroke={sc.isDocumentDetected ? "var(--accent)" : "var(--warn)"}
+                    strokeWidth="1.5"
+                    strokeDasharray={sc.isDocumentDetected ? "none" : "3,3"}
+                  />
+                </svg>
+              </div>
             )}
 
             {sc.cameraState === "active" && <div className="laser-line" />}
@@ -252,101 +280,140 @@ export default function ScanDesktop() {
           )}
         </>
       ) : (
-        /* Desktop Confirm Screen */
+        /* Confirm state — straightened result by default; corner adjustment is
+           an explicit mode on the RAW photo so handles and image always agree. */
         <div className="flex flex-col gap-5">
-          <div
-            ref={confirmContainerRef}
-            className="card overflow-hidden p-0 relative aspect-video w-full bg-ink select-none touch-none"
-          >
-            {/* Warped Preview or Raw Canvas Image */}
-            {sc.warpedPreviewUrl ? (
-              <img
-                src={sc.warpedPreviewUrl}
-                alt="Scan preview"
-                className="absolute inset-0 h-full w-full object-contain pointer-events-none"
-              />
-            ) : null}
+          {!adjusting ? (
+            <>
+              <div className="card overflow-hidden p-0 relative aspect-video w-full bg-ink select-none">
+                {sc.warpedPreviewUrl && (
+                  <img
+                    src={sc.warpedPreviewUrl}
+                    alt="Straightened scan preview"
+                    className="absolute inset-0 h-full w-full object-contain"
+                  />
+                )}
+              </div>
 
-            {/* Corner Handle Polygon Overlay */}
-            {sc.rawCanvasRef.current && sc.corners.length === 8 && (
-              <svg viewBox={`0 0 ${sc.rawCanvasRef.current.width} ${sc.rawCanvasRef.current.height}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full pointer-events-none z-10">
-                <polygon
-                  points={`${sc.corners[0]},${sc.corners[1]} ${sc.corners[2]},${sc.corners[3]} ${sc.corners[4]},${sc.corners[5]} ${sc.corners[6]},${sc.corners[7]}`}
-                  fill="rgba(30, 81, 56, 0.2)"
-                  stroke="var(--accent)"
-                  strokeWidth={sc.rawCanvasRef.current.width * 0.004}
-                />
-              </svg>
-            )}
-
-            {/* Corner Drag Handles */}
-            {sc.rawCanvasRef.current &&
-              sc.corners.length === 8 &&
-              [0, 1, 2, 3].map((idx) => {
-                const rawW = sc.rawCanvasRef.current!.width;
-                const rawH = sc.rawCanvasRef.current!.height;
-                const leftPct = (sc.corners[idx * 2] / rawW) * 100;
-                const topPct = (sc.corners[idx * 2 + 1] / rawH) * 100;
-                return (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
                   <button
-                    key={idx}
                     type="button"
-                    aria-label={`Adjust corner ${idx + 1}`}
-                    onPointerDown={(e) => handlePointerDown(idx, e)}
-                    onPointerMove={(e) => handlePointerMove(idx, e)}
-                    onPointerUp={(e) => handlePointerUp(idx, e)}
-                    style={{ left: `${leftPct}%`, top: `${topPct}%` }}
-                    className="absolute -translate-x-1/2 -translate-y-1/2 grid h-11 w-11 place-items-center z-30 cursor-grab active:cursor-grabbing touch-none focus:outline-none"
+                    onClick={sc.rotate90}
+                    className="btn-secondary min-h-11 px-4 text-xs font-semibold"
                   >
-                    <span className="h-4 w-4 rounded-full bg-accent ring-4 ring-white/80 shadow-md transition-transform active:scale-125" />
+                    <RotateCw className="h-4 w-4 mr-1.5" />
+                    Rotate 90°
                   </button>
-                );
-              })}
-          </div>
+                  <button
+                    type="button"
+                    onClick={() => setAdjusting(true)}
+                    className="btn-secondary min-h-11 px-4 text-xs font-semibold"
+                  >
+                    <Move className="h-4 w-4 mr-1.5" />
+                    Adjust corners
+                  </button>
+                </div>
 
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={sc.rotate90}
-              className="btn-secondary min-h-11 px-4 text-xs font-semibold"
-            >
-              <RotateCw className="h-4 w-4 mr-1.5" />
-              Rotate 90°
-            </button>
-            <span className="text-xs text-soft">
-              <Move className="h-3.5 w-3.5 inline mr-1" />
-              Drag corners to adjust
-            </span>
-          </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={sc.retake}
+                    className="btn-secondary min-h-12 px-6 text-sm"
+                  >
+                    <IconRepeat className="h-4 w-4 mr-1.5" />
+                    Retake photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sc.accept}
+                    className="btn-primary min-h-12 px-8 text-sm font-bold shadow-float"
+                  >
+                    <IconCheck className="h-4.5 w-4.5 mr-1.5" />
+                    Use this scan
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {sc.detectionFailed && (
+                <div className="card flex gap-3 border-warn/25 bg-warn-soft p-4 text-warn" role="status">
+                  <IconAlertCircle className="h-5 w-5 shrink-0" />
+                  <p className="text-xs font-semibold leading-relaxed">
+                    I couldn't find the edges — drag the corners to the paper, or retake.
+                  </p>
+                </div>
+              )}
 
-          {sc.detectionFailed && (
-            <div className="card flex gap-3 border-warn/25 bg-warn-soft p-4 text-warn" role="status">
-              <IconAlertCircle className="h-5 w-5 shrink-0" />
-              <p className="text-xs font-semibold leading-relaxed">
-                I couldn't find the edges — drag the corners to the paper, or retake.
-              </p>
-            </div>
+              {/* Raw photo with the quad + handles in its exact coordinate space */}
+              <div className="card flex justify-center overflow-hidden bg-ink p-4">
+                <div ref={adjustBoxRef} className="relative touch-none select-none">
+                  {sc.rawPreviewUrl && (
+                    <img
+                      src={sc.rawPreviewUrl}
+                      alt="Original photo for corner adjustment"
+                      draggable={false}
+                      className="block h-auto w-auto max-h-[62vh] max-w-full"
+                    />
+                  )}
+
+                  {rawW > 0 && sc.corners.length === 8 && (
+                    <svg
+                      viewBox={`0 0 ${rawW} ${rawH}`}
+                      preserveAspectRatio="none"
+                      className="absolute inset-0 h-full w-full pointer-events-none z-10"
+                    >
+                      <polygon
+                        points={`${sc.corners[0]},${sc.corners[1]} ${sc.corners[2]},${sc.corners[3]} ${sc.corners[4]},${sc.corners[5]} ${sc.corners[6]},${sc.corners[7]}`}
+                        fill="rgba(30, 81, 56, 0.2)"
+                        stroke="var(--accent)"
+                        strokeWidth={rawW * 0.004}
+                      />
+                    </svg>
+                  )}
+
+                  {rawW > 0 &&
+                    sc.corners.length === 8 &&
+                    [0, 1, 2, 3].map((idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        aria-label={`Adjust corner ${idx + 1}`}
+                        onPointerDown={(e) => handlePointerDown(idx, e)}
+                        onPointerMove={(e) => handlePointerMove(idx, e)}
+                        onPointerUp={(e) => handlePointerUp(idx, e)}
+                        style={{
+                          left: `${(sc.corners[idx * 2] / rawW) * 100}%`,
+                          top: `${(sc.corners[idx * 2 + 1] / rawH) * 100}%`,
+                        }}
+                        className="absolute -translate-x-1/2 -translate-y-1/2 grid h-11 w-11 place-items-center z-30 cursor-grab active:cursor-grabbing touch-none focus:outline-none"
+                      >
+                        <span className="h-4 w-4 rounded-full bg-accent ring-4 ring-white/80 shadow-md transition-transform active:scale-125" />
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-soft">
+                  <Move className="h-3.5 w-3.5 inline mr-1" />
+                  Drag the dots onto the paper&rsquo;s corners
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sc.commitCornerChange();
+                    setAdjusting(false);
+                  }}
+                  className="btn-primary min-h-12 px-8 text-sm"
+                >
+                  <IconCheck className="h-4.5 w-4.5 mr-1.5" />
+                  Done adjusting
+                </button>
+              </div>
+            </>
           )}
-
-          {/* Right-aligned button pair */}
-          <div className="flex items-center justify-end gap-3 pt-1">
-            <button
-              type="button"
-              onClick={sc.retake}
-              className="btn-secondary min-h-12 px-6 text-sm"
-            >
-              <IconRepeat className="h-4 w-4 mr-1.5" />
-              Retake photo
-            </button>
-            <button
-              type="button"
-              onClick={sc.accept}
-              className="btn-primary min-h-12 px-8 text-sm font-bold shadow-float"
-            >
-              <IconCheck className="h-4.5 w-4.5 mr-1.5" />
-              Use this scan
-            </button>
-          </div>
         </div>
       )}
     </div>

@@ -20,6 +20,52 @@ export type ScanTone = "info" | "warning" | "error" | "success";
 const SHARPNESS_MIN = 40;
 const LOCK_DURATION_MS = 1000;
 
+/** Shoelace area of a quad given as [x0,y0,...,x3,y3]. */
+function quadArea(pts: number[]): number {
+  let area = 0;
+  for (let i = 0; i < 4; i++) {
+    const x1 = pts[i * 2];
+    const y1 = pts[i * 2 + 1];
+    const x2 = pts[((i + 1) % 4) * 2];
+    const y2 = pts[((i + 1) % 4) * 2 + 1];
+    area += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(area) / 2;
+}
+
+/**
+ * A quad worth showing to the user: four distinct corners, convex (the
+ * tl/tr/br/bl sort degenerates on garbage contours), inside the frame, and
+ * covering a meaningful share of it.
+ */
+function isPlausibleQuad(pts: number[], w: number, h: number): boolean {
+  const minGap = Math.max(w, h) * 0.02;
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      if (Math.hypot(pts[i * 2] - pts[j * 2], pts[i * 2 + 1] - pts[j * 2 + 1]) < minGap) return false;
+    }
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = pts[i * 2];
+    const y = pts[i * 2 + 1];
+    if (x < -w * 0.05 || x > w * 1.05 || y < -h * 0.05 || y > h * 1.05) return false;
+  }
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const ax = pts[((i + 1) % 4) * 2] - pts[i * 2];
+    const ay = pts[((i + 1) % 4) * 2 + 1] - pts[i * 2 + 1];
+    const bx = pts[((i + 2) % 4) * 2] - pts[((i + 1) % 4) * 2];
+    const by = pts[((i + 2) % 4) * 2 + 1] - pts[((i + 1) % 4) * 2 + 1];
+    const cross = ax * by - ay * bx;
+    if (cross !== 0) {
+      const s = Math.sign(cross);
+      if (sign === 0) sign = s;
+      else if (s !== sign) return false;
+    }
+  }
+  return quadArea(pts) >= w * h * 0.15;
+}
+
 export function useScanCapture() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -44,6 +90,8 @@ export function useScanCapture() {
   // Confirm state
   const [corners, setCorners] = useState<number[]>([]);
   const [warpedPreviewUrl, setWarpedPreviewUrl] = useState<string | null>(null);
+  const [rawPreviewUrl, setRawPreviewUrl] = useState<string | null>(null);
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
   const [detectionFailed, setDetectionFailed] = useState(false);
   const [rotation, setRotation] = useState(0);
 
@@ -111,6 +159,14 @@ export function useScanCapture() {
     setIsDocumentDetected(false);
     setLiveCorners(null);
     setTorchOn(false);
+    setWarpedPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setRawPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     cancelSpeech();
   }
 
@@ -206,25 +262,28 @@ export function useScanCapture() {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) return;
+      setVideoAspect((prev) => (prev === vw / vh ? prev : vw / vh));
 
-      // Honest framing: crop the probe canvas to the visible region of the video element
-      // assuming a 3:4 aspect ratio viewport container on mobile (or container's actual aspect)
-      const containerAspect = 3 / 4;
-      const videoAspect = vw / vh;
-
+      // Honest framing: probe exactly the pixels the user can see. With
+      // object-cover the element crops the stream to its own rendered aspect;
+      // with contain (desktop) the full frame is visible.
       let sx = 0;
       let sy = 0;
       let sw = vw;
       let sh = vh;
 
-      if (videoAspect > containerAspect) {
-        // Video is wider than 3:4 container -> cropped horizontally
-        sw = vh * containerAspect;
-        sx = (vw - sw) / 2;
-      } else {
-        // Video is taller than 3:4 container -> cropped vertically
-        sh = vw / containerAspect;
-        sy = (vh - sh) / 2;
+      const cw = video.clientWidth;
+      const ch = video.clientHeight;
+      if (cw && ch && getComputedStyle(video).objectFit === "cover") {
+        const containerAspect = cw / ch;
+        const videoAspect = vw / vh;
+        if (videoAspect > containerAspect) {
+          sw = vh * containerAspect;
+          sx = (vw - sw) / 2;
+        } else {
+          sh = vw / containerAspect;
+          sy = (vh - sh) / 2;
+        }
       }
 
       const probe = document.createElement("canvas");
@@ -245,10 +304,13 @@ export function useScanCapture() {
         return;
       }
 
-      // Detect corners on probe for live SVG outline overlay
+      // Detect corners on probe for the live outline — but only show quads
+      // that pass the plausibility gate; garbage contours read as glitches.
       const detectedProbeCorners = await detectCorners(probe);
-      if (detectedProbeCorners) {
-        const normalizedCorners = [];
+      let quadCoverage = 0;
+      if (detectedProbeCorners && isPlausibleQuad(detectedProbeCorners, probeWidth, probeHeight)) {
+        quadCoverage = quadArea(detectedProbeCorners) / (probeWidth * probeHeight);
+        const normalizedCorners: number[] = [];
         for (let i = 0; i < 8; i += 2) {
           normalizedCorners.push(detectedProbeCorners[i] / probeWidth, detectedProbeCorners[i + 1] / probeHeight);
         }
@@ -257,7 +319,12 @@ export function useScanCapture() {
         setLiveCorners(null);
       }
 
-      if (check.coverage < 0.2) {
+      // A confidently tracked quad is better evidence of coverage than the
+      // contour heuristic — don't tell the user to move closer when the
+      // outline is already hugging the sheet.
+      const coverage = Math.max(check.coverage, quadCoverage);
+
+      if (coverage < 0.2) {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidance("Move the form closer, so it fills the frame.");
@@ -324,8 +391,11 @@ export function useScanCapture() {
       }
       warped = rotCanvas;
     }
-    const dataUrl = warped.toDataURL("image/jpeg", 0.9);
-    setWarpedPreviewUrl(dataUrl);
+    const blob = await new Promise<Blob | null>((resolve) => warped.toBlob(resolve, "image/jpeg", 0.9));
+    setWarpedPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return blob ? URL.createObjectURL(blob) : null;
+    });
   }, []);
 
   async function capture() {
@@ -349,6 +419,14 @@ export function useScanCapture() {
       ctx.drawImage(video, 0, 0);
     }
     rawCanvasRef.current = canvas;
+
+    // A displayable copy of the untouched frame — the corner-adjust view
+    // must show THIS image, never the warped output, or handle coordinates lie.
+    const rawBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    setRawPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return rawBlob ? URL.createObjectURL(rawBlob) : null;
+    });
 
     const w = canvas.width;
     const h = canvas.height;
@@ -416,15 +494,11 @@ export function useScanCapture() {
   }
 
   function retake() {
-    if (warpedPreviewUrl) {
-      URL.revokeObjectURL(warpedPreviewUrl);
-    }
-    setWarpedPreviewUrl(null);
     setCorners([]);
     setRotation(0);
     setDetectionFailed(false);
     capturingRef.current = false;
-    startCamera();
+    startCamera(); // startCamera → stopEverything revokes both preview URLs
   }
 
   async function accept() {
@@ -492,6 +566,8 @@ export function useScanCapture() {
     liveCorners,
     corners,
     warpedPreviewUrl,
+    rawPreviewUrl,
+    videoAspect,
     detectionFailed,
     rotation,
     torchAvailable,
