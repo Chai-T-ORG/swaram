@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Review, mobile (spec M7) — 2×2 stat tiles, scrollable field rows, and a
- * sticky finish bar above the orb dock.
+ * Review, mobile (spec M7 & §4) — 2×2 state-aware stat tiles, scrollable field rows,
+ * and a sticky finish/continue bar above the orb dock.
  */
 
 import { motion, useReducedMotion } from "framer-motion";
@@ -16,6 +16,7 @@ import {
   IconPause,
   IconCheck,
   IconAlertCircle,
+  IconPlay,
 } from "@/components/icons";
 
 export default function ReviewMobile() {
@@ -44,28 +45,48 @@ export default function ReviewMobile() {
     );
   }
 
+  const isPendingMode = r.pendingCount > 0;
+
   return (
     <div className="flex flex-col gap-5 pb-24 animate-fade-in">
       <header>
-        <span className="eyebrow">Almost done</span>
+        <span className="eyebrow">{isPendingMode ? "In progress" : "Almost done"}</span>
         <h1 className="mt-1 font-display text-[1.75rem] leading-tight text-ink">Review your answers</h1>
       </header>
 
       <StatusAnnouncer message={r.status} tone={r.tone} />
 
       <section className="grid grid-cols-2 gap-3 opacity-80 hover:opacity-100 transition-opacity" aria-label="Answer summary">
-        <SummaryTile label="Answered" value={r.counts.answered} cls="bg-sunken/40 text-soft" />
-        <SummaryTile label="Auto-filled" value={r.counts.autofilled} cls="bg-sunken/40 text-soft" />
-        <SummaryTile label="Skipped" value={r.counts.skipped + r.counts.pending} cls="bg-sunken/40 text-soft" />
-        <SummaryTile label="Unclear" value={r.counts.unclear} cls="bg-sunken/40 text-soft" />
+        {isPendingMode ? (
+          <>
+            <SummaryTile label="Answered" value={r.counts.answered} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Auto-filled" value={r.counts.autofilled} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Skipped" value={r.counts.skipped + r.counts.unclear} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Not asked yet" value={r.pendingCount} cls="bg-sunken/40 text-accent font-semibold" />
+          </>
+        ) : (
+          <>
+            <SummaryTile label="Answered" value={r.counts.answered} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Auto-filled" value={r.counts.autofilled} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Skipped" value={r.counts.skipped + r.counts.pending} cls="bg-sunken/40 text-soft" />
+            <SummaryTile label="Unclear" value={r.counts.unclear} cls="bg-sunken/40 text-soft" />
+          </>
+        )}
       </section>
 
       <div className="flex flex-col gap-2.5">
-        {r.skippedCount > 0 && (
-          <button type="button" className="btn-primary min-h-13 w-full" onClick={r.goSkipped}>
-            Answer skipped fields ({r.skippedCount})
-            <IconArrowRight className="h-4 w-4" />
+        {isPendingMode ? (
+          <button type="button" className="btn-primary min-h-13 w-full" onClick={r.goFill}>
+            <IconPlay className="h-4 w-4 fill-current" />
+            Continue filling ({r.pendingCount} left)
           </button>
+        ) : (
+          r.skippedCount > 0 && (
+            <button type="button" className="btn-primary min-h-13 w-full" onClick={r.goSkipped}>
+              Answer skipped fields ({r.skippedCount})
+              <IconArrowRight className="h-4 w-4" />
+            </button>
+          )
         )}
         <button type="button" className="btn-secondary min-h-13 w-full" onClick={r.readBack}>
           {r.reading ? <IconPause className="h-4 w-4" /> : <IconWave className="h-4 w-4" />}
@@ -111,6 +132,8 @@ export default function ReviewMobile() {
                         <IconAlertCircle className="h-4.5 w-4.5" />
                         Skipped
                       </span>
+                    ) : field.status === "pending" ? (
+                      <span className="font-normal italic text-soft">Not asked yet</span>
                     ) : (
                       field.value || <span className="font-normal italic text-faint">Blank</span>
                     )}
@@ -131,9 +154,13 @@ export default function ReviewMobile() {
         })}
       </ul>
 
-      {/* Sticky finish above the tab bar */}
+      {/* Sticky finish or continue bar above the tab bar */}
       <div className="sticky bottom-2 z-20 -mx-1 rounded-full bg-surface/60 p-1 backdrop-blur">
-        <button type="button" className="btn-primary min-h-14 w-full shadow-float" onClick={r.continueToComplete}>
+        <button
+          type="button"
+          className={`${isPendingMode ? "btn-secondary" : "btn-primary"} min-h-14 w-full shadow-float`}
+          onClick={r.continueToComplete}
+        >
           Looks good — finish
           <IconCheck className="h-4.5 w-4.5" />
         </button>
