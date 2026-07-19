@@ -68,6 +68,9 @@ import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
 import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from "@/lib/voice/modelManager";
+import { classifyIntent } from "@/lib/voice/intentClassifier";
+import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
+import { logClassification } from "@/lib/voice/intentMetrics";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
 
