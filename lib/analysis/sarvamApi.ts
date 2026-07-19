@@ -2,8 +2,6 @@ import { PDFDocument } from "pdf-lib";
 import type { OcrLine, OcrWord } from "../ocr/tesseractEngine";
 import type { AnalysisProgress } from "./analyzeForm";
 
-const POLL_INTERVAL_MS = 2_500;
-const POLL_TIMEOUT_MS = 90_000;
 
 export interface SarvamResult {
   pages: Record<string, unknown>;
@@ -14,6 +12,7 @@ type SarvamBlock = {
   text?: string;
   confidence?: number;
   reading_order?: number;
+  layout_tag?: string;
   coordinates?: Coordinates;
 };
 
@@ -45,27 +44,40 @@ export async function runSarvamDigitize(
   onProgress({ stage: "ocr", pct: 0 });
   const form = new FormData();
   form.append("file", await createSarvamUpload(blob, sourceType));
+  
   const start = await fetch("/api/sarvam/job", { method: "POST", body: form });
-  if (!start.ok) throw new Error("Sarvam could not start document analysis");
+  if (!start.ok) throw new Error("Sarvam could not initiate document analysis.");
   const { jobId } = (await start.json()) as { jobId?: string };
-  if (!jobId) throw new Error("Sarvam did not return a job identifier");
+  if (!jobId) throw new Error("Sarvam did not return a valid job identifier.");
 
-  const startedAt = Date.now();
-  let progress = 0.08;
-  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    progress = Math.min(0.92, progress + 0.06);
-    onProgress({ stage: "ocr", pct: progress });
-    const response = await fetch(`/api/sarvam/status?job_id=${encodeURIComponent(jobId)}`);
-    if (!response.ok) throw new Error("Sarvam status check failed");
-    const result = (await response.json()) as { status?: string; pages?: Record<string, unknown>; error?: string };
-    if (result.status === "Completed" && result.pages) {
-      onProgress({ stage: "ocr", pct: 1 });
-      return { pages: result.pages };
-    }
-    if (result.status === "Failed" || result.error) throw new Error(result.error || "Sarvam could not analyze this document");
-  }
-  throw new Error("Sarvam analysis timed out. Please try again.");
+  return new Promise((resolve, reject) => {
+    // Establish the Server-Sent Events connection to the Next.js backend
+    const eventSource = new EventSource(`/api/sarvam/stream?job_id=${encodeURIComponent(jobId)}`);
+    let simulatedProgress = 0.08;
+
+    eventSource.addEventListener("progress", () => {
+      // Increment progress bar to ensure perceived performance remains high
+      simulatedProgress = Math.min(0.92, simulatedProgress + 0.06);
+      onProgress({ stage: "ocr", pct: simulatedProgress });
+    });
+
+    eventSource.addEventListener("complete", (event: MessageEvent) => {
+      eventSource.close();
+      try {
+        const data = JSON.parse(event.data);
+        onProgress({ stage: "ocr", pct: 1 });
+        resolve({ pages: data.pages });
+      } catch (err) {
+        reject(new Error("Failed to parse the final Sarvam extraction payload."));
+      }
+    });
+
+    eventSource.addEventListener("error", (event: MessageEvent) => {
+      eventSource.close();
+      const errorMessage = event.data ? JSON.parse(event.data).message : "SSE network connection lost.";
+      reject(new Error(errorMessage));
+    });
+  });
 }
 
 function isBlock(value: unknown): value is SarvamBlock {
@@ -102,32 +114,60 @@ export function sarvamPageToLines(page: unknown, canvasWidth: number, canvasHeig
   const scaleY = canvasHeight / height;
   const lines: OcrLine[] = [];
 
-  for (const block of findBlocks(page).sort((a, b) => (a.reading_order ?? 0) - (b.reading_order ?? 0))) {
+  // Initialize an offscreen Canvas API context for precision typographic measurement
+  const offscreen = typeof document !== 'undefined' ? document.createElement("canvas") : null;
+  const ctx = offscreen ? offscreen.getContext("2d") : null;
+  if (ctx) {
+    // Utilize a standard sans-serif font rendering engine mapping to common form typography
+    ctx.font = "16px sans-serif"; 
+  }
+
+  for (const block of findBlocks(page)
+    .filter((block) => block.layout_tag !== "image")
+    .sort((a, b) => (a.reading_order ?? 0) - (b.reading_order ?? 0))) {
+    
     const box = block.coordinates!;
     const textLines = (block.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!textLines.length) continue;
+    
     const x0 = box.x1 * scaleX;
     const x1 = box.x2 * scaleX;
     const y0 = box.y1 * scaleY;
     const y1 = box.y2 * scaleY;
+    const blockWidth = x1 - x0;
     const lineHeight = Math.max((y1 - y0) / textLines.length, 1);
     const confidence = Math.round((block.confidence ?? 0.8) * ((block.confidence ?? 0.8) <= 1 ? 100 : 1));
 
     textLines.forEach((text, index) => {
       const parts = text.split(/\s+/).filter(Boolean);
-      const weights = parts.map((part) => Math.max(part.length, 1));
-      const total = weights.reduce((sum, item) => sum + item, 0) + Math.max(parts.length - 1, 0);
+      
+      // Calculate true geometric rendering weights via measureText, falling back to string length bounds
+      const weights = parts.map((part) => ctx ? ctx.measureText(part).width : Math.max(part.length, 1));
+      const spaceWeight = ctx ? ctx.measureText(" ").width : 1;
+      
+      const totalTextWidth = weights.reduce((sum, w) => sum + w, 0);
+      const totalSpaceWidth = Math.max(parts.length - 1, 0) * spaceWeight;
+      const totalWidth = totalTextWidth + totalSpaceWidth;
+
       let cursor = x0;
       const words: OcrWord[] = parts.map((part, wordIndex) => {
-        const wordWidth = ((x1 - x0) * weights[wordIndex]) / Math.max(total, 1);
+        const wordWidth = (weights[wordIndex] / Math.max(totalWidth, 1)) * blockWidth;
+        const spaceOffset = (spaceWeight / Math.max(totalWidth, 1)) * blockWidth;
+        
         const word = {
           text: part,
           confidence,
-          bbox: { x0: cursor, y0: y0 + index * lineHeight, x1: cursor + wordWidth, y1: y0 + (index + 1) * lineHeight },
+          bbox: { 
+            x0: cursor, 
+            y0: y0 + index * lineHeight, 
+            x1: cursor + wordWidth, 
+            y1: y0 + (index + 1) * lineHeight 
+          },
         };
-        cursor = word.bbox.x1 + (x1 - x0) / Math.max(total, 1);
+        cursor = word.bbox.x1 + spaceOffset;
         return word;
       });
+
       if (words.length) {
         lines.push({
           text,

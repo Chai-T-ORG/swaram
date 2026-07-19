@@ -1,0 +1,490 @@
+Architectural Blueprint: Optimizing the SWARAM Document Processing Pipeline and Sarvam AI IntegrationThe migration of the SWARAM accessibility application’s document parsing pipeline from a localized Tesseract.js execution model to the external Sarvam AI Document Intelligence API represents a profound architectural evolution. Complex Indian government forms are characterized by exceptionally dense layouts, high variance in optical scan quality, multilingual scripts featuring intricate conjuncts and matras, and varied spatial structures such as comb fields. These attributes historically confound standard Optical Character Recognition (OCR) engines, leading to degraded accessibility experiences. While Sarvam Vision, a state-of-the-art 3-billion-parameter Vision Language Model (VLM), provides unparalleled text extraction and layout preservation for such documents across twenty-two Indian languages, integrating this synchronous and asynchronous cloud infrastructure into a client-heavy Next.js App Router environment necessitates sophisticated engineering. The challenge lies in bridging the gap between raw, block-level API outputs and the precise, word-level spatial clustering engine that powers SWARAM's interactive, voice-first interfaces.This comprehensive analysis details exhaustive architectural refinements across four critical domains. First, it addresses the geometric rectification of scanned documents and the spatial bounding box mathematics required to interpolate word-level coordinates from block-level responses. Second, it resolves the network telemetry inefficiencies by transitioning from aggressive client-side polling to a highly optimized Server-Sent Events (SSE) streaming architecture. Third, it enhances typographic resilience in the detection of checkboxes and identity document comb fields through rigorous Unicode mapping and geometric heuristics. Finally, it establishes a mathematically sound fault-tolerance framework utilizing decorrelated jitter and exponential backoff, complete with a graceful degradation path to edge computing, ensuring SWARAM remains robust, accessible, and offline-capable.Geometric Rectification and Spatial Bounding Box MathematicsThe transition from a localized Tesseract.js engine to the Sarvam AI Document Intelligence API introduces a fundamental shift in how spatial coordinates are handled. Tesseract natively returns highly granular, word-level and character-level bounding boxes. Conversely, Sarvam’s architecture—optimized for layout preservation and semantic understanding—delivers structural block-level coordinates, encapsulating entire paragraphs, headers, or discrete text components without exposing the geometric boundaries of individual words. Consequently, the SWARAM pipeline must mathematically estimate and synthesize word-level bounding boxes from these larger blocks to ensure compatibility with the legacy inferFieldsFromPage clustering algorithm, which relies heavily on precise word proximities to infer relationships between form labels and input fields.The current implementation of the sarvamPageToLines function attempts to solve this interpolation problem through a linear, string-length-based proportional allocation. By splitting a block of text into constituent words and calculating a geometric weight based on the character length of each word, the algorithm slices the total width of the block into discrete segments. This approach introduces a severe typographic fallacy: it inherently assumes that every character occupies an identical physical width, effectively treating highly variable-width fonts as monospaced. In practice, typographical reality dictates that a character such as a capital "W" or a complex Indian script conjunct requires significantly more horizontal spatial geometry than a narrow character like "i" or "l". When applied to skewed scans or densely packed administrative forms, this mathematical error compounds rapidly. The resulting estimated bounding boxes drift progressively further from their true visual coordinates across the horizontal axis, ultimately causing the field clustering engine to fail in matching labels to their adjacent input geometries.Affine Transformations and Skew NormalizationFurthermore, scanned documents acquired via mobile device cameras inherently suffer from angular skew. While the Sarvam Vision model demonstrates robust capabilities in reading rotated text, returning axis-aligned block coordinates for skewed text introduces significant downstream processing errors. When skewed text is forced into orthogonal bounding boxes, the resulting rectangles artificially inflate in height and width to encapsulate the diagonal text path, causing adjacent blocks to geometrically overlap in the coordinate space. This overlapping completely disrupts the horizontal-band clustering logic, which expects distinct separation between rows of text.To construct a mathematically robust coordinate system, the architecture requires two foundational modifications. First, the application must normalize the document's skew angle before it is rendered for localized shape detection or processed by the local fallback OCR pipeline. By leveraging OpenCV.js, specifically utilizing the cv.minAreaRect function, the system can detect the median orientation of dilated text contours and apply a corrective affine transformation. The process begins by converting the image to grayscale, applying an Otsu threshold to binarize the image, and performing morphological dilation to merge individual characters into continuous textual bands.OpenCV’s minAreaRect function computes the minimum bounding rectangle for these text bands, returning an angle in the range of [-90, 0) degrees. The mathematical behavior of this function dictates that as a rectangle rotates clockwise, the angle increases towards zero; upon reaching zero, it resets to -90 degrees. Consequently, specialized logic must be implemented to decipher the true orientation of the text line by evaluating the ratio of the rectangle's width to its height. Once the true skew angle $\theta$ is extracted and the median angle across all valid text contours is determined, an inverse rotation matrix is generated. This matrix is applied to the image via the cv.warpAffine function, which rotates the pixel data around the image's calculated center point, effectively deskewing the document without destroying the original content.Precise Typographic MeasurementThe second modification directly addresses the monospaced fallacy within the sarvamPageToLines algorithm. Instead of relying on character counts, the system must employ exact typographic measurement utilizing the HTML5 Canvas 2D API’s measureText method. By establishing an offscreen rendering context and applying a representative font standard, the system can accurately compute the physical pixel width of a specific string of characters as it would be rendered by a layout engine. By evaluating the precise rendered width of each word, along with the standard width of the space character, the algorithm can calculate the exact proportional width of each word relative to the total continuous text width of the block. This sub-pixel mathematical accuracy ensures that the generated bounding boxes perfectly hug the spatial limits of each word, eliminating horizontal drift and restoring the integrity of the legacy field inference clustering.Action Plan: Spatial Coordinate RefactoringTo implement these geometric and typographic improvements, the following TypeScript architectural refactors must be introduced into the SWARAM codebase.1. OpenCV Deskew Implementation
+Introduce a new utility module responsible for normalizing image angles prior to any OCR or shape detection routines.TypeScript// lib/vision/deskew.ts
+import cv from "@techstark/opencv-js";
+
+export function deskewCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+  cv.bitwise_not(gray, gray);
+
+  const thresh = new cv.Mat();
+  cv.threshold(gray, thresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(30, 5));
+  const dilated = new cv.Mat();
+  cv.dilate(thresh, dilated, kernel, new cv.Point(-1, -1), 1);
+
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+  const angles: number[] = [];
+  for (let i = 0; i < contours.size(); i++) {
+    const minRect = cv.minAreaRect(contours.get(i));
+    let angle = minRect.angle;
+    
+    // Normalize OpenCV's [-90, 0) angle idiosyncrasies based on dimensional aspect ratios
+    if (minRect.size.width < minRect.size.height) {
+      angle = 90 + angle;
+    }
+    
+    // Discard outlier angles beyond standard scan deviations
+    if (angle !== 0 && Math.abs(angle) < 45) {
+      angles.push(angle);
+    }
+  }
+
+  let medianAngle = 0;
+  if (angles.length > 0) {
+    angles.sort((a, b) => a - b);
+    medianAngle = angles[Math.floor(angles.length / 2)];
+  }
+
+  // Apply affine transformation only if a perceptible skew is detected
+  if (Math.abs(medianAngle) > 0.5) {
+    const center = new cv.Point(src.cols / 2, src.rows / 2);
+    const M = cv.getRotationMatrix2D(center, medianAngle, 1.0);
+    const dest = new cv.Mat();
+    
+    cv.warpAffine(
+      src, 
+      dest, 
+      M, 
+      new cv.Size(src.cols, src.rows), 
+      cv.INTER_CUBIC, 
+      cv.BORDER_REPLICATE, 
+      new cv.Scalar(255, 255, 255, 255)
+    );
+    
+    cv.imshow(canvas, dest);
+    dest.delete();
+    M.delete();
+  }
+
+  src.delete(); gray.delete(); thresh.delete(); kernel.delete(); dilated.delete(); contours.delete(); hierarchy.delete();
+  return canvas;
+}
+2. Typographic Word Slicing Architecture
+Refactor the sarvamPageToLines function within lib/analysis/sarvamApi.ts to utilize the Canvas API for highly accurate word boundary estimation, replacing the naive string-length calculations.TypeScript// lib/analysis/sarvamApi.ts
+import type { OcrLine, OcrWord } from "../ocr/tesseractEngine";
+
+export function sarvamPageToLines(page: unknown, canvasWidth: number, canvasHeight: number): OcrLine[] {
+  const width = imageDimension(page, "image_width") ?? canvasWidth;
+  const height = imageDimension(page, "image_height") ?? canvasHeight;
+  const scaleX = canvasWidth / width;
+  const scaleY = canvasHeight / height;
+  const lines: OcrLine[] = [];
+
+  // Initialize an offscreen Canvas API context for precision typographic measurement
+  const offscreen = document.createElement("canvas");
+  const ctx = offscreen.getContext("2d");
+  if (ctx) {
+    // Utilize a standard sans-serif font rendering engine mapping to common form typography
+    ctx.font = "16px sans-serif"; 
+  }
+
+  for (const block of findBlocks(page)
+    .filter((block) => block.layout_tag !== "image")
+    .sort((a, b) => (a.reading_order ?? 0) - (b.reading_order ?? 0))) {
+    
+    const box = block.coordinates!;
+    const textLines = (block.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!textLines.length) continue;
+    
+    const x0 = box.x1 * scaleX;
+    const x1 = box.x2 * scaleX;
+    const y0 = box.y1 * scaleY;
+    const y1 = box.y2 * scaleY;
+    const blockWidth = x1 - x0;
+    const lineHeight = Math.max((y1 - y0) / textLines.length, 1);
+    const confidence = Math.round((block.confidence ?? 0.8) * ((block.confidence ?? 0.8) <= 1 ? 100 : 1));
+
+    textLines.forEach((text, index) => {
+      const parts = text.split(/\s+/).filter(Boolean);
+      
+      // Calculate true geometric rendering weights via measureText, falling back to string length bounds
+      const weights = parts.map((part) => ctx ? ctx.measureText(part).width : Math.max(part.length, 1));
+      const spaceWeight = ctx ? ctx.measureText(" ").width : 1;
+      
+      const totalTextWidth = weights.reduce((sum, w) => sum + w, 0);
+      const totalSpaceWidth = Math.max(parts.length - 1, 0) * spaceWeight;
+      const totalWidth = totalTextWidth + totalSpaceWidth;
+
+      let cursor = x0;
+      const words: OcrWord[] = parts.map((part, wordIndex) => {
+        const wordWidth = (weights[wordIndex] / Math.max(totalWidth, 1)) * blockWidth;
+        const spaceOffset = (spaceWeight / Math.max(totalWidth, 1)) * blockWidth;
+        
+        const word = {
+          text: part,
+          confidence,
+          bbox: { 
+            x0: cursor, 
+            y0: y0 + index * lineHeight, 
+            x1: cursor + wordWidth, 
+            y1: y0 + (index + 1) * lineHeight 
+          },
+        };
+        cursor = word.bbox.x1 + spaceOffset;
+        return word;
+      });
+
+      if (words.length) {
+        lines.push({
+          text,
+          confidence,
+          bbox: { x0, y0: y0 + index * lineHeight, x1, y1: y0 + (index + 1) * lineHeight },
+          words,
+        });
+      }
+    });
+  }
+  return lines;
+}
+Asynchronous Telemetry and Event-Driven ArchitectureThe current SWARAM architecture interacts with the asynchronous Sarvam Document Intelligence API via a highly inefficient polling mechanism. Specifically, the client application repeatedly issues HTTP GET requests to the /api/sarvam/status Next.js route at rigid 2.5-second intervals, maintaining this aggressive loop until the remote job resolves into a terminal state. While this brute-force polling strategy successfully retrieves the final data, it introduces severe architectural liabilities. Polling generates continuous Transmission Control Protocol (TCP) handshakes, rapidly draining the battery life of mobile devices—a critical failure for an application dedicated to accessibility and offline-first edge environments. Furthermore, this repeated hammering places unnecessary computational strain on the Next.js serverless infrastructure, exhausting concurrent connection limits and potentially triggering automated rate-limiting protocols.While the Sarvam API natively supports Webhooks via a callback_url parameter designed to push a notification payload immediately upon job completion, this architecture cannot be directly utilized by SWARAM. Webhooks require a publicly addressable server endpoint to receive the inbound HTTP POST request. Routing a webhook directly to a user's mobile browser or client-side application is an architectural impossibility. Conversely, standing up a dedicated intermediary database to log incoming webhooks, paired with a long-polling client or WebSocket server to alert the specific user session, introduces immense infrastructural complexity that violates the stateless, edge-deployable principles of the Next.js App Router.The Server-Sent Events (SSE) ParadigmThe mathematically optimal architectural pattern for maintaining continuous state telemetry in a Next.js App Router environment without introducing heavy queueing infrastructure is the implementation of Server-Sent Events (SSE). SSE establishes a persistent, unidirectional HTTP connection over which the backend server natively streams discrete state updates to the client. By transitioning the polling mechanism from the user's browser securely into the Next.js backend runtime, the application significantly reduces client network radio usage, circumvents browser connection throttling, and delivers a highly fluid, real-time user experience. The client simply listens to a single HTTP stream, while the Next.js server handles the complex lifecycle of querying the Sarvam service, awaiting the completion trigger, downloading the resulting artifact, and streaming the final JSON payload down the active socket.Implementing Server-Sent Events within the Next.js App Router requires specific adherence to modern Web API standards and Vercel edge computing constraints. Next.js Route Handlers must utilize the ReadableStream interface to construct the event pipeline, actively pushing Uint8Array byte chunks formatted to the strict data: [JSON]\n\n SSE protocol specification. Additionally, because intermediate caching layers, reverse proxies like Nginx, and Content Delivery Networks (CDNs) aggressively buffer HTTP responses to optimize bandwidth, the Route Handler must enforce rigid header directives. Setting Cache-Control: no-cache, no-transform, Connection: keep-alive, and X-Accel-Buffering: no ensures that the stream chunks are flushed immediately to the client rather than being hoarded until the connection terminates. Furthermore, ensuring the route utilizes the nodejs runtime instead of the edge runtime guarantees compatibility with long-lived stream executions that might otherwise run afoul of the strict timeout limits imposed by lightweight edge workers.Telemetry ArchitectureClient Network OverheadServer Compute LoadLatency to Result DeliveryInfrastructural ComplexityClient-Side PollingHigh (Continuous TCP handshakes)Moderate (Repeated API hits)Delayed (up to polling interval)LowWebhook + QueueingLow (Single connection)High (Database & Worker required)Near InstantaneousExceptionally HighServer-Sent EventsLow (Single persistent connection)Low (Maintained HTTP stream)Near InstantaneousModerateAction Plan: SSE Streaming ImplementationTo eliminate client-side polling and establish real-time telemetry, the following code structures must be implemented.1. Create the SSE Streaming Route Handler
+Construct a new Next.js Route Handler designed to assume responsibility for the Sarvam status polling, streaming lifecycle events directly to the client.TypeScript// app/api/sarvam/stream/route.ts
+import { NextRequest } from "next/server";
+import AdmZip from "adm-zip";
+
+// Enforce dynamic execution and the robust Node.js runtime for stream longevity
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const BASE_URL = "https://api.sarvam.ai/doc-digitization/job/v1";
+const POLL_INTERVAL_MS = 2500;
+const TIMEOUT_MS = 90000;
+
+export async function GET(req: NextRequest) {
+  const jobId = req.nextUrl.searchParams.get("job_id");
+  const apiKey = process.env.SARWAM_DIGITALIZE_KEY;
+
+  if (!jobId || !apiKey) {
+    return new Response("Missing parameters or API configuration", { status: 400 });
+  }
+
+  let isStreamClosed = false;
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      
+      // Helper utility to safely format and enqueue SSE payloads
+      const sendEvent = (event: string, data: any) => {
+        if (!isStreamClosed) {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        }
+      };
+
+      const startTime = Date.now();
+      const headers = { "api-subscription-key": apiKey, "Content-Type": "application/json" };
+
+      try {
+        while (Date.now() - startTime < TIMEOUT_MS && !isStreamClosed) {
+          const statusRes = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/status`, { headers });
+          
+          if (!statusRes.ok) {
+            sendEvent("error", { message: "Sarvam status telemetry request failed." });
+            break;
+          }
+
+          const status = await statusRes.json();
+          sendEvent("progress", { status: status.job_state });
+
+          if (status.job_state === "Completed") {
+            // Initiate artifact download upon successful terminal state
+            const downloads = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/download-files`, { 
+              method: "POST", 
+              headers, 
+              body: "{}" 
+            });
+            const downloadData = await downloads.json();
+            
+            const firstLink = Object.values(downloadData.download_urls ?? {})[0] as any;
+            const url = typeof firstLink === "string" ? firstLink : firstLink?.file_url;
+            
+            if (!url) throw new Error("Sarvam returned a completed status but no artifact URL.");
+
+            // Download and extract the ZIP archive directly within the server stream memory
+            const archiveResponse = await fetch(url);
+            const buffer = await archiveResponse.arrayBuffer();
+            const archive = new AdmZip(Buffer.from(buffer));
+            const pages: Record<string, unknown> = {};
+            
+            for (const entry of archive.getEntries()) {
+              if (!entry.isDirectory && entry.entryName.endsWith(".json")) {
+                 const match = entry.entryName.match(/page[_-]?(\d+)/i);
+                 if (match) {
+                   pages[String(match[1])] = JSON.parse(entry.getData().toString("utf8"));
+                 }
+              }
+            }
+            
+            sendEvent("complete", { pages });
+            break;
+          }
+
+          if (status.job_state === "Failed" || status.error_message) {
+            sendEvent("error", { message: status.error_message || "Sarvam Document Intelligence failed." });
+            break;
+          }
+
+          // Yield execution thread, awaiting the next polling cycle
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        }
+      } catch (err) {
+        sendEvent("error", { message: "Stream processing encountered an unrecoverable exception." });
+      } finally {
+        if (!isStreamClosed) {
+          controller.close();
+        }
+      }
+    },
+    cancel() {
+      // Handle client disconnects gracefully to prevent memory leaks
+      isStreamClosed = true;
+    }
+  });
+
+  // Return the stream with strict headers to bypass proxy buffering mechanisms
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+2. Refactoring the Client Service Consumer
+Modify lib/analysis/sarvamApi.ts to utilize the native browser EventSource API to consume the streamed updates, terminating the localized AdmZip dependencies.TypeScript// lib/analysis/sarvamApi.ts
+import type { AnalysisProgress } from "./analyzeForm";
+
+export interface SarvamResult {
+  pages: Record<string, unknown>;
+}
+
+export async function runSarvamDigitize(
+  blob: Blob,
+  sourceType: "pdf" | "image",
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<SarvamResult> {
+  onProgress({ stage: "ocr", pct: 0 });
+  const form = new FormData();
+  form.append("file", await createSarvamUpload(blob, sourceType));
+  
+  const start = await fetch("/api/sarvam/job", { method: "POST", body: form });
+  if (!start.ok) throw new Error("Sarvam could not initiate document analysis.");
+  const { jobId } = (await start.json()) as { jobId?: string };
+  if (!jobId) throw new Error("Sarvam did not return a valid job identifier.");
+
+  return new Promise((resolve, reject) => {
+    // Establish the Server-Sent Events connection to the Next.js backend
+    const eventSource = new EventSource(`/api/sarvam/stream?job_id=${encodeURIComponent(jobId)}`);
+    let simulatedProgress = 0.08;
+
+    eventSource.addEventListener("progress", () => {
+      // Increment progress bar to ensure perceived performance remains high
+      simulatedProgress = Math.min(0.92, simulatedProgress + 0.06);
+      onProgress({ stage: "ocr", pct: simulatedProgress });
+    });
+
+    eventSource.addEventListener("complete", (event) => {
+      eventSource.close();
+      try {
+        const data = JSON.parse(event.data);
+        onProgress({ stage: "ocr", pct: 1 });
+        resolve({ pages: data.pages });
+      } catch (err) {
+        reject(new Error("Failed to parse the final Sarvam extraction payload."));
+      }
+    });
+
+    eventSource.addEventListener("error", (event) => {
+      eventSource.close();
+      const errorMessage = event.data ? JSON.parse(event.data).message : "SSE network connection lost.";
+      reject(new Error(errorMessage));
+    });
+  });
+}
+Typographic Resilience in Checkbox and Comb Field DetectionThe SWARAM form analysis pipeline relies on detecting interactive elements, such as multiple-choice options and structured identity arrays. The current logic implemented in analyzeForm.ts utilizes highly brittle regular expressions and arbitrary shape-counting heuristics to isolate these fields. Optical Character Recognition models, including Sarvam Vision, fundamentally struggle with the semantic categorization of empty geometric squares printed on administrative forms. When processing low-resolution, high-noise mobile scans, these vision models frequently hallucinate representations, mapping a visual checkbox to alphabetical characters like 'O', numerical digits like '0', disjointed bracket pairs '[]', or completely arbitrary symbols from the vast Unicode library.Exhaustive Unicode MappingWhen the Sarvam model successfully retains the geometric entity as a specialized glyph rather than misinterpreting it as an alphanumeric character, it maps the shape to specific code points within the Unicode standard. The current implementation relies on a highly restricted regular expression (/[☐☑☒□○◯◉●]/g) which captures only an infinitesimal fraction of the available glyphs. This strictness causes the pipeline to discard valid checkboxes that the OCR engine mapped to alternative blocks, such as the Miscellaneous Symbols (U+2600-U+26FF) or Dingbats (U+2700-U+27BF) ranges.To ensure maximum data yield from the Sarvam JSON response, the text extraction logic must be expanded into a comprehensive Unicode matching matrix. This matrix must accommodate white squares, ballot boxes, check marks, multiplicative cross marks, and their heavy or light variants. Furthermore, the inclusion of Unicode Variant Selectors (\uFE0E and \uFE0F) is paramount. These non-spacing combination characters dictate whether the preceding glyph should be rendered in a standard monochromatic text presentation or as a polychromatic emoji. Without evaluating these selectors, the regex engine will fail to match glyphs that the system's operating system has forcefully coerced into emoji representations.Unicode Code PointGlyphStandard NomenclatureStructural CategoryU+25A1□White SquareGeometric ShapesU+25A2▢White Square with Rounded CornersGeometric ShapesU+2610☐Ballot BoxMiscellaneous SymbolsU+2611☑Ballot Box with CheckMiscellaneous SymbolsU+2713✓Check MarkDingbatsU+2717✗Ballot XDingbatsU+1F5F8🗸Light Check MarkMiscellaneous Symbols and PictographsComb Field Integrity ConstraintsA "comb field" designates an input structure universally deployed across government forms where the applicant is constrained to write exactly one alphanumeric character per printed geometric cell. The legacy isCombRow function currently classifies any adjacent horizontal row of detected shapes containing seven or more boxes as a comb field, or alternatively relies on a rudimentary text keyword match against the adjacent label. This heuristic fails drastically when optical degradation obscures the printed text label, leaving the application unable to discern the purpose of the field.However, in the specific context of Indian administrative and identity documents, the exact geometric count of the comb boxes dictates the irrefutable identity of the field. This geometric constraint effectively acts as an implicit, undeniable label, allowing the system to categorize the input request even when the textual instructions are entirely illegible.Aadhaar Numbers, the foundational biometric identification system of India, strictly adhere to a 12-digit format. On physical forms, these are frequently segmented by visual gaps into three blocks of four digits (XXXX XXXX XXXX). The visual detection pipeline must tolerate arrays of exactly 12 boxes, or 14 boxes if the intermediate segmentation gaps are erroneously classified as bounded shapes by the vision algorithm. Similarly, Permanent Account Number (PAN) cards mandate an exact 10-character alphanumeric layout without deviation. Postal Index Numbers (PIN codes) across the Indian subcontinent are universally restricted to exactly 6 digits. By encoding these strict structural validations directly into the parsing algorithm, the SWARAM application can confidently identify critical KYC fields through spatial geometry alone, significantly boosting accessibility resilience for users uploading degraded paperwork.Action Plan: Typographic and Geometric EnhancementTo implement these enhanced detection heuristics, the text processing utilities must be heavily refactored.1. Broadening the Unicode Glyph Spectrum
+Update the constant within lib/analysis/analyzeForm.ts to capture the expanded Unicode boundary logic, integrating the necessary variant selectors.TypeScript// lib/analysis/analyzeForm.ts (Modified snippet)
+
+// Exhaustive Unicode matching covering Box Drawing, Block Elements, Geometric Shapes, 
+// Miscellaneous Symbols, Dingbats, and Miscellaneous Symbols and Pictographs.
+const OPTION_MARKER = /[\u25A1\u25A2\u25FB\u2610-\u2612\u2613\u26DD\u2705\u2713-\u2718\u274C\u274E\u2A2F\u1F5F4-\u1F5F9☐☑☒□○◯◉●✓✔✗✘][\uFE0E\uFE0F]?/gu;
+
+function markedOptions(text: string): string[] {
+  const values: string[] = [];
+  // Ensure the global and unicode flags are set for correct multi-byte character processing
+  const marker = new RegExp(OPTION_MARKER.source, "gu");
+  
+  let match;
+  while ((match = marker.exec(text)) !== null) {
+    const nextMatch = text.slice(marker.lastIndex).search(OPTION_MARKER);
+    const end = nextMatch < 0 ? text.length : marker.lastIndex + nextMatch;
+    
+    // Clean label text and systematically strip instructional verbs common to Indian bureaucracy
+    const value = cleanLabelText(text.slice(marker.lastIndex, end))
+      .replace(/\b(encircle|tick|choose|select|strike|cross)\b.*$/i, "")
+      .trim();
+      
+    if (value.length >= 2) values.push(value);
+  }
+  return values;
+}
+2. Rigorous Comb Field Classification
+Implement strict geometric thresholds for critical Indian identity markers within the classification function, utilizing spatial array lengths as primary identifiers.TypeScript// lib/analysis/analyzeForm.ts (Modified snippet)
+
+function isCombRow(row: DetectedShape[], label: string): boolean {
+  const normalized = normalizeLabel(label);
+  const boxCount = row.length;
+
+  // Strict structural validations based on Indian KYC field geometries
+  if (/\b(aadhaar|aadhar|uid)\b/.test(normalized) && (boxCount === 12 || boxCount === 14)) {
+    return true;
+  }
+  if (/\b(pan|p.a.n)\b/.test(normalized) && boxCount === 10) {
+    return true;
+  }
+  if (/\b(pin code|pincode)\b/.test(normalized) && boxCount === 6) {
+    return true;
+  }
+  if (/\b(mobile|phone|contact)\b/.test(normalized) && (boxCount === 10 || boxCount === 12)) {
+    return true; // Accommodate optional 2-digit country code precursor boxes
+  }
+
+  // Fallback heuristic for generic arrays (e.g., elongated 'Full Name' boxes)
+  return (
+    boxCount >= 7 || 
+    /\b(full name|name of applicant|date of birth)\b/.test(normalized)
+  );
+}
+Fault Tolerance, Exponential Backoff, and Edge FallbacksThe integration of complex Vision Language Models via third-party cloud APIs inherently introduces volatility into the application architecture. APIs operating over unpredictable mobile networks are highly susceptible to transient latency spikes, HTTP 504 Gateway Timeouts, and HTTP 429 Too Many Requests errors. The current SWARAM architecture handles these network failures destructively: if a single Sarvam HTTP initialization request fails, the entire document analysis pipeline terminates, surfacing a fatal error to the user. When an application services thousands of mobile devices simultaneously, naive error handling logic dictates that all failed clients will immediately attempt to reconnect. This generates a devastating "thundering herd" phenomenon, a synchronized surge of traffic that rapidly exhausts backend rate limits, overwhelms load balancers, and exacerbates the original service degradation.Decorrelated Jitter MathematicsTo isolate the Sarvam integration from these catastrophic failure loops, the network request module must implement an Exponential Backoff strategy overlaid with a sophisticated Decorrelated Jitter algorithm. Standard exponential backoff logic strictly doubles the wait time between subsequent retry attempts ($1s, 2s, 4s, 8s$). While this delays the traffic, it does not prevent synchronization; clients that fail at the same moment will simply retry together at progressively longer intervals.Decorrelated Jitter solves this synchronization by basing the subsequent delay interval on a randomized factor calculated relative to the duration of the previous delay. This mathematically guarantees the smoothest possible distribution of retries across a massive client base, breaking up synchronized waves of traffic. The mathematical formulation for the delay duration $t_{n}$ at retry attempt $n$ is defined as:$$t_{n} = \min \left( T_{max}, \text{random} \left( T_{base}, t_{n-1} \times 3 \right) \right)$$Where $T_{max}$ represents the absolute ceiling for any single waiting period, and $T_{base}$ represents the minimum threshold.Graceful Degradation to Edge ComputeBecause SWARAM operates under rigorous accessibility mandates that prioritize an uninterrupted user experience, it must retain utility even in totally disconnected scenarios. Should the Sarvam Document Intelligence API fail to yield actionable results after exhausting the backoff retry budget, the orchestration pipeline must seamlessly reroute the visual data to the legacy OpenCV and Tesseract.js stack executing purely on the device edge. This graceful degradation ensures that the user is not abandoned; the application continues to provide functional, albeit potentially lower-fidelity, document parsing without requiring cloud connectivity.Action Plan: Resilience ImplementationTo harden the network pathways and ensure graceful degradation, the following architectural updates are required.1. Network Backoff Wrapper
+Construct a dedicated utility function that intercepts standard fetch operations, actively injecting the Decorrelated Jitter algorithm to handle transient network unreliability seamlessly.TypeScript// lib/network/retry.ts
+export interface RetryOptions {
+  maxRetries?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+}
+
+export async function fetchWithDecorrelatedJitter(
+  url: string,
+  options: RequestInit,
+  retryConfig: RetryOptions = {}
+): Promise<Response> {
+  const { maxRetries = 4, baseDelayMs = 1000, maxDelayMs = 30000 } = retryConfig;
+  
+  let attempt = 0;
+  let previousDelay = baseDelayMs;
+
+  while (true) {
+    try {
+      const response = await fetch(url, options);
+      
+      // Immediately return on success or terminal client errors (excluding 429 Rate Limit)
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      
+      throw new Error(`HTTP ${response.status}: Transient network failure detected.`);
+    } catch (error) {
+      if (attempt >= maxRetries) {
+        throw error; // Bubble up the final error after exhausting the retry budget
+      }
+      
+      // Calculate Decorrelated Jitter: delay = min(cap, random(base, prev * 3))
+      const maxRandomDelay = previousDelay * 3;
+      let delay = Math.random() * (maxRandomDelay - baseDelayMs) + baseDelayMs;
+      delay = Math.min(maxDelayMs, delay);
+      
+      // Suspend execution thread without blocking the event loop
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      previousDelay = delay;
+      attempt++;
+    }
+  }
+}
+2. Implementing the Graceful Fallback Pipeline
+Update the core analyzeForm.ts orchestration layer to wrap the Sarvam initialization request. If the runSarvamDigitize function throws a terminal exception post-retries, the logical catch block actively diverts the processing payload to the localized recognizeCanvas engine, bypassing the cloud failure.TypeScript// lib/analysis/analyzeForm.ts (Modified `analyzeScannedPdf` integration)
+import { recognizeCanvas } from "../ocr/tesseractEngine"; 
+
+async function analyzeScannedPdf(
+  blob: Blob,
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  const cvWarmup = loadOpenCv();
+  let sarvamResult = null;
+  let useLocalFallback = false;
+
+  try {
+    // Sarvam API relies on the robust fetchWithDecorrelatedJitter implementation internally
+    sarvamResult = await runSarvamDigitize(blob, "pdf", onProgress);
+  } catch (error) {
+    // Log the cloud failure and transition application state to the localized edge engine
+    console.warn("[SWARAM] Cloud API Terminal Failure. Executing graceful degradation to Tesseract edge fallback.", error);
+    useLocalFallback = true;
+  }
+
+  const pdf = await loadPdfDocument(bytes);
+  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+  const pageDims: PageDim[] = [];
+  const allFields: FormField[] = [];
+  let shapesUnavailable = false;
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
+    pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
+
+    const cv = await cvWarmup;
+    let shapes: DetectedShape[] = [];
+    if (cv) {
+      shapes = await detectShapes(rendered.canvas);
+    } else {
+      shapesUnavailable = true;
+    }
+
+    let lines: OcrLine[] = [];
+    
+    // Conditionally route data to the local OCR engine if the cloud VLM failed
+    if (useLocalFallback || !sarvamResult) {
+       onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct: 0 });
+       const ocr = await recognizeCanvas(rendered.canvas, (pct) =>
+         onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct })
+       );
+       lines = ocr.lines;
+    } else {
+       onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
+       // Apply precise typographic word slicing to the successful Sarvam block outputs
+       lines = sarvamPageToLines(sarvamResult.pages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+    }
+
+    allFields.push(
+      ...await inferFieldsFromPage(
+        mergeLinesIntoRows(lines),
+        shapes,
+        rendered.canvas.width,
+        rendered.canvas.height,
+        pageIndex,
+        rendered.canvas,
+      ),
+    );
+
+    // Release underlying bitmap memory to prevent mobile device heap exhaustion
+    rendered.canvas.width = 0; 
+  }
+  
+  await pdf.cleanup();
+  onProgress({ stage: "ordering" });
+  
+  return {
+    isAcroForm: false,
+    fields: orderFields(allFields),
+    pageDims,
+    pageCount,
+    shapesUnavailable,
+  };
+}
+Through the meticulous integration of geometric deskew algorithms, precise typographic calculations, highly optimized asynchronous Server-Sent Events, expanded Unicode glyph detection, and mathematically sophisticated fault-tolerance mechanisms, the architecture is hardened against instability. This strategic blueprint guarantees that the SWARAM application extracts critical visual data with maximal accuracy while insulating vulnerable user segments from the inherent unpredictability of cloud network topologies.

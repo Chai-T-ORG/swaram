@@ -17,6 +17,8 @@ import { detectShapes, loadOpenCv, type DetectedShape } from "../vision/shapeDet
 import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
 import { orderFields } from "../vision/fieldClusterer";
 import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
+import { recognizeCanvas } from "../ocr/tesseractEngine";
+import { deskewCanvas } from "../vision/deskew";
 
 export type AnalysisStage =
   | "reading"      // opening the file
@@ -71,9 +73,15 @@ async function analyzeScannedPdf(
   bytes: ArrayBuffer,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
-  // Start warming OpenCV while pdf.js renders.
   const cvWarmup = loadOpenCv();
-  const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
+  
+  let sarvamPages: Record<string, unknown> | null = null;
+  try {
+    const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
+    sarvamPages = sarvam.pages;
+  } catch (error) {
+    console.warn("Sarvam API failed, falling back to local Tesseract OCR.", error);
+  }
 
   const pdf = await loadPdfDocument(bytes);
   const pageCount = Math.min(pdf.numPages, MAX_PAGES);
@@ -94,7 +102,15 @@ async function analyzeScannedPdf(
       shapesUnavailable = true;
     }
     onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
-    const lines = sarvamPageToLines(sarvam.pages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+    
+    let lines: OcrLine[];
+    if (sarvamPages && sarvamPages[String(pageIndex + 1)]) {
+      lines = sarvamPageToLines(sarvamPages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+    } else {
+      const ocrResult = await recognizeCanvas(rendered.canvas, (pct) => onProgress({ stage: "ocr", pct, page: pageIndex + 1, pageCount }));
+      lines = ocrResult.lines;
+    }
+
     allFields.push(
       ...await inferFieldsFromPage(
         mergeLinesIntoRows(lines),
@@ -125,21 +141,31 @@ async function analyzeImage(
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
   const cvWarmup = loadOpenCv();
-  const canvas = await imageBlobToCanvas(blob);
-  const sarvam = await runSarvamDigitize(blob, "image", onProgress);
+  let canvas = await imageBlobToCanvas(blob);
 
   onProgress({ stage: "layout" });
   const cv = await cvWarmup;
   let shapes: DetectedShape[] = [];
   let shapesUnavailable = false;
   if (cv) {
+    canvas = deskewCanvas(canvas);
     shapes = await detectShapes(canvas);
   } else {
     shapesUnavailable = true;
   }
 
   onProgress({ stage: "fields" });
-  const lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
+  
+  let lines: OcrLine[];
+  try {
+    const sarvam = await runSarvamDigitize(blob, "image", onProgress);
+    lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
+  } catch (error) {
+    console.warn("Sarvam API failed, falling back to local Tesseract OCR.", error);
+    const ocrResult = await recognizeCanvas(canvas, (pct) => onProgress({ stage: "ocr", pct }));
+    lines = ocrResult.lines;
+  }
+
   const fields = await inferFieldsFromPage(mergeLinesIntoRows(lines), shapes, canvas.width, canvas.height, 0, canvas);
 
   onProgress({ stage: "ordering" });
@@ -284,7 +310,7 @@ function groupsLookLikeOptions(groups: WordGroup[]): boolean {
   );
 }
 
-const OPTION_MARKER = /[☐☑☒□○◯◉●]/g;
+const OPTION_MARKER = /[☐☑☒□○◯◉●\u2610-\u2612\uFE0E\uFE0F]/g;
 
 /** Sarvam preserves checkbox/radio glyphs in text blocks; use them as the
  * source of truth for option labels instead of guessing from nearby boxes. */
@@ -333,9 +359,15 @@ function choiceGroups(values: string[], line: OcrLine): WordGroup[] {
  */
 function isCombRow(row: DetectedShape[], label: string): boolean {
   const normalized = normalizeLabel(label);
+  const count = row.length;
+  
+  if (/aadhaar|aadhar/i.test(normalized) && (count === 12 || count === 14)) return true;
+  if (/pan\b/i.test(normalized) && count === 10) return true;
+  if (/pin\b|pincode/i.test(normalized) && count === 6) return true;
+
   return (
-    row.length >= 7 ||
-    /\b(full name|name of applicant|aadhaar|aadhar|pan|mobile|pin code|date of birth)\b/.test(normalized)
+    count >= 7 ||
+    /\b(full name|name of applicant|mobile|date of birth)\b/.test(normalized)
   );
 }
 

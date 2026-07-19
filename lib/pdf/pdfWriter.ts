@@ -124,7 +124,7 @@ function drawAnswer(
 
   const text = field.value.trim();
 
-  if (field.type === "comb" && field.combLength) {
+  if (field.combLength) {
     // Strip spaces that might have been typed, e.g., for Aadhaar "1234 5678" -> "12345678"
     const chars = text.replace(/\s+/g, "").split("");
     const cellW = boxW / field.combLength;
