@@ -199,6 +199,26 @@ export function useProcessing() {
 
   const autofillable = record?.fields.filter((f) => f.profileKey && !f.sensitive).length ?? 0;
 
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let url: string | null = null;
+
+    if (record && record.sourceType === "image") {
+      getFile(formId, "original").then((blob) => {
+        if (!active || !blob) return;
+        url = URL.createObjectURL(blob);
+        setThumbnailUrl(url);
+      });
+    }
+
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [formId, record]);
+
   return {
     formId,
     record,
@@ -211,6 +231,7 @@ export function useProcessing() {
     failed,
     fieldCount,
     autofillable,
+    thumbnailUrl,
     stepState,
     goFill: () => router.push(`/fill/${formId}`),
     goReview: () => router.push(`/review/${formId}`),

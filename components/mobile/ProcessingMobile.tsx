@@ -44,9 +44,24 @@ export default function ProcessingMobile() {
       {!p.done && !p.failed ? (
         <div className="card w-full flex flex-col items-center gap-5 p-5">
           <VoiceOrb state="thinking" size="md" className="mt-2" />
-          <header className="text-center">
+          <header className="text-center flex flex-col items-center gap-2">
+            {/* Document Thumbnail / PDF Placeholder */}
+            {p.thumbnailUrl ? (
+              <img
+                src={p.thumbnailUrl}
+                alt="Document preview"
+                className="h-16 w-12 rounded border border-line object-cover shadow-sm mt-1"
+              />
+            ) : (
+              <div aria-hidden="true" className="grid h-16 w-12 place-items-center rounded border border-line bg-sunken text-soft mt-1">
+                <IconDoc className="h-6 w-6" />
+              </div>
+            )}
             <h1 className="font-display text-2xl leading-tight text-ink">Reading your form…</h1>
-            <p className="mt-1.5 text-sm text-soft">Usually 20 to 40 seconds.</p>
+            <p className="text-sm text-soft">Usually 20 to 40 seconds.</p>
+            <Link href="/" className="text-xs text-soft underline underline-offset-2 hover:text-ink mt-0.5 no-underline">
+              Cancel
+            </Link>
           </header>
 
           <div className="w-full">
