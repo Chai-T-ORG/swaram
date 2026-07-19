@@ -3,341 +3,366 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
+  isOnboardingComplete,
+  markOnboardingComplete,
+  getVoiceSettings,
+  setVoiceSettings,
+  type MicMode,
+} from "@/lib/voice/voiceSettings";
+import {
   subscribeSetup,
   getSetupState,
-  isSetupComplete,
-  markSetupComplete,
-  formatBytes,
-  formatSpeed,
-  retry,
-  updateSttProgress,
-  markSttReady,
-  updateTtsProgress,
-  markTtsReady,
   type SetupState,
 } from "@/lib/voice/modelManager";
-import { loadKokoro } from "@/lib/voice/textToSpeech";
-import { loadWhisper } from "@/lib/voice/whisperSTT";
-import { probeGroqAvailability, isAzureConfigured } from "@/lib/voice/groqSTT";
-import { getVoiceSettings } from "@/lib/voice/voiceSettings";
-import { initMic } from "@/lib/voice/micManager";
+import { initMicDetailed, type MicResult } from "@/lib/voice/micManager";
 import { speak, unlockAudioPlayback } from "@/lib/voice/textToSpeech";
-import { IconCheck } from "@/components/icons";
+import {
+  startContinuousListening,
+  stopContinuousListening,
+  addTranscriptListener,
+  removeTranscriptListener,
+} from "@/lib/voice/speechToText";
+import { IconCheck, IconShield, IconMic, IconSparkle } from "@/components/icons";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 
-/**
- * SetupOverlay — the one-tap welcome shown on first visit.
- *
- * With cloud voices (the default), nothing is downloaded, so this is simply a
- * "tap to begin" screen. That tap is essential: it unlocks audio playback (iOS
- * requires a user gesture) and requests the microphone, so the very first spoken
- * line is actually audible. The download progress UI only appears when the user
- * has opted into an offline engine (on-device Kokoro voice or Whisper).
- */
 export default function SetupOverlay() {
   const prefersReducedMotion = useReducedMotion();
-  const [state, setState] = useState<SetupState>(getSetupState);
+  const [modelState, setModelState] = useState<SetupState>(getSetupState);
   const [visible, setVisible] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
-  // Refs (not state) so flipping them can't re-run the dismiss effect and
-  // clear its timer before it fires — the reason the overlay used to hang.
-  const announcedRef = useRef(false);
-  const dismissTimerRef = useRef<number | null>(null);
+  const [selectedMicMode, setSelectedMicMode] = useState<MicMode>("ptt");
 
-  // Check if setup is needed
+  // Mic permission & request states
+  const [micActivated, setMicActivated] = useState(false);
+  const [micRequesting, setMicRequesting] = useState(false);
+  const [micResult, setMicResult] = useState<MicResult | null>(null);
+
+  // Spoken transcript feedback for onboarding
+  const [lastHeardSpeech, setLastHeardSpeech] = useState<string>("");
+
+  // Check if onboarding is needed
   useEffect(() => {
-    if (isSetupComplete()) {
-      setDismissed(true);
+    if (isOnboardingComplete()) {
+      setVisible(false);
       return;
     }
+    const curSettings = getVoiceSettings();
+    setSelectedMicMode(curSettings.micMode);
     setVisible(true);
   }, []);
 
-  // Subscribe to setup state
+  // Listen for replay events (e.g. from Profile settings)
   useEffect(() => {
-    return subscribeSetup(setState);
+    const checkVisibility = () => {
+      if (!isOnboardingComplete()) {
+        const curSettings = getVoiceSettings();
+        setSelectedMicMode(curSettings.micMode);
+        setMicActivated(false);
+        setMicRequesting(false);
+        setMicResult(null);
+        setLastHeardSpeech("");
+        setVisible(true);
+      }
+    };
+
+    window.addEventListener("swaram_replay_onboarding", checkVisibility);
+    return () => window.removeEventListener("swaram_replay_onboarding", checkVisibility);
   }, []);
 
-  // Auto-dismiss when ready. Uses refs so it fires exactly once and the timer
-  // is never cleared by a re-render.
+  // Subscribe to model download progress
   useEffect(() => {
-    if (state.stage !== "ready" || dismissed) return;
-    if (!announcedRef.current) {
-      announcedRef.current = true;
-      const isTouch =
-        typeof window !== "undefined" &&
-        ((typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
-          "ontouchstart" in window ||
-          navigator.maxTouchPoints > 0);
-      speak(
-        getVoiceSettings().micMode === "ptt"
-          ? isTouch
-            ? "All set. Tap anywhere to talk, then tap again to send."
-            : "All set. Hold the space bar, or tap the microphone, then speak."
-          : "All set. I'm listening — just tell me what you'd like to do.",
-        { interrupt: false },
-      );
-    }
-    if (dismissTimerRef.current === null) {
-      dismissTimerRef.current = window.setTimeout(() => {
-        markSetupComplete(); // persist so setup never re-runs on reload
-        setVisible(false);
-        window.setTimeout(() => setDismissed(true), 600);
-      }, 2500);
-    }
-  }, [state.stage, dismissed]);
+    return subscribeSetup(setModelState);
+  }, []);
 
-  // Start downloads on first user gesture
-  const startSetup = useCallback(async () => {
-    if (hasStarted) return;
-    setHasStarted(true);
-
-    // This tap is the user gesture that unlocks audio (iOS won't play a sound
-    // otherwise). Do it first, then request the microphone.
+  // Finish onboarding smoothly with a smart "Welcome back" greeting
+  const handleComplete = useCallback(() => {
     unlockAudioPlayback();
-    await initMic();
+    stopContinuousListening();
+    markOnboardingComplete();
+    setVisible(false);
+    speak("Welcome back! How may I assist you today?", { interrupt: true });
+  }, []);
 
-    const { ttsProvider, sttProvider } = getVoiceSettings();
-    const needsDownload = ttsProvider === "local" || sttProvider === "whisper";
+  // Robust command parser for hands-free onboarding voice input
+  const handleOnboardingTranscript = useCallback((rawText: string) => {
+    const text = rawText.toLowerCase().trim();
+    console.log("[Onboarding Transcript Received]:", text);
+    setLastHeardSpeech(rawText);
+
+    if (/push|ptt|talk|option 1|option one|one|first/i.test(text)) {
+      setSelectedMicMode("ptt");
+      setVoiceSettings({ micMode: "ptt" });
+      speak("Push-to-talk selected. Hold spacebar or tap the orb to talk.", { interrupt: true });
+    } else if (/hands|free|handsfree|continuous|option 2|option two|two|second/i.test(text)) {
+      setSelectedMicMode("continuous");
+      setVoiceSettings({ micMode: "continuous" });
+      speak("Hands-free selected. Swaram listens continuously.", { interrupt: true });
+    } else if (/start|begin|continue|go|lets go|let's go|ready|enter|done|complete|okay|ok/i.test(text)) {
+      handleComplete();
+    } else if (/repeat|help|options|what|say/i.test(text)) {
+      speak(
+        "Say Push to talk, or say Hands free, or say Start to begin.",
+        { interrupt: true }
+      );
+    } else if (/skip/i.test(text)) {
+      handleComplete();
+    }
+  }, [handleComplete]);
+
+  // Connect onboarding to Swaram's primary STT transcript listener
+  useEffect(() => {
+    if (!visible || !micActivated) return;
+
+    const listener = (text: string) => {
+      handleOnboardingTranscript(text);
+    };
+
+    addTranscriptListener(listener);
+    return () => {
+      removeTranscriptListener(listener);
+    };
+  }, [visible, micActivated, handleOnboardingTranscript]);
+
+  // SINGLE-TAP & KEYPRESS UNIVERSAL ACTIVATION GATE
+  const handleUniversalActivation = useCallback(async () => {
+    // 1. Synchronously unlock HTML5 Audio Context & play TTS FIRST inside the user gesture
+    unlockAudioPlayback();
+    
+    if (micActivated) {
+      handleComplete();
+      return;
+    }
 
     speak(
-      needsDownload
-        ? "Swaram here. I'm getting your offline voice ready. This happens only once and takes about a minute — I'll tell you the moment it's ready."
-        : "Welcome to Swaram. Your voice assistant is ready.",
-      { interrupt: true },
+      "Welcome to Swaram. Microphone enabled. I read forms aloud and fill them by voice. Say Push to talk, or say Hands free, or say Start to begin.",
+      { interrupt: true }
     );
 
-    // TTS: cloud and system voices are instant. Only on-device Kokoro downloads,
-    // and if it fails we still complete on the system voice — a voice-model
-    // hiccup must never wedge the whole app on the welcome screen.
-    if (ttsProvider === "local") {
-      loadKokoro()
-        .then((tts) => {
-          if (!tts) {
-            updateTtsProgress(1, "Using system voice");
-            markTtsReady();
-          }
-        })
-        .catch(() => {
-          updateTtsProgress(1, "Using system voice");
-          markTtsReady();
-        });
+    setMicRequesting(true);
+    setMicResult(null);
+
+    // 2. Initiate mic request immediately
+    const res = await initMicDetailed();
+    setMicRequesting(false);
+    setMicResult(res);
+
+    if (res.ok && res.stream && res.stream.active) {
+      setMicActivated(true);
+      setVoiceSettings({ micMode: selectedMicMode });
+      // Start continuous STT listening via Swaram's primary speech engine
+      startContinuousListening({ lang: "en-IN" });
     } else {
-      updateTtsProgress(1, ttsProvider === "cloud" ? "Cloud voice ready" : "System voice ready");
-      markTtsReady();
+      speak(
+        "Microphone access was denied or unavailable. Tap anywhere to try again, or press space to continue with typed controls.",
+        { interrupt: true }
+      );
     }
+  }, [micActivated, selectedMicMode, handleComplete]);
 
-    // STT: cloud engines (Groq / Azure) download nothing — mark ready once a
-    // key is confirmed. Only on-device Whisper fetches a model.
-    if (sttProvider === "groq" || sttProvider === "auto" || sttProvider === "azure" || sttProvider === "azure-stream") {
-      probeGroqAvailability().then((groqOk) => {
-        const ok = sttProvider === "azure" || sttProvider === "azure-stream" ? isAzureConfigured() : groqOk;
-        if (ok) {
-          updateSttProgress(1, "Cloud voice ready");
-          markSttReady();
-        } else {
-          loadWhisper().catch(console.error);
-        }
-      });
-    } else if (sttProvider === "whisper") {
-      loadWhisper().catch(console.error);
-    } else {
-      updateSttProgress(1, "Ready");
-      markSttReady();
-    }
-  }, [hasStarted]);
+  // Global Keypress listener for accessibility (Space/Enter to trigger activation or voice commands)
+  useEffect(() => {
+    if (!visible) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " " || e.key === "Enter") {
+        e.preventDefault();
+        void handleUniversalActivation();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [visible, handleUniversalActivation]);
 
-  if (dismissed) return null;
-
-  const overallPercent = Math.round(state.overallProgress * 100);
+  if (!visible) return null;
 
   return (
     <AnimatePresence>
-      {visible && (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.3 }}
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-surface/94 backdrop-blur-lg p-4 sm:p-6 overflow-y-auto cursor-pointer"
+        onClick={handleUniversalActivation}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Welcome to Swaram. Tap anywhere on screen or press Space to enable voice assistant"
+      >
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.5 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-surface/90 backdrop-blur-md"
+          initial={{ scale: 0.95, opacity: 0, y: prefersReducedMotion ? 0 : 12 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.95, opacity: 0, y: prefersReducedMotion ? 0 : -12 }}
+          transition={{ type: "spring", stiffness: 220, damping: 22 }}
+          className="relative max-w-xl w-full p-6 sm:p-8 rounded-3xl bg-raised border border-line shadow-2xl overflow-hidden my-auto cursor-default text-center"
+          onClick={(e) => e.stopPropagation()}
         >
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.2, duration: 0.5, type: "spring" }}
-            className="max-w-lg w-full mx-4 p-8 rounded-3xl bg-raised border border-line shadow-2xl"
-          >
-            {/* Logo / Branding */}
-            <div className="text-center mb-8">
-              <motion.div
-                initial={{ scale: 0.6, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ type: "spring", delay: 0.3, damping: 15 }}
-                className="mb-6 flex justify-center"
-              >
-                <VoiceOrb state={hasStarted && state.stage !== "ready" ? "thinking" : "idle"} size="md" />
-              </motion.div>
-
-              <h1 className="font-display text-3xl mb-2 text-ink">
-                Welcome to Swaram
-              </h1>
-              <p className="text-sm leading-relaxed text-soft">
-                {!hasStarted
-                  ? "Tap below to begin. I’ll read your forms aloud and fill them in for you — just by talking."
-                  : state.stage === "ready"
-                    ? "Your voice assistant is ready to use."
-                    : "Getting your offline voice ready. This only happens once."
-                }
-              </p>
+          {/* Header Bar */}
+          <div className="flex items-center justify-between border-b border-line pb-4 mb-6">
+            <div className="flex items-center gap-2">
+              <img src="/logo.png" alt="" className="h-7 w-7 rounded-lg object-contain shadow-xs" />
+              <span className="text-xs font-bold uppercase tracking-wider text-ink">
+                {micActivated ? "Voice Assistant Active" : "Voice Setup"}
+              </span>
             </div>
 
-            {/* Start Button (before download begins) */}
-            {!hasStarted && (
-              <motion.button
-                animate={
-                  prefersReducedMotion
-                    ? {}
-                    : {
-                        boxShadow: [
-                          "0 4px 14px 0 var(--shadow-button)",
-                          "0 4px 28px 8px var(--shadow-button)",
-                          "0 4px 14px 0 var(--shadow-button)",
-                        ],
-                      }
-                }
-                transition={{
-                  repeat: Infinity,
-                  duration: 2.5,
-                  ease: "easeInOut",
-                }}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={startSetup}
-                aria-label="Tap to begin using Swaram"
-                className="w-full py-5 px-6 rounded-full font-bold text-on-accent text-lg mb-6 cursor-pointer bg-accent hover:bg-accent-hover transition-colors"
+            <button
+              onClick={handleComplete}
+              className="text-xs font-semibold text-soft hover:text-ink transition-colors cursor-pointer px-2.5 py-1 rounded-lg focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Skip onboarding"
+            >
+              Skip
+            </button>
+          </div>
+
+          {/* Orb visual center */}
+          <div className="mb-6 flex justify-center cursor-pointer" onClick={handleUniversalActivation}>
+            <VoiceOrb state={micRequesting ? "thinking" : micActivated ? "listening" : "idle"} size="lg" />
+          </div>
+
+          <h1 className="font-display text-3xl mb-2 text-ink tracking-tight">
+            Welcome to Swaram
+          </h1>
+          <p className="text-sm leading-relaxed text-soft max-w-md mx-auto mb-6">
+            Swaram reads forms aloud and fills them by voice — built for blind and low-vision users.
+          </p>
+
+          {/* State Feedback */}
+          {micRequesting ? (
+            <div className="w-full p-4 rounded-2xl border border-accent/40 bg-accent-soft/30 text-sm font-bold text-accent animate-pulse mb-6">
+              Waiting for browser microphone permission…
+            </div>
+          ) : micResult && !micResult.ok ? (
+            <div className="w-full p-4 rounded-2xl border border-bad/40 bg-bad-soft text-left space-y-2 mb-6">
+              <p className="text-xs font-bold text-bad">
+                {micResult.error === "denied"
+                  ? "Microphone access was denied."
+                  : micResult.error === "unsupported"
+                  ? "Microphone access is not supported in this browser."
+                  : "Microphone hardware is unavailable or in use."}
+              </p>
+              <p className="text-xs text-soft">{micResult.message}</p>
+              <button
+                type="button"
+                onClick={handleUniversalActivation}
+                className="btn-primary w-full mt-2 py-3 text-xs"
               >
-                Tap to begin
-              </motion.button>
-            )}
+                Try Microphone Again
+              </button>
+            </div>
+          ) : micActivated ? (
+            /* ACTIVE VOICE MODE SELECTION & READY CONSOLE */
+            <div className="space-y-4 text-left border-t border-line pt-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-soft">
+                  Listening Mode (Say &ldquo;Push to talk&rdquo; or &ldquo;Hands free&rdquo;)
+                </span>
+                <span className="chip bg-accent-soft text-accent text-[10px] font-bold uppercase tracking-wider animate-pulse flex items-center gap-1">
+                  <IconSparkle className="h-3 w-3" />
+                  Listening
+                </span>
+              </div>
 
-            {/* Download Progress (after started) */}
-            {hasStarted && state.stage !== "ready" && (
-              <div className="space-y-5 mb-6">
-                {/* Per-model progress */}
-                {state.models.map((model) => (
-                  <div key={model.id}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold text-ink">
-                        {model.name}
-                      </span>
-                      <span className="text-xs tabular-nums text-soft">
-                        {model.status === "ready"
-                          ? "Done"
-                          : model.status === "error"
-                            ? "Failed"
-                            : `${Math.round(model.progress * 100)}%`
-                        }
-                      </span>
-                    </div>
-                    <div className="h-2 rounded-full overflow-hidden bg-line">
-                      <motion.div
-                        className="h-full rounded-full"
-                        style={{
-                          background: model.status === "error"
-                            ? "var(--bad)"
-                            : model.status === "ready"
-                              ? "var(--ok)"
-                              : "var(--accent)",
-                        }}
-                        initial={{ width: 0 }}
-                        animate={{ width: `${Math.max(model.progress * 100, model.status === "error" ? 100 : 0)}%` }}
-                        transition={{ duration: 0.3, ease: "easeOut" }}
-                      />
-                    </div>
-                    <p className="text-xs mt-1 text-faint">
-                      {model.detail}
-                    </p>
-                    {model.status === "error" && (
-                      <button
-                        onClick={() => retry(model.id)}
-                        className="text-xs mt-1 underline cursor-pointer text-accent font-medium"
-                      >
-                        Retry download
-                      </button>
-                    )}
-                  </div>
-                ))}
+              {lastHeardSpeech && (
+                <div className="p-2.5 rounded-xl border border-accent/30 bg-accent-soft/20 text-xs text-ink">
+                  <span className="font-bold text-accent">Heard:</span> &ldquo;{lastHeardSpeech}&rdquo;
+                </div>
+              )}
 
-                {/* Overall progress bar */}
-                <div className="pt-3 border-t border-line">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-semibold text-ink">
-                      Overall Progress
-                    </span>
-                    <span className="text-xs tabular-nums font-bold text-accent">
-                      {overallPercent}%
-                    </span>
+              <div className="grid gap-2.5" role="radiogroup" aria-label="Listening mode">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedMicMode === "ptt"}
+                  onClick={() => {
+                    unlockAudioPlayback();
+                    setSelectedMicMode("ptt");
+                    setVoiceSettings({ micMode: "ptt" });
+                    speak("Push-to-talk selected. Hold spacebar or tap the orb to talk.", { interrupt: true });
+                  }}
+                  className={`flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-accent ${
+                    selectedMicMode === "ptt"
+                      ? "border-accent bg-accent-soft/30 shadow-sm"
+                      : "border-line bg-raised hover:bg-sunken"
+                  }`}
+                >
+                  <div>
+                    <p className="text-xs font-bold text-ink">Push-to-talk (Recommended)</p>
+                    <p className="text-[11px] text-soft">Hold spacebar or tap the orb to talk.</p>
                   </div>
-                  <div className="h-3 rounded-full overflow-hidden bg-line">
+                  {selectedMicMode === "ptt" && (
+                    <span className="grid h-5 w-5 place-items-center rounded-full bg-accent text-on-accent shrink-0">
+                      <IconCheck className="h-3.5 w-3.5" />
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedMicMode === "continuous"}
+                  onClick={() => {
+                    unlockAudioPlayback();
+                    setSelectedMicMode("continuous");
+                    setVoiceSettings({ micMode: "continuous" });
+                    speak("Hands-free selected. Swaram listens continuously.", { interrupt: true });
+                  }}
+                  className={`flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-accent ${
+                    selectedMicMode === "continuous"
+                      ? "border-accent bg-accent-soft/30 shadow-sm"
+                      : "border-line bg-raised hover:bg-sunken"
+                  }`}
+                >
+                  <div>
+                    <p className="text-xs font-bold text-ink">Hands-free</p>
+                    <p className="text-[11px] text-soft">Always listening in quiet rooms.</p>
+                  </div>
+                  {selectedMicMode === "continuous" && (
+                    <span className="grid h-5 w-5 place-items-center rounded-full bg-accent text-on-accent shrink-0">
+                      <IconCheck className="h-3.5 w-3.5" />
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Inline Model Download Progress */}
+              {modelState.stage === "downloading" && (
+                <div className="w-full p-3 rounded-2xl border border-line bg-sunken space-y-2 text-left">
+                  <div className="flex items-center justify-between text-xs font-semibold text-ink">
+                    <span>Offline voice model downloading…</span>
+                    <span>{Math.round(modelState.overallProgress * 100)}%</span>
+                  </div>
+                  <div className="h-1.5 rounded-full overflow-hidden bg-line">
                     <motion.div
-                      className="h-full rounded-full bg-accent"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${overallPercent}%` }}
-                      transition={{ duration: 0.3, ease: "easeOut" }}
+                      className="h-full bg-accent rounded-full"
+                      animate={{ width: `${Math.round(modelState.overallProgress * 100)}%` }}
+                      transition={{ duration: 0.3 }}
                     />
                   </div>
                 </div>
+              )}
 
-                {/* Speed and ETA */}
-                <div className="flex items-center justify-between text-xs text-soft">
-                  <span>
-                    {state.speed > 0 ? `Downloading at ${formatSpeed(state.speed)}` : "Starting download…"}
-                  </span>
-                  <span>{state.eta}</span>
-                </div>
-
-                {/* Total size */}
-                <p className="text-xs text-center text-faint">
-                  {state.totalSize} — downloaded once, cached offline forever
-                </p>
-              </div>
-            )}
-
-            {/* Ready state */}
-            {state.stage === "ready" && (
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="text-center py-4"
-              >
-                <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-ok-soft text-ok shadow-sm">
-                  <IconCheck className="w-8 h-8" strokeWidth={2.5} />
-                </div>
-                <p className="font-display text-xl text-ink">
-                  All set
-                </p>
-                <p className="text-sm mt-1 text-soft">
-                  Your voice assistant is ready. Entering Swaram…
-                </p>
-              </motion.div>
-            )}
-
-            {/* Skip option */}
-            {hasStarted && state.stage !== "ready" && (
               <button
-                onClick={() => {
-                  setVisible(false);
-                  setTimeout(() => setDismissed(true), 600);
-                }}
-                className="w-full text-center text-xs py-2 cursor-pointer text-soft hover:text-ink transition-colors bg-transparent border-none"
+                type="button"
+                onClick={handleComplete}
+                className="w-full py-4 px-6 rounded-full font-bold text-on-accent text-base bg-accent hover:bg-accent-hover transition-all shadow-md cursor-pointer flex items-center justify-center gap-2 mt-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
-                Skip — I’ll use the system voice for now
+                <IconCheck className="w-5 h-5" />
+                <span>Start Using Swaram (or Say &ldquo;Start&rdquo;)</span>
               </button>
-            )}
-          </motion.div>
+            </div>
+          ) : (
+            /* FIRST GESTURE ACTIVATION BUTTON */
+            <button
+              type="button"
+              autoFocus
+              onClick={handleUniversalActivation}
+              className="w-full py-4.5 px-6 rounded-full font-bold text-on-accent text-base bg-accent hover:bg-accent-hover transition-all shadow-md cursor-pointer flex items-center justify-center gap-2.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent mb-2"
+              aria-label="Welcome to Swaram. Tap anywhere on screen or press Space bar to enable voice assistant"
+            >
+              <IconMic className="w-5 h-5" />
+              <span>Tap Anywhere or Press Space to Enable Voice</span>
+            </button>
+          )}
         </motion.div>
-      )}
+      </motion.div>
     </AnimatePresence>
   );
 }

@@ -1,17 +1,5 @@
 "use client";
 
-/**
- * VoiceStrands — the React Bits "Strands" WebGL shader, made Swaram's own:
- *
- *  - voice-reactive: amplitude/intensity/speed ride the live mic volume while
- *    listening and pulse while Swaram speaks (the stock component is a demo
- *    loop; this one visualizes the actual conversation);
- *  - theme-native: deep green ink tones on the cream canvas, mint/emerald
- *    light with a marigold whisper on dark;
- *  - honest fallbacks: no WebGL2 → the Canvas-2D VoiceStrand; reduced motion
- *    → a static frame (speed 0).
- */
-
 import { useEffect, useState } from "react";
 import Strands from "@/components/Strands";
 import VoiceStrand from "@/components/ui/VoiceStrand";
@@ -24,7 +12,7 @@ function useIsDarkTheme(): boolean {
       setDark(
         document.documentElement.classList.contains("dark") ||
           (!document.documentElement.classList.contains("light") &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches),
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
       );
     read();
     const mo = new MutationObserver(read);
@@ -40,10 +28,6 @@ function useIsDarkTheme(): boolean {
 }
 
 function useWebGL2(): boolean {
-  // Start pessimistic: SSR and the first client render show the Canvas-2D
-  // fallback, and we only upgrade to the WebGL shader after probing. Starting
-  // true would mount OGL before the probe and crash environments without
-  // WebGL2 (headless test browsers included).
   const [ok, setOk] = useState(false);
   useEffect(() => {
     try {
@@ -77,13 +61,11 @@ export default function VoiceStrands({
     return () => mq.removeEventListener("change", read);
   }, []);
 
-  // The shader's alpha comes from luminance (additive light), so it can only
-  // ever glow — dark ink strands vanish on the cream canvas. Ink by day
-  // (Canvas 2D threads), light by night (WebGL): a deliberate brand behavior.
-  if (!webgl2 || !dark) {
+  // Graceful fallback for non-WebGL2 environments only
+  if (!webgl2) {
     return (
       <div className={className} style={{ height, width: width ? `${width}px` : "100%" }} aria-hidden="true">
-        <VoiceStrand height={height} intensity={0.3} />
+        <VoiceStrand height={height} intensity={0.4} />
       </div>
     );
   }
@@ -92,16 +74,17 @@ export default function VoiceStrands({
   const listening = voice?.sttState === "listening";
   const speaking = Boolean(voice?.ttsActive);
 
-  // One bright cream lead strand + greens — the reference-demo recipe.
-  const colors = ["#F0EBDF", "#4CAF7D", "#1E5138"];
+  // React Bits Strands palette:
+  // Dark mode: bright cream, vivid mint, forest green glow.
+  // Light mode: deep forest green, rich emerald, warm gold (tuned so additive glow never looks neon).
+  const colors = dark
+    ? ["#F0EBDF", "#4CAF7D", "#1E5138"]
+    : ["#123B27", "#1E5138", "#286646", "#8F6B2A"];
 
-  const amplitude = listening ? 0.95 + vol * 0.7  : speaking ? 1.05 : 0.85;
-  const intensity = listening ? 0.52 + vol * 0.12 : speaking ? 0.55 : 0.42;
-  const speed = reduced ? 0 : listening ? 0.65 : speaking ? 0.80 : 0.32;
+  const amplitude = listening ? 1.05 + vol * 0.7 : speaking ? 1.1 : 0.85;
+  const intensity = listening ? 0.6 + vol * 0.15 : speaking ? 0.62 : 0.45;
+  const speed = reduced ? 0 : listening ? 0.7 : speaking ? 0.8 : 0.35;
 
-  // The shader normalizes x by canvas HEIGHT and its taper envelope repeats
-  // every ~1.54 uv units — on a wide strip that renders as multiple "glints"
-  // unless we zoom so only the center lobe is visible: scale ≥ aspect / 1.5.
   const aspect = (width || 460) / height;
   const scale = Math.max(1, aspect / 1.5);
 
@@ -112,14 +95,14 @@ export default function VoiceStrands({
         count={3}
         speed={speed}
         amplitude={amplitude}
-        waviness={listening ? 1.25 : 1}
-        thickness={0.7}
-        glow={2.2}
+        waviness={listening ? 1.3 : 1}
+        thickness={dark ? 0.8 : 0.65}
+        glow={dark ? 2.4 : 0.75}
         taper={2.4}
         spread={1}
         intensity={intensity}
-        saturation={1.5}
-        opacity={1}
+        saturation={dark ? 1.5 : 0.95}
+        opacity={dark ? 1 : 0.8}
         scale={scale}
       />
     </div>

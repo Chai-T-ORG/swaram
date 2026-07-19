@@ -78,6 +78,49 @@ export async function checkPermission(): Promise<typeof permissionState> {
   return "unknown";
 }
 
+export type MicResult =
+  | { ok: true; stream: MediaStream }
+  | { ok: false; error: "denied" | "unsupported" | "unavailable" | "unknown"; message: string };
+
+/**
+ * Initialize the shared microphone stream with typed detailed status.
+ */
+export async function initMicDetailed(): Promise<MicResult> {
+  if (sharedStream && sharedStream.active) {
+    return { ok: true, stream: sharedStream };
+  }
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    setPermissionState("denied");
+    return {
+      ok: false,
+      error: "unsupported",
+      message: "Microphone access is not supported in this browser environment.",
+    };
+  }
+  try {
+    const stream = await initMic();
+    if (stream && stream.active) {
+      return { ok: true, stream };
+    }
+    const state = getPermissionState();
+    return {
+      ok: false,
+      error: state === "denied" ? "denied" : "unavailable",
+      message: state === "denied"
+        ? "Microphone permission was denied by the browser or user."
+        : "Microphone input hardware is unavailable or in use by another application.",
+    };
+  } catch (err: any) {
+    const isDenied = err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError";
+    const isNotFound = err?.name === "NotFoundError" || err?.name === "DevicesNotFoundError";
+    return {
+      ok: false,
+      error: isDenied ? "denied" : isNotFound ? "unavailable" : "unknown",
+      message: err?.message || "Could not access the microphone.",
+    };
+  }
+}
+
 /**
  * Initialize the shared microphone stream. Call this on the first user
  * gesture (click, tap, keypress). Subsequent calls return the same stream.

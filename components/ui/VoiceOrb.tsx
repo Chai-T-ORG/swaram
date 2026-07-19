@@ -10,8 +10,10 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 
+export type VoiceOrbState = "idle" | "listening" | "thinking" | "speaking" | "paused" | "success" | "error";
+
 interface VoiceOrbProps {
-  state: "idle" | "listening" | "thinking" | "speaking";
+  state: VoiceOrbState;
   volume?: number;
   size?: "sm" | "md" | "lg";
   className?: string;
@@ -22,28 +24,25 @@ function AnimatedSoundwave({
   volume,
   size,
 }: {
-  state: "idle" | "listening" | "thinking" | "speaking";
+  state: VoiceOrbState;
   volume: number;
   size: "sm" | "md" | "lg";
 }) {
   const bars = [0, 1, 2, 3, 4];
   const idleScales = [0.45, 0.75, 0.55, 0.85, 0.45];
 
-  // Heights mapping
   const barHeight = {
     sm: 10,
     md: 18,
     lg: 26,
   }[size];
 
-  // Gaps to make soundwave >=45% of core width
   const gapClass = {
     sm: "gap-[2px]",
     md: "gap-[3.5px]",
     lg: "gap-[5px]",
   }[size];
 
-  // Width styles
   const widthStyle = {
     sm: "w-[2px]",
     md: "w-[3.5px]",
@@ -54,10 +53,9 @@ function AnimatedSoundwave({
     <div className={`flex items-center justify-center ${gapClass}`}>
       {bars.map((bar) => {
         let animateVal: any = { scaleY: idleScales[bar] };
-        
+
         if (state === "listening") {
           if (volume < 0.05) {
-            // Ambient breathing/listening wave during silence, relative to idle heights
             animateVal = {
               scaleY: [idleScales[bar] * 0.7, idleScales[bar] * 1.3, idleScales[bar] * 0.7],
               transition: {
@@ -66,21 +64,19 @@ function AnimatedSoundwave({
                 repeat: Infinity,
                 repeatType: "reverse" as const,
                 ease: "easeInOut",
-              }
+              },
             };
           } else {
-            // Fluid voice intake reaction
             animateVal = {
               scaleY: Math.min(1.8, idleScales[bar] + volume * 1.6),
               transition: {
                 type: "spring",
                 stiffness: 350,
                 damping: 20,
-              }
+              },
             };
           }
         } else if (state === "speaking") {
-          // TTS pulse speaking
           animateVal = {
             scaleY: [idleScales[bar] * 0.5, idleScales[bar] * 1.9, idleScales[bar] * 0.5],
             transition: {
@@ -88,7 +84,7 @@ function AnimatedSoundwave({
               repeat: Infinity,
               repeatType: "reverse" as const,
               ease: "easeInOut",
-            }
+            },
           };
         } else if (state === "thinking") {
           animateVal = {
@@ -98,10 +94,15 @@ function AnimatedSoundwave({
               repeat: Infinity,
               repeatType: "reverse" as const,
               ease: "easeInOut",
-            }
+            },
           };
+        } else if (state === "paused") {
+          animateVal = { scaleY: 0.3 };
+        } else if (state === "success") {
+          animateVal = { scaleY: [0.6, 1.2, 0.8] };
+        } else if (state === "error") {
+          animateVal = { scaleY: 0.4 };
         } else {
-          // Idle breathing
           animateVal = {
             scaleY: [idleScales[bar] * 0.8, idleScales[bar] * 1.2, idleScales[bar] * 0.8],
             transition: {
@@ -110,7 +111,7 @@ function AnimatedSoundwave({
               repeat: Infinity,
               repeatType: "reverse" as const,
               ease: "easeInOut",
-            }
+            },
           };
         }
 
@@ -137,7 +138,6 @@ export default function VoiceOrb({
   className = "",
 }: VoiceOrbProps) {
   const prefersReducedMotion = useReducedMotion();
-  const [pulseScale, setPulseScale] = useState(1);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -150,18 +150,6 @@ export default function VoiceOrb({
     lg: { container: "w-36 h-36 md:w-40 md:h-40", core: "w-24 h-24 md:w-26 md:h-26" },
   }[size];
 
-  // Speaking state: a voice-driven pulse scale
-  useEffect(() => {
-    if (state !== "speaking" || prefersReducedMotion) {
-      setPulseScale(1);
-      return;
-    }
-    const interval = setInterval(() => {
-      setPulseScale(1.02 + Math.sin(Date.now() * 0.015) * 0.02);
-    }, 30);
-    return () => clearInterval(interval);
-  }, [state, prefersReducedMotion]);
-
   if (!mounted) {
     return (
       <div className={`relative flex items-center justify-center ${dims.container} ${className}`} aria-hidden="true" />
@@ -173,14 +161,20 @@ export default function VoiceOrb({
       {/* 3D Soft Ambient Backdrop Glow */}
       {!prefersReducedMotion && (
         <motion.div
-          className="absolute rounded-full pointer-events-none bg-gradient-to-tr from-accent/12 via-accent/18 to-accent/6"
+          className={`absolute rounded-full pointer-events-none ${
+            state === "success"
+              ? "bg-gradient-to-tr from-ok/30 via-ok/40 to-ok/20"
+              : state === "error"
+              ? "bg-gradient-to-tr from-bad/30 via-bad/40 to-bad/20"
+              : "bg-gradient-to-tr from-accent/30 via-accent/45 to-accent/15"
+          }`}
           style={{
-            inset: { sm: "-4px", md: "-16px", lg: "-32px" }[size],
-            filter: { sm: "blur(8px)", md: "blur(20px)", lg: "blur(32px)" }[size],
+            inset: { sm: "-6px", md: "-20px", lg: "-36px" }[size],
+            filter: { sm: "blur(10px)", md: "blur(24px)", lg: "blur(38px)" }[size],
           }}
           animate={{
-            scale: state === "listening" ? 1.1 + volume * 0.15 : state === "speaking" ? 1.08 : 1.01,
-            opacity: state === "listening" ? 0.75 : state === "speaking" ? 0.65 : state === "thinking" ? 0.55 : 0.35,
+            scale: state === "listening" ? 1.15 + volume * 0.2 : state === "speaking" ? 1.12 : 1.03,
+            opacity: state === "listening" ? 0.85 : state === "speaking" ? 0.75 : state === "thinking" ? 0.65 : state === "paused" ? 0.25 : 0.5,
           }}
           transition={{
             scale: { type: "spring", stiffness: 120, damping: 20 },
@@ -189,8 +183,7 @@ export default function VoiceOrb({
         />
       )}
 
-      {/* Contact shadow hugging the sphere's underside (the container is
-          larger than the core, so anchor just below the core's bottom edge). */}
+      {/* Contact shadow */}
       <motion.div
         className="absolute pointer-events-none rounded-full blur-[5px] mix-blend-multiply dark:mix-blend-screen"
         style={{
@@ -198,8 +191,6 @@ export default function VoiceOrb({
           height: { sm: "4px", md: "6px", lg: "9px" }[size],
           bottom: { sm: "2px", md: "9px", lg: "15px" }[size],
           left: "50%",
-          // Centering must ride through motion's transform pipeline (x), or the
-          // animated scaleX would overwrite a CSS translateX and shift it right.
           x: "-50%",
           background: "radial-gradient(ellipse at center, var(--accent-deep) 0%, transparent 70%)",
         }}
@@ -210,45 +201,66 @@ export default function VoiceOrb({
       />
 
       {/* Concentric listening ripples */}
-      {state === "listening" && !prefersReducedMotion && (
+      {!prefersReducedMotion && (state === "listening" || state === "speaking" || state === "idle") && (
         <>
           {[0, 1, 2].map((i) => (
             <motion.div
               key={i}
-              className="absolute rounded-full border border-accent/30 pointer-events-none"
+              className="absolute rounded-full border border-accent/40 pointer-events-none"
               style={{
                 width: { sm: "36px", md: "64px", lg: "96px" }[size],
                 height: { sm: "36px", md: "64px", lg: "96px" }[size],
               }}
-              animate={{ scale: [1, 2.4], opacity: [0.7, 0] }}
+              animate={{
+                scale: state === "listening" ? [1, 2.5] : state === "speaking" ? [1, 2.1] : [1, 1.3, 1],
+                opacity: state === "listening" ? [0.8, 0] : state === "speaking" ? [0.6, 0] : [0.25, 0.05, 0.25],
+              }}
               transition={{
-                duration: 2.0,
+                duration: state === "listening" ? 1.8 : state === "speaking" ? 1.4 : 3.5,
                 repeat: Infinity,
-                delay: i * 0.65,
+                delay: i * 0.5,
                 ease: "easeOut",
-                repeatDelay: 0.2,
               }}
             />
           ))}
         </>
       )}
 
+      {/* Success / Error State Rings */}
+      {state === "success" && (
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1.15, opacity: [0.8, 0] }}
+          transition={{ duration: 1.2, repeat: 1 }}
+          className="absolute inset-0 rounded-full border-2 border-ok pointer-events-none"
+        />
+      )}
+      {state === "error" && (
+        <motion.div
+          initial={{ scale: 1.05 }}
+          animate={{ scale: [1, 1.08, 1] }}
+          transition={{ duration: 0.4, repeat: 2 }}
+          className="absolute inset-0 rounded-full border-2 border-bad pointer-events-none"
+        />
+      )}
+
       {/* 3D-Illusion Core Sphere */}
       <motion.div
         className={`relative flex items-center justify-center rounded-full overflow-hidden shadow-lg select-none pointer-events-none ${dims.core}`}
         animate={{
-          // Always a plain number — no keyframe arrays — so state transitions
-          // never snap mid-cycle. Outer ambient glow handles the breathing.
           scale:
             state === "listening" ? 1.03
             : state === "speaking" ? 1.0 + volume * 0.08
+            : state === "paused" ? 0.95
             : 1,
+          opacity: state === "paused" ? 0.7 : 1,
         }}
         transition={{
           scale: { type: "spring", stiffness: 180, damping: 22 },
+          opacity: { duration: 0.3 },
         }}
       >
-        {/* Layer 1: Core Gradient (light from upper-left) */}
+        {/* Layer 1: Core Gradient */}
         <div 
           className="absolute inset-0 rounded-full" 
           style={{
@@ -256,7 +268,7 @@ export default function VoiceOrb({
           }}
         />
 
-        {/* Layer 1b: Conic energy core (rotates when thinking or speaking) */}
+        {/* Layer 1b: Conic energy core */}
         {(state === "thinking" || state === "speaking") && !prefersReducedMotion && (
           <motion.div
             className="absolute inset-0 rounded-full mix-blend-screen opacity-65"

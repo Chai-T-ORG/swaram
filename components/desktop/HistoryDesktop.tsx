@@ -59,21 +59,31 @@ export default function HistoryDesktop() {
         <>
           <div className="flex items-center justify-between">
             <div role="tablist" aria-label="Filter forms" className="flex gap-1.5">
-              {HISTORY_FILTERS.map((tab) => (
-                <button
-                  key={tab.id}
-                  role="tab"
-                  aria-selected={h.activeFilter === tab.id}
-                  onClick={() => h.setActiveFilter(tab.id)}
-                  className={`cursor-pointer rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-                    h.activeFilter === tab.id
-                      ? "bg-accent text-on-accent"
-                      : "bg-sunken text-soft hover:text-ink"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              {HISTORY_FILTERS.map((tab) => {
+                const active = h.activeFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => h.setActiveFilter(tab.id)}
+                    className={`relative cursor-pointer rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                      active
+                        ? "text-on-accent"
+                        : "bg-sunken text-soft hover:text-ink"
+                    }`}
+                  >
+                    {active && (
+                      <motion.div
+                        layoutId="active-history-tab"
+                        className="absolute inset-0 rounded-full bg-accent -z-10"
+                        transition={{ type: "spring", stiffness: 350, damping: 28 }}
+                      />
+                    )}
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
             <p className="text-xs text-faint">
               {h.totalCount} total · {h.inProgressCount} in progress · {h.completedCount} complete
