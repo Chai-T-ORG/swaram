@@ -28,8 +28,7 @@ export async function POST(req: NextRequest) {
           model: "sarvam-vision",
           language_code: "en-IN",
           output_format: "html",
-          prompt_type: "document_extraction",
-          prompt: "Extract all form fields from this document. Return a JSON structure representing the form, where each field has a 'name', 'type' (text, checkbox, etc), and 'value' if filled."
+          prompt_type: "default_ocr"
         },
       }),
     });

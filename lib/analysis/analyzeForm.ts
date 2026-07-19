@@ -105,32 +105,7 @@ async function analyzeScannedPdf(
     if (sarvamPage) {
       const scaleX = rendered.canvas.width / sarvamPage.image_width;
       const scaleY = rendered.canvas.height / sarvamPage.image_height;
-      
-      for (const block of sarvamPage.blocks) {
-        // We'll treat each block as a single line/row for clustering.
-        // The block coordinates are (x1, y1) to (x2, y2)
-        const bbox = {
-          x0: block.coordinates.x1 * scaleX,
-          y0: block.coordinates.y1 * scaleY,
-          x1: block.coordinates.x2 * scaleX,
-          y1: block.coordinates.y2 * scaleY,
-        };
-        
-        // We simulate words by splitting the text, but keeping the same bbox 
-        // to satisfy the clustering engine without over-complicating word bounding boxes.
-        const words = block.text.split(/\s+/).map(text => ({
-            text,
-            confidence: block.confidence,
-            bbox
-        }));
-        
-        lines.push({
-          text: block.text,
-          confidence: block.confidence,
-          bbox,
-          words,
-        });
-      }
+      lines.push(...convertSarvamBlocksToLines(sarvamPage.blocks, scaleX, scaleY));
     }
 
     allFields.push(
@@ -189,28 +164,7 @@ async function analyzeImage(
   if (sarvamPage) {
     const scaleX = canvas.width / sarvamPage.image_width;
     const scaleY = canvas.height / sarvamPage.image_height;
-    
-    for (const block of sarvamPage.blocks) {
-      const bbox = {
-        x0: block.coordinates.x1 * scaleX,
-        y0: block.coordinates.y1 * scaleY,
-        x1: block.coordinates.x2 * scaleX,
-        y1: block.coordinates.y2 * scaleY,
-      };
-      
-      const words = block.text.split(/\s+/).map(text => ({
-          text,
-          confidence: block.confidence,
-          bbox
-      }));
-      
-      lines.push({
-        text: block.text,
-        confidence: block.confidence,
-        bbox,
-        words,
-      });
-    }
+    lines.push(...convertSarvamBlocksToLines(sarvamPage.blocks, scaleX, scaleY));
   }
 
   const fields = await inferFieldsFromPage(lines, shapes, canvas.width, canvas.height, 0, canvas);
@@ -921,4 +875,67 @@ function findLabelLineForRow(
     }
   }
   return best;
+}
+
+/* ------------------------------------------------------------------ */
+/* Helpers for Sarvam Data                                            */
+/* ------------------------------------------------------------------ */
+
+export interface SarvamBlock {
+  block_id: string;
+  coordinates: { x1: number; y1: number; x2: number; y2: number };
+  layout_tag: string;
+  confidence: number;
+  reading_order: number;
+  text: string;
+}
+
+function convertSarvamBlocksToLines(blocks: SarvamBlock[], scaleX: number, scaleY: number): OcrLine[] {
+  const lines: OcrLine[] = [];
+  for (const block of blocks) {
+    const bbox = {
+      x0: block.coordinates.x1 * scaleX,
+      y0: block.coordinates.y1 * scaleY,
+      x1: block.coordinates.x2 * scaleX,
+      y1: block.coordinates.y2 * scaleY,
+    };
+
+    // Block text usually has multiple lines separated by \n
+    const rawLines = block.text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (rawLines.length === 0) continue;
+
+    // Estimate the height of each line in the block
+    const lineHeight = (bbox.y1 - bbox.y0) / rawLines.length;
+    // Estimate a standard character width (approx 0.5x line height)
+    const charWidth = lineHeight * 0.5;
+
+    rawLines.forEach((lineText, lineIdx) => {
+      const lineY0 = bbox.y0 + (lineIdx * lineHeight);
+      const lineY1 = lineY0 + lineHeight;
+
+      let currentX = bbox.x0;
+      const words = lineText.split(/\s+/).filter(w => w.length > 0).map(word => {
+        const wordWidth = word.length * charWidth;
+        const wX0 = currentX;
+        const wX1 = currentX + wordWidth;
+        currentX = wX1 + charWidth; // add a space width between words
+        return {
+          text: word,
+          confidence: block.confidence,
+          bbox: { x0: wX0, y0: lineY0, x1: wX1, y1: lineY1 }
+        };
+      });
+
+      if (words.length > 0) {
+        const lineX1 = words[words.length - 1].bbox.x1;
+        lines.push({
+          text: lineText,
+          confidence: block.confidence,
+          bbox: { x0: bbox.x0, y0: lineY0, x1: lineX1, y1: lineY1 },
+          words
+        });
+      }
+    });
+  }
+  return lines;
 }
