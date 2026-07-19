@@ -477,11 +477,26 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     ];
   }, [router, navigateWithFeedback, setAssistantLang]);
 
+  /**
+   * One normal form for every matcher lane: NFC (native scripts), lowercase,
+   * apostrophes removed ("let's" → "lets", so /let'?s/ still matches), and all
+   * other punctuation/hyphens become spaces ("Re-take." → "re take") — STT
+   * punctuation habits must never defeat a command regex.
+   */
+  const normalizeUtterance = (t: string) =>
+    t
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .replace(/[.,!?;:"“”()।…|-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
   const runGlobalTranscript = useCallback(
     (transcript: string) => {
       // NFC so native-script (Malayalam/Hindi) regexes compare against the same
       // code-point form the recognizer emits.
-      const heard = transcript.normalize("NFC").toLowerCase().trim();
+      const heard = normalizeUtterance(transcript);
       const commands = [...(pageRef.current.commands ?? []), ...globalCommands()];
       for (const [pattern, handler] of commands) {
         if (pattern.test(heard)) {
@@ -501,7 +516,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const resolveWithLlm = useCallback(
     async (transcript: string) => {
       const actions = getAvailableActions();
-      const lower = transcript.toLowerCase();
+      const lower = normalizeUtterance(transcript);
 
       // Fast lane: an action carrying its own offline matcher.
       for (const a of actions) {
@@ -602,8 +617,18 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
 
     addTranscriptListener(handleTranscript);
 
+    // Dev-only: lets tests inject an utterance as if STT heard it
+    // (scripts/scan-sim.mjs drives voice commands through this).
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as Record<string, unknown>).__swaramSay = (t: string) =>
+        handleTranscript(t, 1);
+    }
+
     return () => {
       removeTranscriptListener(handleTranscript);
+      if (process.env.NODE_ENV !== "production") {
+        delete (window as unknown as Record<string, unknown>).__swaramSay;
+      }
     };
   }, [flashToast, runGlobalTranscript, pathname, addMessage]);
 
