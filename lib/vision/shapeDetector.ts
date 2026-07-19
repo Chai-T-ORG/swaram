@@ -319,45 +319,93 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
   const edges = new cv.Mat();
-  const approx = new cv.Mat();
+  const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    cv.Canny(blurred, edges, 60, 180);
+    cv.Canny(blurred, edges, 50, 150);
+    // Close gaps in the sheet's outline. On textured backgrounds (fabric,
+    // wood grain) the paper edge fragments and never forms one contour
+    // without this.
+    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
 
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
     cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    let bestArea = 0;
+    const frameArea = canvas.width * canvas.height;
+    const minArea = frameArea * 0.1;
+
+    let bestScore = 0;
     let bestPoints: number[] | null = null;
+    let largestIdx = -1;
+    let largestArea = 0;
 
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
-      const peri = cv.arcLength(contour, true);
-      cv.approxPolyDP(contour, approx, 0.03 * peri, true);
-      if ((approx as any).rows === 4) {
-        const rect = cv.boundingRect(approx);
-        const area = rect.width * rect.height;
-        if (area > bestArea && area > canvas.width * canvas.height * 0.15) {
-          bestArea = area;
+      const area = cv.contourArea(contour);
+      if (area > largestArea) {
+        largestArea = area;
+        largestIdx = i;
+      }
+      if (area < minArea) {
+        contour.delete();
+        continue;
+      }
+
+      // The hull is convex by construction; a held sheet (fingers on the
+      // edge, a curled corner) approximates to 5-6 points at tight tolerance
+      // before collapsing to its 4 true corners, hence the escalation.
+      const hull = new cv.Mat();
+      cv.convexHull(contour, hull, false, true);
+      const hullPeri = cv.arcLength(hull, true);
+
+      for (const eps of [0.02, 0.04, 0.06, 0.09]) {
+        const approx = new cv.Mat();
+        cv.approxPolyDP(hull, approx, eps * hullPeri, true);
+        if ((approx as any).rows === 4) {
           const pts: number[] = [];
           for (let j = 0; j < 4; j++) {
             pts.push((approx as any).data32S[j * 2], (approx as any).data32S[j * 2 + 1]);
           }
-          bestPoints = pts;
+          // Prefer large AND rectangular: a paper sheet fills its bounding
+          // box; sprawling background contours don't.
+          const rect = cv.boundingRect(approx);
+          const rectangularity = area / Math.max(1, rect.width * rect.height);
+          const score = area * rectangularity;
+          if (score > bestScore) {
+            bestScore = score;
+            bestPoints = pts;
+          }
+          approx.delete();
+          break;
         }
+        approx.delete();
       }
+      hull.delete();
       contour.delete();
     }
 
-    approx.delete();
+    // Fallback: the outline was found but never approximated to 4 points —
+    // the tightest rotated rectangle around it is still a usable quad.
+    if (!bestPoints && largestIdx >= 0 && largestArea >= minArea) {
+      try {
+        const contour = contours.get(largestIdx);
+        const rotated = cv.minAreaRect(contour);
+        const pts = (cv as any).RotatedRect.points(rotated) as { x: number; y: number }[];
+        bestPoints = pts.flatMap((p) => [p.x, p.y]);
+        contour.delete();
+      } catch {
+        // RotatedRect helpers unavailable — no quad.
+      }
+    }
+
     contours.delete();
     hierarchy.delete();
 
     if (!bestPoints) return null;
-    return sortCorners(bestPoints);
+    return sortCorners(bestPoints.map((v) => Math.round(v)));
   } catch (error) {
     console.warn("[swaram] detectCorners failed:", error);
     return null;
@@ -366,6 +414,7 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
     gray.delete();
     blurred.delete();
     edges.delete();
+    kernel.delete();
   }
 }
 
