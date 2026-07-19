@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { intentRegex } from "@/lib/voice/intlCommands";
 import { saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import { newId, type FormRecord } from "@/lib/types";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
@@ -36,7 +37,8 @@ function quadArea(pts: number[]): number {
 /**
  * A quad worth showing to the user: four distinct corners, convex (the
  * tl/tr/br/bl sort degenerates on garbage contours), inside the frame, and
- * covering a meaningful share of it.
+ * covering a meaningful share of it — but never the frame itself. A quad
+ * that hugs the viewport is the merged-background blob, not the paper.
  */
 function isPlausibleQuad(pts: number[], w: number, h: number): boolean {
   const minGap = Math.max(w, h) * 0.02;
@@ -45,11 +47,14 @@ function isPlausibleQuad(pts: number[], w: number, h: number): boolean {
       if (Math.hypot(pts[i * 2] - pts[j * 2], pts[i * 2 + 1] - pts[j * 2 + 1]) < minGap) return false;
     }
   }
+  let borderCorners = 0;
   for (let i = 0; i < 4; i++) {
     const x = pts[i * 2];
     const y = pts[i * 2 + 1];
     if (x < -w * 0.05 || x > w * 1.05 || y < -h * 0.05 || y > h * 1.05) return false;
+    if (x < w * 0.02 || x > w * 0.98 || y < h * 0.02 || y > h * 0.98) borderCorners++;
   }
+  if (borderCorners >= 3) return false;
   let sign = 0;
   for (let i = 0; i < 4; i++) {
     const ax = pts[((i + 1) % 4) * 2] - pts[i * 2];
@@ -63,7 +68,8 @@ function isPlausibleQuad(pts: number[], w: number, h: number): boolean {
       else if (s !== sign) return false;
     }
   }
-  return quadArea(pts) >= w * h * 0.15;
+  const area = quadArea(pts);
+  return area >= w * h * 0.15 && area <= w * h * 0.95;
 }
 
 export function useScanCapture() {
@@ -74,6 +80,8 @@ export function useScanCapture() {
   const lockStartTimeRef = useRef<number | null>(null);
   const progressAnimRef = useRef<number | null>(null);
   const lastSpokenRef = useRef({ text: "", at: 0 });
+  const guidanceCandidateRef = useRef({ key: "", count: 0 });
+  const seenFormRef = useRef(false);
   const capturingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rawCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -100,18 +108,48 @@ export function useScanCapture() {
   const [torchOn, setTorchOn] = useState(false);
   const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
 
-  // Voice commands gated by cameraState
+  // Voice commands gated by cameraState. English fast lanes are precise
+  // regexes; the multilingual "yes" keywords accept the scan, and the
+  // adaptive actions below catch any other phrasing or language.
   const voiceCommands: [RegExp, () => void, string][] =
     cameraState === "confirm"
       ? [
-          [/retake|scan again/i, () => retake(), "retake"],
-          [/use it|looks good|continue|keep it/i, () => accept(), "use it"],
+          [/retake|scan again|try again/i, () => retake(), "retake"],
+          [
+            new RegExp(`use it|looks good|keep it|continue|${intentRegex("yes").source}`, "iu"),
+            () => accept(),
+            "use it",
+          ],
         ]
       : [
           [/start( the)? camera|open( the)? camera/i, () => startCamera(), "start camera"],
           [/^capture|take (the )?(photo|picture)/i, () => capture(), "capture"],
           [/stop( the)? camera|close( the)? camera/i, () => stopEverything(), "stop camera"],
         ];
+
+  const voiceActions =
+    cameraState === "confirm"
+      ? [
+          { id: "accept_scan", description: "Keep this scan and continue to form analysis.", run: () => accept() },
+          { id: "retake_photo", description: "Discard this scan and take the photo again.", run: () => retake() },
+        ]
+      : cameraState === "active"
+        ? [
+            { id: "capture_photo", description: "Take the photo of the form right now.", run: () => capture() },
+            {
+              id: "upload_file_instead",
+              description: "Stop using the camera and upload a file instead.",
+              run: () => router.push("/upload"),
+            },
+          ]
+        : [
+            { id: "start_camera", description: "Turn the camera on to scan a paper form.", run: () => startCamera() },
+            {
+              id: "upload_file_instead",
+              description: "Upload a file instead of using the camera.",
+              run: () => router.push("/upload"),
+            },
+          ];
 
   useVoicePage(
     {
@@ -125,6 +163,7 @@ export function useScanCapture() {
           ? "Review your scan. You can drag the corner handles to adjust the frame, or say use it or retake."
           : "Scanner page. Say start camera to open the camera, hold your form up with all four corners in the frame, and I will guide you and capture automatically. You can also say capture, or say upload to pick a file instead.",
       commands: voiceCommands,
+      actions: voiceActions,
     },
     [cameraState, cvReady, corners, rotation, warpedPreviewUrl],
   );
@@ -179,6 +218,20 @@ export function useScanCapture() {
     speak(text);
   }
 
+  /**
+   * Guidance with hysteresis: a correction is only spoken after its condition
+   * has held for two consecutive probe ticks (~1s). Detection flickers from
+   * frame to frame, and reacting instantly turns the guide into a nag that
+   * contradicts itself faster than a person can move.
+   */
+  function sayGuidanceStable(key: string, text: string, minGapMs = 3000) {
+    const cand = guidanceCandidateRef.current;
+    if (cand.key === key) cand.count += 1;
+    else guidanceCandidateRef.current = { key, count: 1 };
+    if (guidanceCandidateRef.current.count < 2) return;
+    sayGuidance(text, minGapMs);
+  }
+
   async function checkDeviceCapabilities(stream: MediaStream) {
     try {
       const track = stream.getVideoTracks()[0];
@@ -203,6 +256,8 @@ export function useScanCapture() {
     if (cameraState === "starting") return;
     const targetFacing = overrideFacingMode ?? facingMode;
     stopEverything();
+    guidanceCandidateRef.current = { key: "", count: 0 };
+    seenFormRef.current = false;
     setCameraState("starting");
     setTone("info");
     setGuidance("Starting the camera…");
@@ -324,36 +379,43 @@ export function useScanCapture() {
       // outline is already hugging the sheet.
       const coverage = Math.max(check.coverage, quadCoverage);
 
+      // One warm confirmation the moment the sheet is first tracked — the
+      // user holding paper at arm's length has no other way to know it worked.
+      if (quadCoverage >= 0.2 && !seenFormRef.current) {
+        seenFormRef.current = true;
+        sayGuidance("I can see the form.", 0);
+      }
+
       if (coverage < 0.2) {
         resetAutoCapture();
         setIsDocumentDetected(false);
-        sayGuidance("Move the form closer, so it fills the frame.");
+        sayGuidanceStable("closer", "Bring the phone closer, so the form fills the screen.");
       } else if (check.offsetX < -0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
-        sayGuidance("Move left. Keep the form inside the frame.");
+        sayGuidanceStable("left", "Move the phone a little to the left.");
       } else if (check.offsetX > 0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
-        sayGuidance("Move right. Keep the form inside the frame.");
+        sayGuidanceStable("right", "Move the phone a little to the right.");
       } else if (check.offsetY < -0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
-        sayGuidance("Tilt up. Raise the camera a little.");
+        sayGuidanceStable("up", "Tilt the phone up a little.");
       } else if (check.offsetY > 0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
-        sayGuidance("Tilt down. Lower the camera a little.");
+        sayGuidanceStable("down", "Tilt the phone down a little.");
       } else if (check.sharpness < SHARPNESS_MIN) {
         resetAutoCapture();
         setIsDocumentDetected(true);
-        sayGuidance("Hold steady.");
+        sayGuidanceStable("blur", "Hold the phone still.");
       } else if (quadCoverage === 0) {
         // Sharp and framed, but no confidently tracked outline — never
         // auto-fire blind. The shutter and "capture" voice command still work.
         resetAutoCapture();
         setIsDocumentDetected(true);
-        sayGuidance("Hold steady.");
+        sayGuidanceStable("steady", "Hold it right there.");
       } else {
         // Document locked and sharp! Start/continue smooth progress animation
         setIsDocumentDetected(true);
@@ -415,6 +477,8 @@ export function useScanCapture() {
     resetAutoCapture();
     setCameraState("captured");
     setTone("success");
+    setGuidance("Captured.");
+    speak("Captured.");
 
     // Grab raw full-res frame
     const canvas = document.createElement("canvas");
