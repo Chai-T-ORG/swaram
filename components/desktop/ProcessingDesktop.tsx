@@ -145,16 +145,26 @@ export default function ProcessingDesktop() {
 
               <div className="flex flex-wrap gap-2">
                 {p.autofillable > 0 && (
-                  <span className="chip bg-accent-soft text-xs font-bold text-accent">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.autofillable} auto-fill fields`}
+                    className="chip bg-accent-soft text-xs font-bold text-accent cursor-pointer hover:bg-accent-soft/80"
+                  >
                     <IconSparkle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.autofillable} auto-fill from your profile
-                  </span>
+                  </button>
                 )}
                 {p.unclearCount > 0 && (
-                  <span className="chip bg-warn-soft text-xs font-bold text-warn">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.unclearCount} unclear fields`}
+                    className="chip bg-warn-soft text-xs font-bold text-warn cursor-pointer hover:bg-warn-soft/80"
+                  >
                     <IconAlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.unclearCount} unclear — I&rsquo;ll double-check with you
-                  </span>
+                  </button>
                 )}
               </div>
 

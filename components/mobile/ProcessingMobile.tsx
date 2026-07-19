@@ -59,7 +59,7 @@ export default function ProcessingMobile() {
             )}
             <h1 className="font-display text-2xl leading-tight text-ink">Reading your form…</h1>
             <p className="text-sm text-soft">Usually 20 to 40 seconds.</p>
-            <Link href="/" className="text-xs text-soft underline underline-offset-2 hover:text-ink mt-0.5 no-underline">
+            <Link href="/" className="text-xs text-soft underline underline-offset-2 hover:text-ink mt-0.5">
               Cancel
             </Link>
           </header>
@@ -143,16 +143,26 @@ export default function ProcessingMobile() {
 
               <div className="flex flex-wrap gap-2">
                 {p.autofillable > 0 && (
-                  <span className="chip bg-accent-soft text-[11px] font-bold text-accent">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.autofillable} auto-fill fields`}
+                    className="chip bg-accent-soft text-[11px] font-bold text-accent cursor-pointer hover:bg-accent-soft/80"
+                  >
                     <IconSparkle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.autofillable} auto-fill
-                  </span>
+                  </button>
                 )}
                 {p.unclearCount > 0 && (
-                  <span className="chip bg-warn-soft text-[11px] font-bold text-warn">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.unclearCount} unclear fields`}
+                    className="chip bg-warn-soft text-[11px] font-bold text-warn cursor-pointer hover:bg-warn-soft/80"
+                  >
                     <IconAlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.unclearCount} unclear
-                  </span>
+                  </button>
                 )}
               </div>
 

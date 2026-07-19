@@ -62,7 +62,7 @@ export function useProcessing() {
               () => router.push(`/fill/${formId}`),
               "start filling",
             ],
-            [/preview|review fields/, () => router.push(`/review/${formId}`), "preview fields"],
+            [/preview|review fields/, () => router.push(`/preview/${formId}`), "preview fields"],
           ]
         : [],
       // Adaptive router: any phrasing / language for "begin filling" resolves
@@ -77,7 +77,7 @@ export function useProcessing() {
             {
               id: "preview_fields",
               description: "Preview or review the detected form fields before filling.",
-              run: () => router.push(`/review/${formId}`),
+              run: () => router.push(`/preview/${formId}`),
             },
           ]
         : [],
@@ -234,7 +234,7 @@ export function useProcessing() {
     thumbnailUrl,
     stepState,
     goFill: () => router.push(`/fill/${formId}`),
-    goReview: () => router.push(`/review/${formId}`),
+    goReview: () => router.push(`/preview/${formId}`),
   };
 }
 
