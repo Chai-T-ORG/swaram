@@ -20,6 +20,8 @@ import { isLlmAvailable } from "@/lib/voice/llm";
 import { speak } from "@/lib/voice/textToSpeech";
 import type { FormRecord } from "@/lib/types";
 
+import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdfReader";
+
 export type StepState = "pending" | "active" | "done";
 
 export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
@@ -199,25 +201,69 @@ export function useProcessing() {
 
   const autofillable = record?.fields.filter((f) => f.profileKey && !f.sensitive).length ?? 0;
 
+  const stageIdx = STAGE_ORDER.indexOf(stage as AnalysisStage | "done");
+  const progressRatio =
+    stageIdx >= 0 ? Math.min(1, Math.max(0, (stageIdx + 1) / STAGE_ORDER.length)) : 0;
+
+  const typeBreakdown = record
+    ? (() => {
+        const counts: Record<string, number> = {};
+        for (const f of record.fields) {
+          counts[f.type] = (counts[f.type] || 0) + 1;
+        }
+        return Object.entries(counts)
+          .map(([type, count]) => `${count} ${type}`)
+          .join(" · ");
+      })()
+    : "";
+
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  const recordId = record?.id;
+  const recordSourceType = record?.sourceType;
 
   useEffect(() => {
     let active = true;
-    let url: string | null = null;
+    let createdUrl: string | null = null;
 
-    if (record && record.sourceType === "image") {
+    if (!recordId || !recordSourceType) return;
+
+    if (recordSourceType === "image") {
       getFile(formId, "original").then((blob) => {
         if (!active || !blob) return;
-        url = URL.createObjectURL(blob);
-        setThumbnailUrl(url);
+        createdUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(createdUrl);
+      });
+    } else if (recordSourceType === "pdf") {
+      getFile(formId, "original").then(async (blob) => {
+        if (!active || !blob) return;
+        try {
+          const buffer = await blob.arrayBuffer();
+          if (!active) return;
+          const pdf = await loadPdfDocument(buffer);
+          if (!active) return;
+          try {
+            const rendered = await renderPageToCanvas(pdf, 1, 600);
+            if (!active) return;
+            rendered.canvas.toBlob((b) => {
+              if (!active || !b) return;
+              createdUrl = URL.createObjectURL(b);
+              setThumbnailUrl(createdUrl);
+            }, "image/png");
+          } finally {
+            (pdf as { destroy?: () => void }).destroy?.();
+          }
+        } catch (err) {
+          console.error("Failed to render PDF thumbnail:", err);
+        }
       });
     }
 
     return () => {
       active = false;
-      if (url) URL.revokeObjectURL(url);
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [formId, record]);
+  }, [formId, recordId, recordSourceType]);
 
   return {
     formId,
@@ -231,6 +277,8 @@ export function useProcessing() {
     failed,
     fieldCount,
     autofillable,
+    progressRatio,
+    typeBreakdown,
     thumbnailUrl,
     stepState,
     goFill: () => router.push(`/fill/${formId}`),
