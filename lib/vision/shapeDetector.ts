@@ -311,52 +311,56 @@ function sortCorners(points: number[]): number[] {
   return [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y];
 }
 
+/** Shoelace area of a quad [x0,y0,...,x3,y3]. */
+function quadAreaOf(pts: number[]): number {
+  let area = 0;
+  for (let i = 0; i < 4; i++) {
+    area +=
+      pts[i * 2] * pts[((i + 1) % 4) * 2 + 1] - pts[((i + 1) % 4) * 2] * pts[i * 2 + 1];
+  }
+  return Math.abs(area) / 2;
+}
+
 export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[] | null> {
   const cv = await loadOpenCv();
   if (!cv) return null;
 
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  const edges = new cv.Mat();
+  const work = new cv.Mat();
   const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
 
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    cv.Canny(blurred, edges, 50, 150);
-    // Close gaps in the sheet's outline. On textured backgrounds (fabric,
-    // wood grain) the paper edge fragments and never forms one contour
-    // without this.
-    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
+  const w = canvas.width;
+  const h = canvas.height;
+  const frameArea = w * h;
+  const minArea = frameArea * 0.1;
+  const maxArea = frameArea * 0.95;
+  const borderX = w * 0.02;
+  const borderY = h * 0.02;
 
+  let bestScore = 0;
+  let bestPoints: number[] | null = null;
+
+  /**
+   * Score every plausible 4-corner candidate in a binary mask. The hull is
+   * convex by construction; a held sheet (fingers, curled corner) often
+   * approximates to 5-6 points at tight tolerance before collapsing to its
+   * 4 true corners, hence the epsilon escalation. Quads that hug the frame
+   * are the merged-background blob, never the paper — rejected outright.
+   */
+  const considerContours = (mask: unknown, mode: number) => {
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    const frameArea = canvas.width * canvas.height;
-    const minArea = frameArea * 0.1;
-
-    let bestScore = 0;
-    let bestPoints: number[] | null = null;
-    let largestIdx = -1;
-    let largestArea = 0;
+    cv.findContours(mask as never, contours, hierarchy, mode, cv.CHAIN_APPROX_SIMPLE);
 
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
       const area = cv.contourArea(contour);
-      if (area > largestArea) {
-        largestArea = area;
-        largestIdx = i;
-      }
       if (area < minArea) {
         contour.delete();
         continue;
       }
 
-      // The hull is convex by construction; a held sheet (fingers on the
-      // edge, a curled corner) approximates to 5-6 points at tight tolerance
-      // before collapsing to its 4 true corners, hence the escalation.
       const hull = new cv.Mat();
       cv.convexHull(contour, hull, false, true);
       const hullPeri = cv.arcLength(hull, true);
@@ -369,14 +373,23 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
           for (let j = 0; j < 4; j++) {
             pts.push((approx as any).data32S[j * 2], (approx as any).data32S[j * 2 + 1]);
           }
-          // Prefer large AND rectangular: a paper sheet fills its bounding
-          // box; sprawling background contours don't.
-          const rect = cv.boundingRect(approx);
-          const rectangularity = area / Math.max(1, rect.width * rect.height);
-          const score = area * rectangularity;
-          if (score > bestScore) {
-            bestScore = score;
-            bestPoints = pts;
+          const qa = quadAreaOf(pts);
+          let borderCorners = 0;
+          for (let j = 0; j < 4; j++) {
+            const x = pts[j * 2];
+            const y = pts[j * 2 + 1];
+            if (x < borderX || x > w - borderX || y < borderY || y > h - borderY) borderCorners++;
+          }
+          if (qa >= minArea && qa <= maxArea && borderCorners < 3) {
+            // Prefer large AND rectangular: a paper sheet fills its bounding
+            // box; sprawling background contours don't.
+            const rect = cv.boundingRect(approx);
+            const rectangularity = qa / Math.max(1, rect.width * rect.height);
+            const score = qa * rectangularity;
+            if (score > bestScore) {
+              bestScore = score;
+              bestPoints = pts;
+            }
           }
           approx.delete();
           break;
@@ -387,33 +400,40 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
       contour.delete();
     }
 
-    // Fallback: the outline was found but never approximated to 4 points —
-    // the tightest rotated rectangle around it is still a usable quad.
-    if (!bestPoints && largestIdx >= 0 && largestArea >= minArea) {
-      try {
-        const contour = contours.get(largestIdx);
-        const rotated = cv.minAreaRect(contour);
-        const pts = (cv as any).RotatedRect.points(rotated) as { x: number; y: number }[];
-        bestPoints = pts.flatMap((p) => [p.x, p.y]);
-        contour.delete();
-      } catch {
-        // RotatedRect helpers unavailable — no quad.
-      }
-    }
-
     contours.delete();
     hierarchy.delete();
+  };
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, work, new cv.Size(5, 5), 0);
+
+    // Path A — the paper is usually the brightest region in frame: segment it
+    // directly (robust on busy/colored backgrounds where edges are hopeless).
+    const bright = new cv.Mat();
+    cv.threshold(work, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kernel);
+    considerContours(bright, cv.RETR_EXTERNAL);
+    bright.delete();
+
+    // Path B — edge outline with ONE gentle gap-closing dilation. RETR_LIST,
+    // because on textured backgrounds the dilated texture merges into a blob
+    // and the paper survives only as a hole inside it.
+    const edges = new cv.Mat();
+    cv.Canny(work, edges, 50, 150);
+    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
+    considerContours(edges, cv.RETR_LIST);
+    edges.delete();
 
     if (!bestPoints) return null;
-    return sortCorners(bestPoints.map((v) => Math.round(v)));
+    return sortCorners((bestPoints as number[]).map((v) => Math.round(v)));
   } catch (error) {
     console.warn("[swaram] detectCorners failed:", error);
     return null;
   } finally {
     src.delete();
     gray.delete();
-    blurred.delete();
-    edges.delete();
+    work.delete();
     kernel.delete();
   }
 }
