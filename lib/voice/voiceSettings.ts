@@ -11,6 +11,9 @@
 export type TtsProvider = "system" | "cloud" | "local" | "google";
 /**
  * "groq"         — cloud Whisper via Groq (most accurate, needs internet + key)
+ * "sarvam"       — cloud Sarvam Saaras v3 (best for Indian languages & names,
+ *                  server key). Note: even on other providers, the server
+ *                  promotes Indic-language / name / spell clips to Sarvam.
  * "azure"        — cloud Azure Speech, REST (regional locales, server key + region)
  * "azure-stream" — cloud Azure Speech, real-time streaming SDK: partial results,
  *                  auto language detection, phrase-list biasing. Falls back to
@@ -19,7 +22,7 @@ export type TtsProvider = "system" | "cloud" | "local" | "google";
  * "native"       — the browser's built-in recognition (instant, no download)
  * "auto"         — groq if configured & online, else whisper if ready, else native
  */
-export type SttProvider = "groq" | "azure" | "azure-stream" | "whisper" | "native" | "auto";
+export type SttProvider = "groq" | "sarvam" | "azure" | "azure-stream" | "whisper" | "native" | "auto";
 /**
  * "ptt"        — push-to-talk: capture only while the user holds space / taps
  *                the mic. Reliable in noisy/crowded rooms; nothing is recorded
@@ -118,5 +121,5 @@ export function migrateVoiceSettings(): void {
 }
 
 function isValidSttProvider(provider: any): provider is SttProvider {
-  return ["groq", "azure", "azure-stream", "whisper", "native", "auto"].includes(provider);
+  return ["groq", "sarvam", "azure", "azure-stream", "whisper", "native", "auto"].includes(provider);
 }

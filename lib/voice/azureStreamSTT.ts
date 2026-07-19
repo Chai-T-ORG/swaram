@@ -16,6 +16,7 @@ import type * as SpeechSDKType from "microsoft-cognitiveservices-speech-sdk";
 import { getStream, initMic } from "./micManager";
 import { getVoiceSettings } from "./voiceSettings";
 import { INTL_KEYWORDS } from "./intlCommands";
+import { knownNames } from "./nameDictionary";
 
 export interface AzureStreamHandlers {
   onFinal: (text: string, confidence: number) => void;
@@ -64,7 +65,11 @@ function selectedLocale(): string {
   return getVoiceSettings().sttLang || "en-IN";
 }
 
-/** Command words across all languages, so Azure hears them crisply. */
+/**
+ * Command words across all languages, so Azure hears them crisply — plus the
+ * user's previously-confirmed names, so "Twinsha Thilakan" is biased toward
+ * the exact spelling they already approved.
+ */
 function commandPhrases(): string[] {
   const english = [
     "skip", "next", "repeat", "again", "go back", "previous", "change",
@@ -72,7 +77,7 @@ function commandPhrases(): string[] {
     "type", "spell", "upload", "scan", "profile", "home", "start", "continue",
   ];
   const intl = Object.values(INTL_KEYWORDS).flat();
-  return Array.from(new Set([...english, ...intl])).slice(0, 150);
+  return Array.from(new Set([...english, ...intl, ...knownNames()])).slice(0, 180);
 }
 
 /* ------------------------- shared capture audio --------------------------- */

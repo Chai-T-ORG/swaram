@@ -28,6 +28,30 @@ export function setGroqKey(key: string): void {
   cachedAvailable = false;
 }
 
+/**
+ * Field hint for the server-side engine router: "spell" while the user is
+ * dictating letters, "name" while answering a name field. Hinted clips run the
+ * server's parallel ensemble (every configured engine + LLM fusion) with the
+ * field label and the user's confirmed names as context — the same
+ * inference-time biasing OpenAI/Deepgram/AssemblyAI expose as prompts.
+ */
+export type SttFieldHint = "" | "spell" | "name";
+
+export interface SttFieldContext {
+  /** The form-field label ("Full Name") — steers Whisper/Gemini/fusion. */
+  label?: string;
+  /** Names the user already confirmed — biasing vocabulary for the ensemble. */
+  names?: string[];
+}
+
+let fieldHint: SttFieldHint = "";
+let fieldContext: SttFieldContext = {};
+
+export function setSttFieldHint(hint: SttFieldHint, context: SttFieldContext = {}): void {
+  fieldHint = hint;
+  fieldContext = context;
+}
+
 type TranscriptListener = (text: string, confidence: number) => void;
 const listeners = new Set<TranscriptListener>();
 
@@ -43,6 +67,7 @@ export function removeGroqTranscriptListener(l: TranscriptListener): void {
 let probeState: "unknown" | "probing" | "done" = "unknown";
 let cachedAvailable = false;
 let cachedAzureAvailable = false;
+let cachedSarvamAvailable = false;
 let onFatalFallback: (() => void) | null = null;
 
 /** Register what to do if the cloud engine turns out to be unusable mid-session. */
@@ -69,6 +94,12 @@ export function isAzureConfigured(): boolean {
   return cachedAzureAvailable;
 }
 
+/** Sarvam STT availability — server key only, like Azure. */
+export function isSarvamConfigured(): boolean {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+  return cachedSarvamAvailable;
+}
+
 /** One-time async probe of the server for env-configured cloud STT keys. */
 export async function probeGroqAvailability(): Promise<boolean> {
   if (typeof window === "undefined") return false;
@@ -78,9 +109,10 @@ export async function probeGroqAvailability(): Promise<boolean> {
   probeState = "probing";
   try {
     const res = await fetch("/api/transcribe", { method: "GET" });
-    const data = (await res.json()) as { envKey?: boolean; azure?: boolean };
+    const data = (await res.json()) as { envKey?: boolean; azure?: boolean; sarvam?: boolean };
     cachedAvailable = hasLocal || Boolean(data.envKey);
     cachedAzureAvailable = Boolean(data.azure);
+    cachedSarvamAvailable = Boolean(data.sarvam);
   } catch {
     cachedAvailable = hasLocal;
   }
@@ -124,23 +156,34 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
 }
 
 async function transcribe(pcm: Float32Array, sampleRate: number): Promise<void> {
-  const provider = getVoiceSettings().sttProvider;
-  // Azure's REST endpoint only accepts 16 kHz mono WAV; Groq resamples the
-  // native-rate clip itself, so only pay the downsample cost for Azure. (The
-  // "azure-stream" provider lands here only as its REST fallback.)
-  const azure = provider === "azure" || provider === "azure-stream";
-  const wav = azure ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
+  const settings = getVoiceSettings();
+  const provider = settings.sttProvider;
+  // Azure's REST endpoint only accepts 16 kHz mono WAV, and Sarvam is tuned
+  // for 16 kHz (and hinted clips may be server-promoted to Sarvam) — those
+  // paths get the downsample; Groq resamples the native-rate clip itself.
+  const lang = settings.sttLang || "en-IN";
+  const wants16k =
+    provider === "azure" || provider === "azure-stream" || provider === "sarvam" ||
+    fieldHint !== "" || !lang.startsWith("en");
+  const wav = wants16k ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
   const headers: Record<string, string> = {
     "Content-Type": "audio/wav",
-    "x-language": getVoiceSettings().sttLang || "en-IN",
+    "x-language": lang,
     "x-stt-provider": provider,
   };
+  if (fieldHint) {
+    headers["x-stt-hint"] = fieldHint;
+    if (fieldContext.label) headers["x-field-label"] = encodeURIComponent(fieldContext.label.slice(0, 80));
+    if (fieldContext.names?.length) {
+      headers["x-known-names"] = encodeURIComponent(fieldContext.names.join(", ").slice(0, 240));
+    }
+  }
   const localKey = getGroqKey();
   if (localKey) headers["x-groq-key"] = localKey;
 
   try {
     const res = await fetch("/api/transcribe", { method: "POST", headers, body: wav });
-    const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+    const data = (await res.json().catch(() => ({}))) as { text?: string; provider?: string; error?: string };
     if (!res.ok || data.error) {
       handleFailure(`${res.status} ${data.error ?? ""}`);
       return;
@@ -149,8 +192,11 @@ async function transcribe(pcm: Float32Array, sampleRate: number): Promise<void> 
     hadSuccess = true;
     const text = (data.text ?? "").trim();
     if (!text) return;
+    // Confidence mirrors how the ensemble settled: unanimous engines beat a
+    // fused disagreement, which beats a lone engine's word.
+    const confidence = data.provider === "consensus" ? 0.99 : data.provider === "fusion" ? 0.85 : 0.97;
     for (const l of listeners) {
-      try { l(text, 0.97); } catch (e) { console.error("[GroqSTT] listener", e); }
+      try { l(text, confidence); } catch (e) { console.error("[GroqSTT] listener", e); }
     }
   } catch (err) {
     handleFailure(err instanceof Error ? err.message : String(err));

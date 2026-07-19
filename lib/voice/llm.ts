@@ -103,9 +103,14 @@ export async function correctTranscript(
   raw: string,
   field: { label: string; kind: string; help?: string },
   lang = "en-IN",
+  userNames: string[] = [],
 ): Promise<string> {
   const cleaned = raw.trim();
   if (!isLlmAvailable() || cleaned.length < 2) return cleaned;
+  const namesHint = userNames.length
+    ? `\n- Names this user has already confirmed: ${userNames.slice(-10).join(", ")}. ` +
+      `If the heard text is a close mishearing of one of them, return that name exactly.`
+    : "";
   const sys =
     `You clean up ONE speech-to-text answer a user spoke while filling a form. ` +
     `Reply with ONLY the corrected value — no quotes, no explanation.\n` +
@@ -114,7 +119,8 @@ export async function correctTranscript(
     `- Fix obvious mishearings toward a plausible value for this field.\n` +
     `- NEVER change, add, or drop digits. Keep every number exactly as spoken.\n` +
     `- Do not invent words that weren't said. If it already looks right, return it unchanged.\n` +
-    `- Proper-case names and places. Keep it concise.`;
+    `- Proper-case names and places. Keep it concise.` +
+    namesHint;
   const user =
     `Field: "${field.label}" (type: ${field.kind}).` +
     (field.help ? ` Hint: ${field.help}.` : "") +

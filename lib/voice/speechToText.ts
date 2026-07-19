@@ -24,6 +24,7 @@ import {
 import {
   isGroqConfigured,
   isAzureConfigured,
+  isSarvamConfigured,
   startGroqListening,
   stopGroqListening,
   pauseGroqListening,
@@ -436,14 +437,19 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
     return;
   }
 
-  // ── Cloud STT via our /api/transcribe proxy (Groq or Azure REST) ──
-  const cloudConfigured = provider === "azure" ? isAzureConfigured() : isGroqConfigured();
+  // ── Cloud STT via our /api/transcribe proxy (Groq, Sarvam, or Azure REST) ──
+  const cloudConfigured =
+    provider === "azure"
+      ? isAzureConfigured()
+      : provider === "sarvam"
+        ? isSarvamConfigured() || isGroqConfigured()
+        : isGroqConfigured();
   if (
-    (provider === "groq" || provider === "auto" || provider === "azure") &&
+    (provider === "groq" || provider === "auto" || provider === "azure" || provider === "sarvam") &&
     cloudConfigured &&
     !groqDisabledThisSession
   ) {
-    console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : "Groq"})`);
+    console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : provider === "sarvam" ? "Sarvam" : "Groq"})`);
     startCloudVadCapture(options);
     return;
   }
@@ -475,7 +481,7 @@ function startWhisperOrNative(options: { lang?: string } = {}): void {
   const provider = getVoiceSettings().sttProvider;
   if (
     isWhisperReady() &&
-    (provider === "whisper" || provider === "auto" || provider === "groq" || provider === "azure")
+    (provider === "whisper" || provider === "auto" || provider === "groq" || provider === "azure" || provider === "sarvam")
   ) {
     console.log("[STT] Using Whisper engine");
     usingWhisper = true;
