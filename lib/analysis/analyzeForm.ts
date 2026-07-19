@@ -2,7 +2,7 @@
  * Form analysis pipeline. Everything runs in the browser:
  *
  *   PDF -> AcroForm?  -> yes: read fields via pdf-lib (no OCR)
- *                     -> no:  render pages (pdf.js) -> OCR (tesseract.js)
+ *                     -> no:  Sarvam Document Intelligence -> render pages (pdf.js)
  *                             -> shapes (opencv.js, best-effort)
  *                             -> keyword dictionary matching
  *                             -> column clustering + reading order
@@ -12,10 +12,11 @@ import type { BBox, FormField, PageDim } from "../types";
 import { newId } from "../types";
 import { detectAcroform, extractAcroformFields } from "../pdf/acroformDetector";
 import { loadPdfDocument, renderPageToCanvas, imageBlobToCanvas } from "../pdf/pdfReader";
-import { recognizeCanvas, type OcrLine } from "../ocr/tesseractEngine";
-import { detectShapes, loadOpenCv, preprocessForOcr, type DetectedShape } from "../vision/shapeDetector";
+import type { OcrLine } from "../ocr/tesseractEngine";
+import { detectShapes, loadOpenCv, type DetectedShape } from "../vision/shapeDetector";
 import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
 import { orderFields } from "../vision/fieldClusterer";
+import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
 
 export type AnalysisStage =
   | "reading"      // opening the file
@@ -59,18 +60,20 @@ export async function analyzeForm(
       onProgress({ stage: "ordering", pct: 1 });
       return { isAcroForm: true, fields, pageDims, pageCount, shapesUnavailable: false };
     }
-    return analyzeScannedPdf(bytes, onProgress);
+    return analyzeScannedPdf(blob, bytes, onProgress);
   }
 
   return analyzeImage(blob, onProgress);
 }
 
 async function analyzeScannedPdf(
+  blob: Blob,
   bytes: ArrayBuffer,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
   // Start warming OpenCV while pdf.js renders.
   const cvWarmup = loadOpenCv();
+  const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
 
   const pdf = await loadPdfDocument(bytes);
   const pageCount = Math.min(pdf.numPages, MAX_PAGES);
@@ -82,11 +85,6 @@ async function analyzeScannedPdf(
     const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
     pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
 
-    onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct: 0 });
-    const ocr = await recognizeCanvas(rendered.canvas, (pct) =>
-      onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct }),
-    );
-
     onProgress({ stage: "layout", page: pageIndex + 1, pageCount });
     const cv = await cvWarmup;
     let shapes: DetectedShape[] = [];
@@ -96,9 +94,10 @@ async function analyzeScannedPdf(
       shapesUnavailable = true;
     }
     onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
+    const lines = sarvamPageToLines(sarvam.pages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
     allFields.push(
       ...await inferFieldsFromPage(
-        mergeLinesIntoRows(ocr.lines),
+        mergeLinesIntoRows(lines),
         shapes,
         rendered.canvas.width,
         rendered.canvas.height,
@@ -127,13 +126,7 @@ async function analyzeImage(
 ): Promise<AnalysisResult> {
   const cvWarmup = loadOpenCv();
   const canvas = await imageBlobToCanvas(blob);
-
-  onProgress({ stage: "ocr", page: 1, pageCount: 1, pct: 0 });
-  // Photos benefit from lighting normalization before OCR (no-op without OpenCV).
-  const ocrCanvas = await preprocessForOcr(canvas);
-  const ocr = await recognizeCanvas(ocrCanvas, (pct) =>
-    onProgress({ stage: "ocr", page: 1, pageCount: 1, pct }),
-  );
+  const sarvam = await runSarvamDigitize(blob, "image", onProgress);
 
   onProgress({ stage: "layout" });
   const cv = await cvWarmup;
@@ -146,7 +139,8 @@ async function analyzeImage(
   }
 
   onProgress({ stage: "fields" });
-  const fields = await inferFieldsFromPage(mergeLinesIntoRows(ocr.lines), shapes, canvas.width, canvas.height, 0, canvas);
+  const lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
+  const fields = await inferFieldsFromPage(mergeLinesIntoRows(lines), shapes, canvas.width, canvas.height, 0, canvas);
 
   onProgress({ stage: "ordering" });
   return {
@@ -588,7 +582,7 @@ export async function inferFieldsFromPage(
     });
   }
 
-  // --- Post-processing: Snapping & Crop Refinement ---
+  // --- Post-processing: snap inferred answers to detected writable shapes ---
   const medianLineHeight = (() => {
     const heights = lines.map((l) => l.bbox.y1 - l.bbox.y0).filter((h) => h > 0);
     if (heights.length === 0) return 14;
@@ -601,70 +595,10 @@ export async function inferFieldsFromPage(
       if (field.type !== "checkbox" && field.bbox) {
         field.bbox = snapToNearestShape(field.bbox, shapes, pageW, pageH, medianLineHeight);
       }
-
-      if (field.confidence < 85 && field.source === "ocr" && !field.profileKey && field.bbox) {
-        const labelBBox = {
-          x0: Math.max(0, (field.bbox.x - 0.28) * pageW),
-          y0: field.bbox.y * pageH - 2,
-          x1: field.bbox.x * pageW - 4,
-          y1: (field.bbox.y + field.bbox.h) * pageH + 2,
-        };
-        const refinedLabel = await refineLabelWithCrop(canvas, labelBBox, field.label);
-        if (refinedLabel !== field.label) {
-          field.label = refinedLabel;
-          const dict = matchLabel(refinedLabel);
-          if (dict) {
-            field.label = dict.label;
-            field.profileKey = dict.profileKey;
-            field.sensitive = dict.sensitive;
-            field.type = dict.type;
-            if (dict.type === "choice") {
-              field.options = dict.options;
-            }
-          }
-        }
-      }
     }
   }
 
   return fields.slice(0, 50);
-}
-
-async function refineLabelWithCrop(
-  canvas: HTMLCanvasElement,
-  bbox: { x0: number; y0: number; x1: number; y1: number },
-  currentText: string,
-): Promise<string> {
-  const cropW = bbox.x1 - bbox.x0;
-  const cropH = bbox.y1 - bbox.y0;
-  if (cropW <= 10 || cropH <= 5) return currentText;
-
-  const pad = 4;
-  const x = Math.max(0, bbox.x0 - pad);
-  const y = Math.max(0, bbox.y0 - pad);
-  const w = Math.min(canvas.width - x, cropW + pad * 2);
-  const h = Math.min(canvas.height - y, cropH + pad * 2);
-
-  const crop = document.createElement("canvas");
-  crop.width = w;
-  crop.height = h;
-  const ctx = crop.getContext("2d");
-  if (!ctx) return currentText;
-
-  ctx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-
-  try {
-    const ocr = await recognizeCanvas(crop, undefined, { psm: 7 });
-    const refined = ocr.lines[0]?.text.trim() || "";
-    const cleaned = cleanLabelText(refined);
-    if (cleaned.length >= 2 && cleaned.length <= currentText.length * 1.5) {
-      console.log(`[swaram] Label refined from "${currentText}" to "${cleaned}"`);
-      return cleaned;
-    }
-  } catch (e) {
-    console.warn("[swaram] Crop OCR refinement failed:", e);
-  }
-  return currentText;
 }
 
 function snapToNearestShape(

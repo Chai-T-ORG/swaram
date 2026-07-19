@@ -26,7 +26,7 @@ export type StepState = "pending" | "active" | "done";
 
 export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
   { key: "reading", label: "Opening your form" },
-  { key: "ocr", label: "Reading text content" },
+  { key: "ocr", label: "Reading text with Sarvam AI" },
   { key: "layout", label: "Detecting layout grid" },
   { key: "fields", label: "Identifying input fields" },
   { key: "ordering", label: "Preparing voice checklist" },
@@ -120,9 +120,13 @@ export function useProcessing() {
 
       const result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
-        if (progress.stage === "ocr" && progress.page && progress.pageCount) {
-          const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
-          setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
+        if (progress.stage === "ocr") {
+          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
+          if (progress.page && progress.pageCount) {
+            setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
+          } else {
+            setDetail(pct ? `processing securely with Sarvam AI — ${pct}` : "sending to Sarvam AI");
+          }
         } else {
           setDetail("");
         }
