@@ -1,5 +1,19 @@
 "use client";
 
+/**
+ * VoiceProvider — the headless voice engine of Swaram.
+ *
+ * Owns everything that is NOT presentation: the voice context (public API for
+ * pages), STT/PTT wiring, transcript routing, theme persistence, conversation
+ * logs, mic-volume analysis, model warm-loading, and global voice commands.
+ * The visible shells (mobile/desktop) consume this through useVoice() and
+ * useVoiceShell() and render whatever chrome suits the device.
+ *
+ * The logic here moved verbatim from the original GlobalVoice component; the
+ * consumer-facing contract (VoiceContextValue, useVoice, useVoicePage) is
+ * unchanged.
+ */
+
 import {
   createContext,
   useCallback,
@@ -11,7 +25,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import Link from "next/link";
 import {
   speak,
   cancelSpeech,
@@ -23,7 +36,6 @@ import {
   addTtsStateListener,
   isSpeaking,
 } from "@/lib/voice/textToSpeech";
-import { motion, AnimatePresence } from "framer-motion";
 import { getVoiceSettings, setVoiceSettings, migrateVoiceSettings } from "@/lib/voice/voiceSettings";
 import {
   startContinuousListening,
@@ -56,32 +68,6 @@ import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
 import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from "@/lib/voice/modelManager";
-import { classifyIntent } from "@/lib/voice/intentClassifier";
-import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
-import { logClassification } from "@/lib/voice/intentMetrics";
-import SetupOverlay from "./SetupOverlay";
-import {
-  IconMic,
-  IconX,
-  IconHome,
-  IconDoc,
-  IconSettings,
-  IconHelp,
-  IconWave,
-  IconUser,
-  IconSun,
-  IconMoon,
-  IconCheck,
-  IconRepeat,
-  IconArrowLeft,
-  IconSkip,
-  IconKeyboard,
-  IconPause,
-  IconChevronRight,
-  IconChevronDown,
-  IconShield,
-} from "@/components/icons";
-import Waveform from "./Waveform";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
 
@@ -156,6 +142,37 @@ export function useVoice() {
   return useContext(VoiceContext);
 }
 
+/**
+ * Shell-facing context: everything the visible chrome (top bars, orb dock,
+ * consent dialog) needs beyond the public voice API. Internal to the shells —
+ * pages should keep using useVoice()/useVoicePage().
+ */
+interface VoiceShellValue {
+  exclusive: boolean;
+  pttActive: boolean;
+  isTouch: boolean;
+  theme: "light" | "dark";
+  toggleTheme: () => void;
+  userName: string;
+  greeting: string;
+  showNotice: boolean;
+  dismissNotice: () => void;
+  /** Consent dialog's primary action: acknowledge + start continuous listening. */
+  acknowledgeAndListen: () => void;
+  onMicPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onMicPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onMicPointerCancel: () => void;
+  togglePtt: () => void;
+}
+
+const VoiceShellContext = createContext<VoiceShellValue | null>(null);
+
+export function useVoiceShell(): VoiceShellValue {
+  const ctx = useContext(VoiceShellContext);
+  if (!ctx) throw new Error("useVoiceShell must be used inside VoiceProvider");
+  return ctx;
+}
+
 // Screens the voice can jump to, with the label the assistant speaks.
 const NAV: Record<string, { path: string; label: string }> = {
   home: { path: "/", label: "home" },
@@ -173,10 +190,10 @@ const LANG_CONFIRM: Record<string, string> = {
   "fr-FR": "D'accord, je parle en français maintenant.",
 };
 
-export default function GlobalVoice({ children }: { children: ReactNode }) {
+export default function VoiceProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  
+
   const pageRef = useRef<PageVoiceConfig>({});
   const announcedRef = useRef<string>("");
   const pageListenerRef = useRef<((text: string, confidence: number) => boolean) | null>(null);
@@ -329,13 +346,15 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const toggleTheme = () => {
-    const next = theme === "light" ? "dark" : "light";
-    setTheme(next);
-    localStorage.setItem("swaram_theme", next);
-    document.documentElement.classList.add(next);
-    document.documentElement.classList.remove(theme);
-  };
+  const toggleTheme = useCallback(() => {
+    setTheme((current) => {
+      const next = current === "light" ? "dark" : "light";
+      localStorage.setItem("swaram_theme", next);
+      document.documentElement.classList.add(next);
+      document.documentElement.classList.remove(current);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     // Read user name from profile
@@ -699,14 +718,20 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     return unsub;
   }, []);
 
-  // Detect coarse-pointer / touch input once on mount so push-to-talk can adapt
+  // Detect coarse-pointer / touch input or mobile viewport so push-to-talk can adapt
   // its interaction model (tap-toggle) and its on-screen copy ("Tap to talk").
   useEffect(() => {
-    setIsTouch(
-      (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
-        "ontouchstart" in window ||
-        navigator.maxTouchPoints > 0,
-    );
+    const checkTouch = () => {
+      setIsTouch(
+        (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
+          "ontouchstart" in window ||
+          navigator.maxTouchPoints > 0 ||
+          window.innerWidth < 768
+      );
+    };
+    checkTouch();
+    window.addEventListener("resize", checkTouch);
+    return () => window.removeEventListener("resize", checkTouch);
   }, []);
 
   // Surface real-time (Azure streaming) status so failures are visible instead
@@ -808,11 +833,11 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         void endPtt();
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
       if (holding) cancelPtt();
     };
   }, [micMode, beginPtt, endPtt]);
@@ -839,7 +864,7 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
       if (Math.hypot(e.clientX - x, e.clientY - y) > 12) moved = true;
     };
     const onUp = (e: PointerEvent) => {
-      if (e.pointerType === "mouse") return; // desktop uses hold-to-talk
+      if (e.pointerType === "mouse" && window.innerWidth >= 768) return; // desktop uses hold-to-talk
       if (moved || Date.now() - downAt > 600) return; // a scroll or long-press, not a tap
       if (!isSetupComplete() || showNotice) return; // don't fight the setup/consent UI
       const el = e.target as HTMLElement | null;
@@ -871,11 +896,15 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
         }
         event.preventDefault();
         wakeMic();
-      } else if (sttState === "off" && event instanceof KeyboardEvent && event.code === "Space") {
-        const target = event.target as HTMLElement | null;
-        if (target && target !== document.body && target.tagName !== "MAIN") return;
-        event.preventDefault();
-        startListeningNow();
+      } else if (event instanceof KeyboardEvent && event.code === "Space") {
+        // Always prevent the browser from scrolling on Space, unless the
+        // user is typing in a form field.
+        if (!isTypingTarget(event.target)) {
+          event.preventDefault();
+        }
+        if (sttState === "off") {
+          startListeningNow();
+        }
       }
     }
     window.addEventListener("click", onWakeTrigger);
@@ -1023,520 +1052,32 @@ export default function GlobalVoice({ children }: { children: ReactNode }) {
     setFillContext,
   };
 
-  const isHome = pathname === "/";
+  const shellValue: VoiceShellValue = {
+    exclusive,
+    pttActive,
+    isTouch,
+    theme,
+    toggleTheme,
+    userName,
+    greeting,
+    showNotice,
+    dismissNotice: () => setShowNotice(false),
+    acknowledgeAndListen: () => {
+      acknowledgeCloudNotice();
+      setShowNotice(false);
+      startContinuousListening();
+    },
+    onMicPointerDown,
+    onMicPointerUp,
+    onMicPointerCancel,
+    togglePtt,
+  };
 
   return (
     <VoiceContext.Provider value={contextValue}>
-      <SetupOverlay />
-      <div className="flex h-screen w-screen overflow-hidden flex-col bg-surface text-ink md:flex-row">
-        {/* LEFT SIDEBAR - Desktop only */}
-        {!exclusive && (
-          <aside className="hidden w-72 shrink-0 flex-col justify-between border-r border-line bg-raised p-6 md:flex h-full overflow-y-auto">
-            {!isHome ? (
-              <div className="flex flex-col gap-8">
-                {/* Logo */}
-                <Link
-                  href="/"
-                  className="flex items-center gap-3 rounded-full py-1 font-semibold text-ink no-underline focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  <span className="grid h-10 w-10 place-items-center rounded-2xl bg-accent text-white shadow-md">
-                    <IconWave className="h-5.5 w-5.5" />
-                  </span>
-                  <div>
-                    <span className="font-display text-lg tracking-tight font-extrabold block leading-tight">SWARAM</span>
-                    <span className="text-[10px] text-faint block -mt-0.5 font-bold tracking-wide">Your voice. Our help.</span>
-                  </div>
-                </Link>
-
-                {/* Workflow Stepper Navigation */}
-                <div className="flex flex-col gap-2">
-                  <span className="text-[10px] font-bold text-faint uppercase tracking-wider mb-2">Workflow Progress</span>
-                  <div className="flex flex-col relative pl-4 border-l border-line gap-5">
-                    {[
-                      { label: "Start", step: 1 },
-                      { label: "Import Form", step: 2 },
-                      { label: "Preparing Document", step: 3 },
-                      { label: "Voice Guidance", step: 4 },
-                      { label: "Review Answers", step: 5 },
-                      { label: "Submit & Export", step: 6 },
-                    ].map((step) => {
-                      const activeStep = (() => {
-                        if (pathname === "/") return 1;
-                        if (pathname === "/upload" || pathname === "/scan") return 2;
-                        if (pathname.startsWith("/processing/")) return 3;
-                        if (pathname.startsWith("/fill/")) return 4;
-                        if (pathname.startsWith("/review/")) return 5;
-                        if (pathname.startsWith("/complete/")) return 6;
-                        return 0; // secondary pages
-                      })();
-
-                      const isActive = step.step === activeStep;
-                      const isCompleted = activeStep > step.step && activeStep !== 0;
-                      const stepPath = (() => {
-                        if (step.step === 1) return "/";
-                        if (step.step === 2) return "/upload";
-                        if (!activeFormId) return "";
-                        if (step.step === 3) return `/processing/${activeFormId}`;
-                        if (step.step === 4) return `/fill/${activeFormId}`;
-                        if (step.step === 5) return `/review/${activeFormId}`;
-                        if (step.step === 6) return `/complete/${activeFormId}`;
-                        return "";
-                      })();
-
-                      const linkContent = (
-                        <span className={`text-xs font-bold transition-colors ${
-                          isActive ? "text-accent" : isCompleted ? "text-ink" : "text-faint"
-                        }`}>
-                          {step.label}
-                        </span>
-                      );
-
-                      return (
-                        <div key={step.label} className="relative flex items-center justify-between group">
-                          {/* Dot indicator on the timeline line */}
-                          <span className={`absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 transition-all duration-300 ${
-                            isCompleted
-                              ? "bg-ok border-ok scale-110"
-                              : isActive
-                              ? "bg-accent border-accent ring-4 ring-accent/15 scale-110"
-                              : "bg-surface border-line"
-                          }`} />
-                          
-                          {stepPath ? (
-                            <Link href={stepPath} className="no-underline hover:opacity-90">
-                              {linkContent}
-                            </Link>
-                          ) : (
-                            <span>{linkContent}</span>
-                          )}
-
-                          {isActive && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Secondary links (My Forms / Profile) */}
-                <div className="border-t border-line/65 pt-4.5 mt-2 flex flex-col gap-1.5">
-                  <span className="text-[10px] font-bold text-faint uppercase tracking-wider mb-1">Account &amp; History</span>
-                  {[
-                    { label: "My Forms", href: "/history", icon: <IconDoc className="h-4 w-4" /> },
-                    { label: "Profile & Settings", href: "/profile", icon: <IconUser className="h-4 w-4" /> },
-                  ].map((link) => {
-                    const active = pathname === link.href;
-                    return (
-                      <Link
-                        key={link.label}
-                        href={link.href}
-                        className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-2xl font-bold transition-all duration-300 text-xs ${
-                          active
-                            ? "bg-accent/10 text-accent shadow-sm"
-                            : "text-soft hover:bg-surface hover:text-ink"
-                        }`}
-                      >
-                        {link.icon}
-                        <span>{link.label}</span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              // Sidebar is empty placeholder because the fixed Voice Assistant covers it on Home page
-              <div className="flex-1" />
-            )}
-          </aside>
-        )}
-
-        {/* GLOBAL VOICE ASSISTANT */}
-        {(!exclusive || isHome) && (
-          <div
-            onClick={() => {
-              // Continuous mode: tap wakes the mic. Touch push-to-talk: tap
-              // toggles listening. Desktop push-to-talk: the pointer handlers
-              // own the hold interaction, so onClick is a no-op there.
-              if (micMode !== "ptt") wakeMic();
-              else if (isTouch) togglePtt();
-            }}
-            onPointerDown={onMicPointerDown}
-            onPointerUp={onMicPointerUp}
-            onPointerCancel={onMicPointerCancel}
-            role="button"
-            tabIndex={0}
-            aria-label={
-              micMode === "ptt"
-                ? isTouch
-                  ? "Tap to talk, tap again to send"
-                  : "Hold to talk, release to send"
-                : "Tap to listen"
-            }
-            className={`fixed touch-none select-none transition-all duration-700 ease-in-out overflow-hidden bg-raised border border-line ${
-              isHome
-                ? "top-[90px] left-4 right-4 h-[320px] rounded-3xl shadow-md z-40 flex flex-col items-center justify-between p-6 md:top-0 md:left-0 md:bottom-0 md:right-auto md:w-72 md:h-full md:rounded-none md:border-r md:border-b-0 md:shadow-none"
-                : "bottom-4 left-4 right-4 h-20 rounded-2xl shadow-lg z-50 flex items-center justify-between px-4 py-3 bg-raised/95 backdrop-blur md:bottom-6 md:left-auto md:right-6 md:w-80 md:h-[155px] md:rounded-[28px] md:flex-col md:p-4"
-            }`}
-          >
-            {isHome ? (
-              // Large Home Assistant layout
-              <div className="flex flex-col items-center justify-between h-full w-full gap-4">
-                {/* Logo - Desktop only */}
-                <div className="hidden md:flex items-center gap-3 w-full border-b border-line pb-4">
-                  <span className="grid h-10 w-10 place-items-center rounded-2xl bg-accent text-white shadow-md">
-                    <IconWave className="h-5.5 w-5.5" />
-                  </span>
-                  <div>
-                    <span className="font-display text-lg tracking-tight font-extrabold block leading-tight">SWARAM</span>
-                    <span className="text-[10px] text-faint block -mt-0.5 font-bold tracking-wide">Your voice. Our help.</span>
-                  </div>
-                </div>
-
-                {/* Orb and Pulses */}
-                <div className="flex-grow flex flex-col items-center justify-center gap-6 py-4 w-full">
-                  <div className="relative flex items-center justify-center w-36 h-36 md:w-40 md:h-40">
-                    {/* Concentric pulses */}
-                    <motion.div
-                      className="absolute -inset-6 rounded-full border border-teal-500/20 bg-teal-500/5"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.4 : ttsActive ? 1.05 + Math.sin(Date.now() * 0.01) * 0.05 : 1,
-                        opacity: sttState === "listening" ? 0.3 + micVolume * 0.7 : ttsActive ? 0.4 : 0.15,
-                      }}
-                      transition={{ type: "spring", stiffness: 180, damping: 15 }}
-                    />
-                    <motion.div
-                      className="absolute -inset-3 rounded-full border border-teal-500/30 bg-teal-500/10"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.25 : ttsActive ? 1.03 + Math.sin(Date.now() * 0.015) * 0.03 : 1,
-                        opacity: sttState === "listening" ? 0.4 + micVolume * 0.6 : ttsActive ? 0.5 : 0.25,
-                      }}
-                      transition={{ type: "spring", stiffness: 200, damping: 18 }}
-                    />
-                    {/* Outer morphing blob */}
-                    <motion.div
-                      className="absolute inset-0 bg-[#f0fdfa] dark:bg-[#002e2c]/40 border border-[#ccfbf1] dark:border-[#115e59]/30 rounded-full shadow-inner"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.18 : ttsActive ? 1.02 + Math.sin(Date.now() * 0.02) * 0.02 : 1,
-                        borderRadius: [
-                          "42% 58% 70% 30% / 45% 45% 55% 55%",
-                          "70% 30% 52% 48% / 60% 40% 60% 40%",
-                          "50% 50% 35% 65% / 40% 60% 45% 55%",
-                          "42% 58% 70% 30% / 45% 45% 55% 55%",
-                        ]
-                      }}
-                      transition={{
-                        scale: { type: "spring", stiffness: 200, damping: 15 },
-                        borderRadius: { repeat: Infinity, duration: 8, ease: "easeInOut" }
-                      }}
-                    />
-                    {/* Inner wobbly blob */}
-                    <motion.div
-                      className="absolute inset-3 bg-[#ccfbf1] dark:bg-[#004d47]/30 border border-[#99f6e4]/40 rounded-full"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.1 : ttsActive ? 1.01 + Math.sin(Date.now() * 0.02) * 0.01 : 1,
-                        borderRadius: [
-                          "70% 30% 52% 48% / 60% 40% 60% 40%",
-                          "50% 50% 35% 65% / 40% 60% 45% 55%",
-                          "42% 58% 70% 30% / 45% 45% 55% 55%",
-                          "70% 30% 52% 48% / 60% 40% 60% 40%",
-                        ]
-                      }}
-                      transition={{
-                        scale: { type: "spring", stiffness: 220, damping: 18 },
-                        borderRadius: { repeat: Infinity, duration: 10, ease: "easeInOut" }
-                      }}
-                    />
-                    {/* Inner Core */}
-                    <motion.div
-                      className="relative flex items-center justify-center bg-accent text-white rounded-full shadow-lg w-20 h-20 md:w-24 md:h-24"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.08 : ttsActive ? 1.01 + Math.sin(Date.now() * 0.02) * 0.01 : 1,
-                      }}
-                      transition={{ type: "spring", stiffness: 240, damping: 20 }}
-                    >
-                      <IconWave className="w-8 h-8 md:w-9 md:h-9" />
-                    </motion.div>
-                  </div>
-
-                  {/* Status texts */}
-                  <div className="text-center">
-                    <h3 className="font-display text-lg font-bold text-ink leading-tight">
-                      {sttState === "listening"
-                        ? micMode === "ptt" ? "Listening…" : "Listening..."
-                        : sttState === "paused-silence"
-                        ? "Microphone Paused"
-                        : micMode === "ptt"
-                        ? isTouch ? "Tap to talk" : "Hold to talk"
-                        : "Microphone Off"}
-                    </h3>
-                    <p className="text-xs text-soft mt-1 max-w-[200px] leading-relaxed font-semibold">
-                      {sttState === "listening"
-                        ? micMode === "ptt"
-                          ? isTouch ? "Speak now, then tap to send." : "Speak now, then release."
-                          : "Speak naturally, I'll take it from here."
-                        : micMode === "ptt"
-                        ? isTouch ? "Tap anywhere to talk, tap again to send." : "Hold the space bar or tap here, then speak."
-                        : "Tap to resume listening"}
-                    </p>
-                  </div>
-
-                  {/* Horizontal Bar Waveform */}
-                  <div className="w-full max-w-[180px] -mt-2">
-                    <Waveform active={sttState === "listening"} speaking={ttsActive} volume={micVolume} />
-                  </div>
-                </div>
-
-                {/* Try Saying Card - Desktop only */}
-                <div className="hidden md:flex flex-col gap-2 w-full bg-surface border border-line rounded-2xl p-3.5 text-left shadow-sm">
-                  <span className="text-[10px] font-bold text-faint uppercase tracking-wider">Try saying</span>
-                  <p className="text-xs font-bold text-ink flex items-center justify-between">
-                    <span>&ldquo;Upload my scholarship form&rdquo;</span>
-                    <IconChevronRight className="h-3.5 w-3.5 text-soft animate-pulse" />
-                  </p>
-                </div>
-
-                {/* Privacy Badge - Desktop only */}
-                <div className="hidden md:flex items-center gap-2.5 border-t border-line pt-4 w-full text-[10px] text-faint font-bold">
-                  <IconShield className="h-4.5 w-4.5 text-accent" />
-                  <span>Your data stays private. Always secure.</span>
-                </div>
-              </div>
-            ) : (
-              // Minimized / Floating Assistant Layout
-              <>
-                {/* Mobile View */}
-                <div className="flex md:hidden items-center justify-between w-full h-full gap-3">
-                  <div className="relative flex items-center justify-center w-12 h-12 shrink-0">
-                    <motion.div
-                      className="absolute inset-0 bg-accent-soft/30 rounded-full"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.3 : ttsActive ? 1.05 : 1,
-                        borderRadius: [
-                          "42% 58% 70% 30% / 45% 45% 55% 55%",
-                          "70% 30% 52% 48% / 60% 40% 60% 40%",
-                          "42% 58% 70% 30% / 45% 45% 55% 55%",
-                        ]
-                      }}
-                      transition={{
-                        scale: { type: "spring", stiffness: 200, damping: 15 },
-                        borderRadius: { repeat: Infinity, duration: 6, ease: "easeInOut" }
-                      }}
-                    />
-                    <motion.div
-                      className="relative flex items-center justify-center bg-accent text-white rounded-full w-9 h-9 shadow-sm"
-                      animate={{
-                        scale: sttState === "listening" ? 1 + micVolume * 0.1 : 1,
-                      }}
-                    >
-                      <IconWave className="w-4.5 h-4.5" />
-                    </motion.div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-ink leading-tight truncate">
-                      {sttState === "listening" ? "Swaram is listening" : "Swaram is paused"}
-                    </p>
-                    <p className="text-[10px] text-soft mt-0.5 truncate">
-                      {toast ||
-                        (micMode === "ptt" && isTouch
-                          ? sttState === "listening"
-                            ? "Tap anywhere to send"
-                            : "Tap anywhere to talk"
-                          : "Speak naturally")}
-                    </p>
-                  </div>
-                  <div className="w-16 shrink-0">
-                    <Waveform active={sttState === "listening"} speaking={ttsActive} volume={micVolume} />
-                  </div>
-                </div>
-
-                {/* Desktop View */}
-                <div className="hidden md:flex flex-col justify-between w-full h-full gap-2">
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex items-center justify-center w-12 h-12 shrink-0">
-                      <motion.div
-                        className="absolute inset-0 bg-accent-soft/30 rounded-full"
-                        animate={{
-                          scale: sttState === "listening" ? 1 + micVolume * 0.3 : ttsActive ? 1.05 : 1,
-                          borderRadius: [
-                            "42% 58% 70% 30% / 45% 45% 55% 55%",
-                            "70% 30% 52% 48% / 60% 40% 60% 40%",
-                            "42% 58% 70% 30% / 45% 45% 55% 55%",
-                          ]
-                        }}
-                        transition={{
-                          scale: { type: "spring", stiffness: 200, damping: 15 },
-                          borderRadius: { repeat: Infinity, duration: 6, ease: "easeInOut" }
-                        }}
-                      />
-                      <motion.div
-                        className="relative flex items-center justify-center bg-accent text-white rounded-full w-9 h-9 shadow-sm"
-                        animate={{
-                          scale: sttState === "listening" ? 1 + micVolume * 0.1 : 1,
-                        }}
-                      >
-                        <IconWave className="w-4.5 h-4.5" />
-                      </motion.div>
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-ink leading-tight">
-                        {sttState === "listening" ? "Swaram is listening..." : "Microphone paused"}
-                      </p>
-                      <p className="text-[11px] text-soft mt-0.5">
-                        {toast || "Ask me anything"}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="border-t border-line pt-2">
-                    <Waveform active={sttState === "listening"} speaking={ttsActive} volume={micVolume} />
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* MOBILE HEADER - Mobile only */}
-        {!exclusive && (
-          <header className="sticky top-0 z-30 flex items-center justify-between border-b border-line bg-raised/80 px-5 py-3.5 backdrop-blur-md md:hidden">
-            <Link href="/" className="flex items-center gap-2.5 font-semibold text-ink no-underline">
-              <span className="grid h-8.5 w-8.5 place-items-center rounded-xl bg-accent text-white shadow-sm">
-                <IconWave className="h-4.5 w-4.5" />
-              </span>
-              <span className="font-display text-[1.15rem] font-bold tracking-tight">SWARAM</span>
-            </Link>
-            <div className="flex items-center gap-3.5">
-              {/* Theme Toggle */}
-              <button
-                onClick={toggleTheme}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-line bg-raised text-soft shadow-sm hover:bg-surface cursor-pointer"
-                aria-label="Toggle theme"
-              >
-                {theme === "light" ? <IconMoon className="h-4.5 w-4.5" /> : <IconSun className="h-4.5 w-4.5" />}
-              </button>
-              <Link href="/profile" className="flex items-center justify-center h-8.5 w-8.5 rounded-full bg-accent font-display text-[13px] font-bold text-white uppercase no-underline">
-                {userName.charAt(0)}
-              </Link>
-            </div>
-          </header>
-        )}
-
-        {/* MAIN BODY AREA */}
-        <div className={`flex flex-1 flex-col min-w-0 bg-surface h-full ${exclusive ? "overflow-hidden" : "overflow-y-auto"}`}>
-          {/* HEADER BAR FOR DESKTOP */}
-          {!exclusive && (
-            <header className="hidden md:flex items-center justify-between border-b border-line bg-raised px-8 py-5">
-              <div>
-                <h1 className="font-display text-2xl font-bold flex items-center gap-2 leading-none text-ink">
-                  {greeting ? `${greeting}, ` : ""}{userName}
-                  {greeting && (
-                    <span className="text-accent ml-2 shrink-0">
-                      {new Date().getHours() < 12 ? (
-                        <IconSun className="h-5.5 w-5.5 inline align-text-bottom" />
-                      ) : new Date().getHours() < 17 ? (
-                        <IconSun className="h-5.5 w-5.5 inline align-text-bottom" />
-                      ) : (
-                        <IconMoon className="h-5.5 w-5.5 inline align-text-bottom" />
-                      )}
-                    </span>
-                  )}
-                </h1>
-                <p className="text-xs text-soft font-semibold mt-1">
-                  {pathname === "/" 
-                    ? "I'm here to help you fill any form. Just speak, I'll handle the rest." 
-                    : "Let's get your form filled with ease."}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-4">
-                {/* Theme Toggle Sun/Moon pill */}
-                <button
-                  onClick={toggleTheme}
-                  className="flex items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-sm hover:bg-surface/50 transition-colors cursor-pointer"
-                  aria-label="Toggle theme"
-                >
-                  <span className={`grid h-7 w-7 place-items-center rounded-full transition-all duration-200 ${theme === "light" ? "bg-accent-soft text-accent" : "text-faint"}`}>
-                    <IconSun className="h-4 w-4" />
-                  </span>
-                  <span className={`grid h-7 w-7 place-items-center rounded-full transition-all duration-200 ${theme === "dark" ? "bg-accent-soft text-accent" : "text-faint"}`}>
-                    <IconMoon className="h-4 w-4" />
-                  </span>
-                </button>
-
-                {/* User Dropdown Badge */}
-                <Link
-                  href="/profile"
-                  className="flex items-center gap-3 rounded-2xl border border-line bg-surface pl-3 pr-3.5 py-1.5 shadow-sm hover:bg-surface/50 no-underline text-ink transition-colors"
-                >
-                  <span className="grid h-8 w-8 place-items-center rounded-full bg-accent font-display text-xs font-bold text-white uppercase shrink-0">
-                    {userName.charAt(0)}
-                  </span>
-                  <div className="text-left leading-none">
-                    <p className="text-xs font-bold text-ink">{userName}</p>
-                    <p className="text-[10px] font-bold text-faint mt-0.5">Active profile</p>
-                  </div>
-                  <IconChevronDown className="h-3.5 w-3.5 text-faint ml-1 shrink-0" strokeWidth={2.5} />
-                </Link>
-              </div>
-            </header>
-          )}
-
-          <main id="main" className={exclusive ? "w-full flex-1 flex flex-col h-full overflow-hidden" : "mx-auto w-full max-w-5xl flex-1 px-5 pb-32 pt-6 md:px-8 md:pt-8"}>
-            {children}
-          </main>
-
-          {!exclusive && (
-            <footer className="border-t border-line py-5 text-center text-xs text-faint flex flex-col sm:flex-row items-center justify-between px-8 gap-2 bg-raised">
-              <p>Private by design &mdash; form parsing, OCR, and speech happen locally on your device.</p>
-              <span className="flex items-center gap-1.5 font-semibold text-accent shrink-0">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                Offline ready
-              </span>
-            </footer>
-          )}
-        </div>
-
-        {/* ONE-TIME PRIVACY NOTICE DIALOG */}
-        {showNotice && (
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="Speech privacy notice"
-            className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4 backdrop-blur-sm"
-          >
-            <div className="card max-w-md">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <h2 className="font-display text-xl font-bold">Before we use your voice</h2>
-                <button
-                  type="button"
-                  aria-label="Close"
-                  className="grid h-9 w-9 place-items-center rounded-full text-soft hover:bg-surface"
-                  onClick={() => setShowNotice(false)}
-                >
-                  <IconX className="h-4 w-4" />
-                </button>
-              </div>
-              <p className="mb-5 text-[0.95rem] leading-relaxed text-soft">{CLOUD_FALLBACK_NOTICE}</p>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    acknowledgeCloudNotice();
-                    setShowNotice(false);
-                    startContinuousListening();
-                  }}
-                >
-                  Continue with voice
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => setShowNotice(false)}>
-                  Use buttons instead
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <VoiceShellContext.Provider value={shellValue}>
+        {children}
+      </VoiceShellContext.Provider>
     </VoiceContext.Provider>
   );
 }
