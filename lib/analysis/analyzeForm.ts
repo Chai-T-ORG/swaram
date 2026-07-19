@@ -284,6 +284,61 @@ function groupsLookLikeOptions(groups: WordGroup[]): boolean {
   );
 }
 
+const OPTION_MARKER = /[☐☑☒□○◯◉●]/g;
+
+/** Sarvam preserves checkbox/radio glyphs in text blocks; use them as the
+ * source of truth for option labels instead of guessing from nearby boxes. */
+function markedOptions(text: string): string[] {
+  const values: string[] = [];
+  const marker = new RegExp(OPTION_MARKER.source, "g");
+  while (marker.exec(text)) {
+    const next = text.slice(marker.lastIndex).search(OPTION_MARKER);
+    const end = next < 0 ? text.length : marker.lastIndex + next;
+    const value = cleanLabelText(text.slice(marker.lastIndex, end))
+      .replace(/\b(encircle|tick|choose|select)\b.*$/i, "")
+      .trim();
+    if (value.length >= 2) values.push(value);
+  }
+  return values;
+}
+
+function markedOptionsNear(lines: OcrLine[], line: OcrLine): string[] {
+  const values = markedOptions(line.text);
+  for (const candidate of lines) {
+    if (candidate === line || candidate.bbox.x0 < line.bbox.x1 - 4) continue;
+    if (!overlapY(candidate.bbox.y0, candidate.bbox.y1, line.bbox.y0 - 8, line.bbox.y1 + 8)) continue;
+    values.push(...markedOptions(candidate.text));
+  }
+  return [...new Set(values)];
+}
+
+function choiceGroups(values: string[], line: OcrLine): WordGroup[] {
+  const width = (line.bbox.x1 - line.bbox.x0) / values.length;
+  return values.map((text, index) => {
+    const x0 = line.bbox.x0 + width * index;
+    const x1 = x0 + width;
+    return {
+      text,
+      x0,
+      x1,
+      words: [{ text, confidence: line.confidence, bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 } }],
+    };
+  });
+}
+
+/**
+ * A row of many adjacent squares is a comb (one character per cell), not a
+ * multiple-choice control. Known identity fields are combs even when their
+ * cells are grouped with larger visual gaps (for example Aadhaar 4-4-4).
+ */
+function isCombRow(row: DetectedShape[], label: string): boolean {
+  const normalized = normalizeLabel(label);
+  return (
+    row.length >= 7 ||
+    /\b(full name|name of applicant|aadhaar|aadhar|pan|mobile|pin code|date of birth)\b/.test(normalized)
+  );
+}
+
 export async function inferFieldsFromPage(
   lines: OcrLine[],
   shapes: DetectedShape[],
@@ -386,11 +441,37 @@ export async function inferFieldsFromPage(
     const dict = labelLine ? matchLabel(labelText) : null;
     if (isNonFillableLabel(labelText)) continue;
 
+    if (isCombRow(row, labelText)) {
+      const x0 = Math.min(...row.map((box) => box.x));
+      const x1 = Math.max(...row.map((box) => box.x + box.w));
+      fields.push({
+        id: newId(),
+        label: dict?.label ?? cleanLabelText(labelText),
+        type: "comb",
+        combLength: row.length,
+        page: pageIndex,
+        bbox: toFraction(x0, rowTop, x1 - x0, rowBottom - rowTop, pageW, pageH),
+        order: fields.length,
+        confidence: Math.round(labelLine?.confidence ?? 70),
+        source: "ocr",
+        profileKey: dict?.profileKey,
+        sensitive: dict?.sensitive,
+        value: "",
+        status: "pending",
+      });
+      row.forEach((box) => usedShapes.add(box));
+      takenBands.push({ y0: rowTop, y1: rowBottom });
+      continue;
+    }
+
+    const explicitOptions = labelLine ? markedOptionsNear(lines, labelLine) : [];
+    const resolvedOptions = explicitOptions.length === row.length ? explicitOptions : options;
+
     fields.push({
       id: newId(),
       label: dict?.label ?? cleanLabelText(labelText),
       type: "choice",
-      options,
+      options: resolvedOptions,
       optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
       page: pageIndex,
       bbox: toFraction(row[0].x, row[0].y, row[0].w, row[0].h, pageW, pageH),
@@ -415,6 +496,19 @@ export async function inferFieldsFromPage(
     if (!raw || raw.length < 2) continue;
     const lineHeight = Math.max(line.bbox.y1 - line.bbox.y0, 10);
     if (inTakenBand(line.bbox.y0, line.bbox.y1)) continue;
+
+    // Radio/checkbox labels can be read directly from Sarvam's preserved
+    // glyphs, including a neighbouring short block such as "○ Other".
+    const explicitOptions = markedOptionsNear(lines, line);
+    if (explicitOptions.length >= 2) {
+      const markerAt = raw.search(OPTION_MARKER);
+      const labelText = cleanLabelText(markerAt >= 0 ? raw.slice(0, markerAt) : raw);
+      const dict = matchLabel(labelText);
+      if (labelText && !isNonFillableLabel(labelText)) {
+        pushChoice(labelText, dict, choiceGroups(explicitOptions, line), line.bbox.y0, line.bbox.y1, line.confidence);
+        continue;
+      }
+    }
 
     // "(tick one)" style headers: the next line holds the options.
     if (/\b(tick|choose|select)\b.*\b(one|any)\b|\(tick/i.test(raw)) {

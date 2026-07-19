@@ -108,7 +108,7 @@ export default function PreviewDesktop() {
   }
 
   const pageCount = pv.record.pageCount || 1;
-  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox"];
+  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox", "comb"];
 
   return (
     <div className="w-full max-w-[1800px] mx-auto flex flex-col animate-fade-in pb-12">

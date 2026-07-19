@@ -244,6 +244,8 @@ export function useFillSession() {
     switch (field.type) {
       case "date":
         return `What is your ${field.label}? For example: 25 May 2002.`;
+      case "comb":
+        return `What is your ${field.label}? This is one character per box, so you can say let me spell.`;
       case "checkbox":
         return `${field.label} — yes or no?`;
       default:
@@ -515,7 +517,7 @@ export function useFillSession() {
     const readback = spellItBack
       ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
       : `I heard: ${spokenValue}. Correct?`;
-    await speak(readback + (field.type === "text" ? " You can also say: let me spell." : ""));
+    await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""));
     if (alive(id)) {
       setPhase("listening");
     }
@@ -545,13 +547,13 @@ export function useFillSession() {
       }
       // A rejected SPELLED value goes straight back to spell-repair — the user
       // was already spelling; making them start over is the old, broken flow.
-      if (spelledPendingRef.current && field.type === "text") {
+      if (spelledPendingRef.current && isTextLike(field)) {
         enterSpellMode(id);
         return;
       }
       setPhase("confirming");
       const spellHint =
-        field.type === "text"
+        isTextLike(field)
           ? " You can also say: let me spell, or: change a letter."
           : "";
       await speak("Okay, once more. " + questionFor(field) + spellHint);
@@ -569,7 +571,7 @@ export function useFillSession() {
     // Not a yes and not a no — maybe a surgical edit: "change k to c",
     // "the third letter is e", "replace tilkan with thilakan".
     const pending = pendingConfirmRef.current;
-    if (pending && field.type === "text") {
+    if (pending && isTextLike(field)) {
       const edited = applySpokenEdit(pending, transcript);
       if (edited) {
         const value = isNameField(field) ? titleCase(edited) : edited;
@@ -790,9 +792,15 @@ export function typeLabel(type: FormField["type"]): string {
       return "Multiple choice";
     case "checkbox":
       return "Yes / no";
+    case "comb":
+      return "One character per box";
     default:
       return "Text input";
   }
+}
+
+function isTextLike(field: FormField): boolean {
+  return field.type === "text" || field.type === "comb";
 }
 
 function parseYesNo(transcript: string): boolean | null {
