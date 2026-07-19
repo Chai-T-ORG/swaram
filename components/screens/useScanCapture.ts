@@ -348,6 +348,12 @@ export function useScanCapture() {
         resetAutoCapture();
         setIsDocumentDetected(true);
         sayGuidance("Hold steady.");
+      } else if (quadCoverage === 0) {
+        // Sharp and framed, but no confidently tracked outline — never
+        // auto-fire blind. The shutter and "capture" voice command still work.
+        resetAutoCapture();
+        setIsDocumentDetected(true);
+        sayGuidance("Hold steady.");
       } else {
         // Document locked and sharp! Start/continue smooth progress animation
         setIsDocumentDetected(true);
@@ -369,7 +375,7 @@ export function useScanCapture() {
           progressAnimRef.current = requestAnimationFrame(animateProgress);
         }
       }
-    }, 900);
+    }, 500);
   }
 
   const generateWarpedPreview = useCallback(async (rawCanvas: HTMLCanvasElement, currentCorners: number[], rotDeg: number) => {
