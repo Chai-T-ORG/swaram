@@ -136,42 +136,76 @@ export function useScanCapture() {
   // Voice commands gated by cameraState. English fast lanes are precise
   // regexes; the multilingual "yes" keywords accept the scan, and the
   // adaptive actions below catch any other phrasing or language.
+  // STT-tolerant fast lanes: transcripts arrive with normalized punctuation
+  // ("Re-take." → "re take"), so every pattern accepts split/joined variants
+  // and the phrasings Indian-English STT actually produces ("click a photo").
   const voiceCommands: [RegExp, () => void, string][] =
     cameraState === "confirm"
       ? [
-          [/retake|scan again|try again/i, () => retake(), "retake"],
+          [/re\s?take|scan again|try again|take (it |the photo )?again|\bredo\b/i, () => retake(), "retake"],
           [
-            new RegExp(`use it|looks good|keep it|continue|${intentRegex("yes").source}`, "iu"),
+            new RegExp(
+              `use (it|this|that)|looks good|keep (it|this)|\\baccept\\b|\\bconfirm\\b|continue|${intentRegex("yes").source}`,
+              "iu",
+            ),
             () => accept(),
             "use it",
           ],
         ]
       : [
-          [/start( the)? camera|open( the)? camera/i, () => startCamera(), "start camera"],
-          [/^capture|take (the )?(photo|picture)/i, () => capture(), "capture"],
+          [/start( the)? camera|open( the)? camera|turn on( the)? camera/i, () => startCamera(), "start camera"],
+          [
+            /\bcapture\b|\bsnap\b|\bshoot\b|(take|click) (a |the )?(photo|picture|pic|snap)/i,
+            () => capture(),
+            "capture",
+          ],
           [/stop( the)? camera|close( the)? camera/i, () => stopEverything(), "stop camera"],
         ];
 
+  // Every action carries an offline `match` fast-lane so loose phrasings
+  // resolve even when the LLM router is unavailable.
   const voiceActions =
     cameraState === "confirm"
       ? [
-          { id: "accept_scan", description: "Keep this scan and continue to form analysis.", run: () => accept() },
-          { id: "retake_photo", description: "Discard this scan and take the photo again.", run: () => retake() },
+          {
+            id: "accept_scan",
+            description: "Keep this scan and continue to form analysis.",
+            match: /\b(ok|okay|good|fine|great|keep|save|yes|done|perfect|proceed)\b/i,
+            run: () => accept(),
+          },
+          {
+            id: "retake_photo",
+            description: "Discard this scan and take the photo again.",
+            match: /\b(again|redo|wrong|bad|blurry|no)\b|re\s?take/i,
+            run: () => retake(),
+          },
         ]
       : cameraState === "active"
         ? [
-            { id: "capture_photo", description: "Take the photo of the form right now.", run: () => capture() },
+            {
+              id: "capture_photo",
+              description: "Take the photo of the form right now.",
+              match: /\b(photo|picture|pic|capture|snap|click|shoot)\b/i,
+              run: () => capture(),
+            },
             {
               id: "upload_file_instead",
               description: "Stop using the camera and upload a file instead.",
+              match: /\bupload\b|\bfile\b/i,
               run: () => router.push("/upload"),
             },
           ]
         : [
-            { id: "start_camera", description: "Turn the camera on to scan a paper form.", run: () => startCamera() },
+            {
+              id: "start_camera",
+              description: "Turn the camera on to scan a paper form.",
+              match: /\bcamera\b|\bstart\b|\bbegin\b|\bscan\b/i,
+              run: () => startCamera(),
+            },
             {
               id: "upload_file_instead",
               description: "Upload a file instead of using the camera.",
+              match: /\bupload\b|\bfile\b/i,
               run: () => router.push("/upload"),
             },
           ];

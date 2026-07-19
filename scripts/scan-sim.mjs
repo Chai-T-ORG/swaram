@@ -314,6 +314,23 @@ async function drive() {
   }
   await page.screenshot({ path: `${SCRATCH}/confirm2.png` });
 
+  // Probe 3: VOICE — inject transcripts as STT would deliver them, with the
+  // punctuation/hyphenation real recognizers produce.
+  const say = (t) => page.evaluate((x) => window.__swaramSay?.(x), t);
+
+  await say("Re-take.");
+  await page.waitForFunction(() => document.body.innerText.includes("Hold it up"), { timeout: 15000 });
+  log(`voice "Re-take." → back to viewfinder`);
+
+  await new Promise((r) => setTimeout(r, 1800));
+  await say("click a photo");
+  await page.waitForFunction(() => document.body.innerText.includes("Check & adjust"), { timeout: 15000 });
+  log(`voice "click a photo" → captured, confirm reached`);
+
+  await say("Use it.");
+  await page.waitForFunction(() => location.pathname.startsWith("/processing/"), { timeout: 20000 });
+  log(`voice "Use it." → accepted, navigated to ${await page.evaluate(() => location.pathname)}`);
+
   console.log("\nconsole errors during run:", errors.length ? errors : "(none)");
   await browser.close();
 }
