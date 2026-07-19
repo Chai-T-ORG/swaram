@@ -72,6 +72,28 @@ function isPlausibleQuad(pts: number[], w: number, h: number): boolean {
   return area >= w * h * 0.15 && area <= w * h * 0.95;
 }
 
+/**
+ * Post-capture self-assessment so a blind user hears what a sighted user
+ * would see on the confirm screen: corner angles far from 90° mean a tilted
+ * or mis-detected crop; a small quad means the form was far away.
+ */
+function assessQuad(pts: number[], visibleArea: number): "good" | "tilted" | "small" {
+  let maxCos = 0;
+  for (let j = 0; j < 4; j++) {
+    const v1x = pts[((j + 3) % 4) * 2] - pts[j * 2];
+    const v1y = pts[((j + 3) % 4) * 2 + 1] - pts[j * 2 + 1];
+    const v2x = pts[((j + 1) % 4) * 2] - pts[j * 2];
+    const v2y = pts[((j + 1) % 4) * 2 + 1] - pts[j * 2 + 1];
+    const cos = Math.abs((v1x * v2x + v1y * v2y) / (Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y) || 1));
+    maxCos = Math.max(maxCos, cos);
+  }
+  if (maxCos > 0.35) return "tilted";
+  // "Small" is judged against the region the user could SEE while aiming,
+  // not the full sensor frame — those differ under object-cover cropping.
+  if (quadArea(pts) < visibleArea * 0.25) return "small";
+  return "good";
+}
+
 export function useScanCapture() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -82,6 +104,9 @@ export function useScanCapture() {
   const lastSpokenRef = useRef({ text: "", at: 0 });
   const guidanceCandidateRef = useRef({ key: "", count: 0 });
   const seenFormRef = useRef(false);
+  const quadHistoryRef = useRef<number[][]>([]);
+  const lastStableQuadRef = useRef<number[] | null>(null);
+  const visibleRectRef = useRef<{ sx: number; sy: number; sw: number; sh: number } | null>(null);
   const capturingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rawCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -232,6 +257,37 @@ export function useScanCapture() {
     sayGuidance(text, minGapMs);
   }
 
+  /**
+   * Multi-frame quad tracker (what commercial scanner SDKs do): keep a short
+   * history of normalized detections, render the per-coordinate median so the
+   * outline doesn't jitter, and call the quad "stable" only when three
+   * consecutive detections agree within 4% of the frame. Detection loss
+   * clears the history — stability must be re-earned.
+   */
+  function trackQuad(q: number[] | null): { quad: number[]; stable: boolean } | null {
+    const hist = quadHistoryRef.current;
+    if (!q) {
+      hist.length = 0;
+      return null;
+    }
+    hist.push(q);
+    if (hist.length > 5) hist.shift();
+    const recent = hist.slice(-3);
+    if (recent.length < 3) return { quad: q, stable: false };
+    const median: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const vals = recent.map((r) => r[i]).sort((a, b) => a - b);
+      median.push(vals[1]);
+    }
+    let maxDev = 0;
+    for (const r of recent) {
+      for (let c = 0; c < 4; c++) {
+        maxDev = Math.max(maxDev, Math.hypot(r[c * 2] - median[c * 2], r[c * 2 + 1] - median[c * 2 + 1]));
+      }
+    }
+    return { quad: median, stable: maxDev <= 0.04 };
+  }
+
   async function checkDeviceCapabilities(stream: MediaStream) {
     try {
       const track = stream.getVideoTracks()[0];
@@ -258,6 +314,8 @@ export function useScanCapture() {
     stopEverything();
     guidanceCandidateRef.current = { key: "", count: 0 };
     seenFormRef.current = false;
+    quadHistoryRef.current = [];
+    lastStableQuadRef.current = null;
     setCameraState("starting");
     setTone("info");
     setGuidance("Starting the camera…");
@@ -340,6 +398,7 @@ export function useScanCapture() {
           sy = (vh - sh) / 2;
         }
       }
+      visibleRectRef.current = { sx, sy, sw, sh };
 
       const probe = document.createElement("canvas");
       const probeWidth = 480;
@@ -359,25 +418,36 @@ export function useScanCapture() {
         return;
       }
 
-      // Detect corners on probe for the live outline — but only show quads
-      // that pass the plausibility gate; garbage contours read as glitches.
+      // Detect corners on the probe, gate implausible quads, then feed the
+      // multi-frame tracker: the outline shown is the median of recent
+      // detections, and "detected" means stable — not one lucky frame.
       const detectedProbeCorners = await detectCorners(probe);
       let quadCoverage = 0;
+      let tracked: { quad: number[]; stable: boolean } | null = null;
       if (detectedProbeCorners && isPlausibleQuad(detectedProbeCorners, probeWidth, probeHeight)) {
         quadCoverage = quadArea(detectedProbeCorners) / (probeWidth * probeHeight);
         const normalizedCorners: number[] = [];
         for (let i = 0; i < 8; i += 2) {
           normalizedCorners.push(detectedProbeCorners[i] / probeWidth, detectedProbeCorners[i + 1] / probeHeight);
         }
-        setLiveCorners(normalizedCorners);
+        tracked = trackQuad(normalizedCorners);
       } else {
-        setLiveCorners(null);
+        trackQuad(null);
       }
+      setLiveCorners(tracked ? tracked.quad : null);
+      if (tracked?.stable) lastStableQuadRef.current = tracked.quad;
 
-      // A confidently tracked quad is better evidence of coverage than the
-      // contour heuristic — don't tell the user to move closer when the
-      // outline is already hugging the sheet.
+      // A confidently tracked quad is better evidence than the contour
+      // heuristic — for coverage AND centering. Don't tell the user to move
+      // when the outline is already hugging a centered sheet.
       const coverage = Math.max(check.coverage, quadCoverage);
+      let offsetX = check.offsetX;
+      let offsetY = check.offsetY;
+      if (tracked) {
+        const q = tracked.quad;
+        offsetX = ((q[0] + q[2] + q[4] + q[6]) / 4 - 0.5) * 2;
+        offsetY = ((q[1] + q[3] + q[5] + q[7]) / 4 - 0.5) * 2;
+      }
 
       // One warm confirmation the moment the sheet is first tracked — the
       // user holding paper at arm's length has no other way to know it worked.
@@ -390,19 +460,19 @@ export function useScanCapture() {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidanceStable("closer", "Bring the phone closer, so the form fills the screen.");
-      } else if (check.offsetX < -0.3) {
+      } else if (offsetX < -0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidanceStable("left", "Move the phone a little to the left.");
-      } else if (check.offsetX > 0.3) {
+      } else if (offsetX > 0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidanceStable("right", "Move the phone a little to the right.");
-      } else if (check.offsetY < -0.3) {
+      } else if (offsetY < -0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidanceStable("up", "Tilt the phone up a little.");
-      } else if (check.offsetY > 0.3) {
+      } else if (offsetY > 0.3) {
         resetAutoCapture();
         setIsDocumentDetected(false);
         sayGuidanceStable("down", "Tilt the phone down a little.");
@@ -410,9 +480,10 @@ export function useScanCapture() {
         resetAutoCapture();
         setIsDocumentDetected(true);
         sayGuidanceStable("blur", "Hold the phone still.");
-      } else if (quadCoverage === 0) {
-        // Sharp and framed, but no confidently tracked outline — never
-        // auto-fire blind. The shutter and "capture" voice command still work.
+      } else if (!tracked?.stable) {
+        // Sharp and framed, but the outline isn't stable across frames yet —
+        // never auto-fire on one lucky detection. The shutter and "capture"
+        // voice command still work.
         resetAutoCapture();
         setIsDocumentDetected(true);
         sayGuidanceStable("steady", "Hold it right there.");
@@ -508,6 +579,30 @@ export function useScanCapture() {
       console.warn("[swaram] Corner detection error:", e);
     }
 
+    // Capture what was TRACKED (SDK behavior): the stable live quad, scaled
+    // from the visible probe region to the full frame, is ground truth. A
+    // fresh full-res detection may refine it, but never replace it with
+    // something that disagrees wildly with what the user was told is locked.
+    const live = lastStableQuadRef.current;
+    const rect = visibleRectRef.current;
+    if (live && rect) {
+      const liveRaw = live.map((v, i) =>
+        i % 2 === 0 ? rect.sx + v * rect.sw : rect.sy + v * rect.sh,
+      );
+      if (initialCorners) {
+        let maxDev = 0;
+        for (let c = 0; c < 4; c++) {
+          maxDev = Math.max(
+            maxDev,
+            Math.hypot(initialCorners[c * 2] - liveRaw[c * 2], initialCorners[c * 2 + 1] - liveRaw[c * 2 + 1]),
+          );
+        }
+        if (maxDev > Math.max(w, h) * 0.08) initialCorners = liveRaw.map((v) => Math.round(v));
+      } else {
+        initialCorners = liveRaw.map((v) => Math.round(v));
+      }
+    }
+
     let isFailed = false;
     if (!initialCorners) {
       isFailed = true;
@@ -532,7 +627,14 @@ export function useScanCapture() {
       setGuidance(msg);
       speak(msg);
     } else {
-      const msg = "Here's your scan. Say use it, or retake.";
+      // Speak what a sighted user would see, so accepting is never blind.
+      const verdict = assessQuad(initialCorners, rect ? rect.sw * rect.sh : w * h);
+      const msg =
+        verdict === "tilted"
+          ? "Here's your scan, but it looks tilted. I'd retake it — or say use it to keep it anyway."
+          : verdict === "small"
+            ? "Here's your scan, but the form looks small and may come out blurry. Say use it, or retake and bring the phone closer."
+            : "Here's your scan. It looks clean and straight. Say use it, or retake.";
       setGuidance(msg);
       speak(msg);
     }

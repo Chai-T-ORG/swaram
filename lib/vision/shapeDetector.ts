@@ -380,12 +380,25 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
             const y = pts[j * 2 + 1];
             if (x < borderX || x > w - borderX || y < borderY || y > h - borderY) borderCorners++;
           }
-          if (qa >= minArea && qa <= maxArea && borderCorners < 3) {
-            // Prefer large AND rectangular: a paper sheet fills its bounding
-            // box; sprawling background contours don't.
+          // A photographed sheet keeps its corners near 90° even under
+          // perspective; |cos| > 0.5 (outside 60°–120°) is never the paper.
+          let maxCos = 0;
+          for (let j = 0; j < 4; j++) {
+            const v1x = pts[((j + 3) % 4) * 2] - pts[j * 2];
+            const v1y = pts[((j + 3) % 4) * 2 + 1] - pts[j * 2 + 1];
+            const v2x = pts[((j + 1) % 4) * 2] - pts[j * 2];
+            const v2y = pts[((j + 1) % 4) * 2 + 1] - pts[j * 2 + 1];
+            const cos = Math.abs(
+              (v1x * v2x + v1y * v2y) / (Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y) || 1),
+            );
+            maxCos = Math.max(maxCos, cos);
+          }
+          if (qa >= minArea && qa <= maxArea && borderCorners < 3 && maxCos <= 0.5) {
+            // Prefer large, rectangular, and right-angled: a paper sheet
+            // fills its bounding box; sprawling background contours don't.
             const rect = cv.boundingRect(approx);
             const rectangularity = qa / Math.max(1, rect.width * rect.height);
-            const score = qa * rectangularity;
+            const score = qa * rectangularity * (1 - maxCos);
             if (score > bestScore) {
               bestScore = score;
               bestPoints = pts;
@@ -416,14 +429,52 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
     considerContours(bright, cv.RETR_EXTERNAL);
     bright.delete();
 
+    // Path S — whiteness: paper is bright AND unsaturated. Warm light-colored
+    // backgrounds (cream fabric, wood) fool a pure brightness split, but they
+    // carry saturation the paper doesn't.
+    const rgb = new cv.Mat();
+    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+    const hsv = new cv.Mat();
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    rgb.delete();
+    const chans = new cv.MatVector();
+    cv.split(hsv, chans);
+    hsv.delete();
+    const sat = chans.get(1);
+    const val = chans.get(2);
+    const lowSat = new cv.Mat();
+    cv.threshold(sat, lowSat, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    const brightV = new cv.Mat();
+    cv.threshold(val, brightV, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    const white = new cv.Mat();
+    cv.bitwise_and(lowSat, brightV, white);
+    lowSat.delete();
+    brightV.delete();
+    sat.delete();
+    val.delete();
+    chans.delete();
+    cv.morphologyEx(white, white, cv.MORPH_CLOSE, kernel);
+    considerContours(white, cv.RETR_EXTERNAL);
+    white.delete();
+
     // Path B — edge outline with ONE gentle gap-closing dilation. RETR_LIST,
     // because on textured backgrounds the dilated texture merges into a blob
     // and the paper survives only as a hole inside it.
     const edges = new cv.Mat();
-    cv.Canny(work, edges, 50, 150);
+    cv.Canny(work, edges, 30, 100);
     cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
     considerContours(edges, cv.RETR_LIST);
     edges.delete();
+
+    // Path C — adaptive threshold: survives uneven lighting and soft shadows
+    // that defeat the single global Otsu split.
+    const adaptive = new cv.Mat();
+    const rawBlock = Math.max(3, Math.round(Math.min(w, h) / 8));
+    const blockSize = rawBlock % 2 === 1 ? rawBlock : rawBlock + 1;
+    cv.adaptiveThreshold(work, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, blockSize, 5);
+    cv.morphologyEx(adaptive, adaptive, cv.MORPH_CLOSE, kernel);
+    considerContours(adaptive, cv.RETR_LIST);
+    adaptive.delete();
 
     if (!bestPoints) return null;
     return sortCorners((bestPoints as number[]).map((v) => Math.round(v)));
