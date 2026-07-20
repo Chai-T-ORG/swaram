@@ -254,6 +254,7 @@ export function useProfileSettings() {
     if (next === "groq") speak("Using cloud recognition. This is the most accurate option.");
     else if (next === "azure") speak("Using Azure regional recognition, tuned for your selected language.");
     else if (next === "azure-stream") speak("Using Azure real-time recognition. I'll understand any language as you speak.");
+    else if (next === "sarvam-stream") speak("Using Sarvam real-time recognition — the fastest option for Indian languages.");
     else if (next === "whisper") speak("Using on-device recognition.");
     else if (next === "native") speak("Using the browser's built-in recognition.");
     else speak("Using automatic recognition. I'll pick the best available.");

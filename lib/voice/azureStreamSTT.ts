@@ -255,6 +255,14 @@ export async function startAzureStream(h: AzureStreamHandlers): Promise<boolean>
     for (const phrase of commandPhrases()) {
       if (phrase) grammar.addPhrase(phrase);
     }
+    // Raise the bias weight above the 1.0 default so the user's confirmed
+    // names beat their generic English homophones. Guarded — setWeight is
+    // only in newer SDK builds.
+    try {
+      (grammar as unknown as { setWeight?: (w: number) => void }).setWeight?.(1.5);
+    } catch {
+      /* best-effort */
+    }
 
     recognizer.recognizing = (_s, e) => {
       if (e.result.text) handlers?.onInterim?.(e.result.text);

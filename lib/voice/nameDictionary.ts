@@ -55,9 +55,20 @@ export function rememberName(profileKey: string | undefined, value: string): voi
   // Only plausible name strings — no digits, no emails, not absurdly long.
   if (!clean || clean.length > 60 || /[\d@_/]/.test(clean)) return;
   const dict = load();
+  // A new confirmation for the same field SUPERSEDES the old value — and the
+  // old one was very likely a misrecognition the user has now corrected.
+  // Purge it, or it keeps "healing" future transcripts toward the wrong name
+  // (a stored "Manoraj" was turning a correctly-heard "Manoj" back into
+  // "Manoraj").
+  const prev = profileKey ? dict.byKey[profileKey] : undefined;
   if (profileKey) dict.byKey[profileKey] = clean;
   const lower = clean.toLowerCase();
-  dict.names = dict.names.filter((n) => n.toLowerCase() !== lower);
+  dict.names = dict.names.filter((n) => {
+    const nl = n.toLowerCase();
+    if (nl === lower) return false;
+    if (prev && nl === prev.toLowerCase()) return false;
+    return true;
+  });
   dict.names.push(clean);
   if (dict.names.length > MAX_NAMES) dict.names = dict.names.slice(-MAX_NAMES);
   save(dict);
@@ -77,6 +88,24 @@ function closeEnough(a: string, b: string): boolean {
 }
 
 /**
+ * Guard against the snap itself becoming a guesser: a whole-value snap must
+ * preserve the SHAPE of what was heard. Same word count, and an initial
+ * (single letter) never maps to a full word or vice versa — so a stored
+ * "Tejas Kumar" can never swallow a spoken "Tejas K M".
+ */
+function shapeCompatible(heard: string, candidate: string): boolean {
+  const h = heard.split(/\s+/).filter(Boolean);
+  const c = candidate.split(/\s+/).filter(Boolean);
+  if (h.length !== c.length) return false;
+  for (let i = 0; i < h.length; i++) {
+    const hi = h[i].replace(/\./g, "").length === 1;
+    const ci = c[i].replace(/\./g, "").length === 1;
+    if (hi !== ci) return false;
+  }
+  return true;
+}
+
+/**
  * Snap a fresh transcript toward the stored names. Tries the whole value
  * first, then repairs word-by-word (so "Twinsha T Tilkan" heals once
  * "Twinsha T Thilakan" is stored). Returns null when nothing matches —
@@ -89,10 +118,10 @@ export function snapToKnownName(raw: string, profileKey?: string): string | null
 
   // The value previously confirmed for this exact field wins outright.
   const forKey = profileKey ? dict.byKey[profileKey] : undefined;
-  if (forKey && closeEnough(heard, forKey)) return forKey;
+  if (forKey && closeEnough(heard, forKey) && shapeCompatible(heard, forKey)) return forKey;
 
   for (const name of [...dict.names].reverse()) {
-    if (closeEnough(heard, name)) return name;
+    if (closeEnough(heard, name) && shapeCompatible(heard, name)) return name;
   }
 
   // Word-level repair against the vocabulary of all stored name words.

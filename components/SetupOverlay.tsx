@@ -24,6 +24,7 @@ import {
 } from "@/lib/voice/speechToText";
 import { IconCheck, IconShield, IconMic, IconSparkle } from "@/components/icons";
 import VoiceOrb from "@/components/ui/VoiceOrb";
+import { useVoice } from "@/components/voice/VoiceProvider";
 
 export default function SetupOverlay() {
   const prefersReducedMotion = useReducedMotion();
@@ -108,19 +109,26 @@ export default function SetupOverlay() {
     }
   }, [handleComplete]);
 
-  // Connect onboarding to Swaram's primary STT transcript listener
+  // Connect onboarding to Swaram's transcript stream. Registered as the PAGE
+  // listener (consuming everything): the overlay is modal, so an utterance
+  // like "back" or "help" must drive onboarding — not the global command
+  // table underneath it (router.back() mid-setup was possible before).
+  const voice = useVoice();
   useEffect(() => {
     if (!visible || !micActivated) return;
 
     const listener = (text: string) => {
       handleOnboardingTranscript(text);
+      return true; // modal — nothing falls through while setup is on screen
     };
 
-    addTranscriptListener(listener);
+    if (voice) return voice.registerPageTranscriptListener(listener);
+    const plain = (text: string) => void handleOnboardingTranscript(text);
+    addTranscriptListener(plain);
     return () => {
-      removeTranscriptListener(listener);
+      removeTranscriptListener(plain);
     };
-  }, [visible, micActivated, handleOnboardingTranscript]);
+  }, [visible, micActivated, handleOnboardingTranscript, voice]);
 
   // SINGLE-TAP & KEYPRESS UNIVERSAL ACTIVATION GATE
   const handleUniversalActivation = useCallback(async () => {

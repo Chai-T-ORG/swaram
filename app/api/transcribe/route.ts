@@ -45,12 +45,125 @@ const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 /** Per-engine fetch timeout — a slow engine must not stall the ensemble. */
 const ENGINE_TIMEOUT_MS = 6000;
 
+/**
+ * Everyday-path hedge: Sarvam is normally fast (<1 s) but has a measured
+ * ~5 s cold path. If it hasn't answered by this deadline, Whisper starts in
+ * parallel and the first success wins — tail latency capped, accuracy kept.
+ */
+const SARVAM_HEDGE_MS = 2500;
+
+/** Ensemble budget: after this, fuse whatever hypotheses have arrived. A
+ * straggler engine loses its vote rather than making the user wait. */
+const ENSEMBLE_BUDGET_MS = 3500;
+
+const delay = (ms: number) => new Promise<undefined>((r) => setTimeout(() => r(undefined), ms));
+
+/**
+ * Languages where Whisper-family models enter hallucination loops instead of
+ * transcribing (Voice of India benchmark, arXiv:2604.19151: Malayalam ~168%
+ * WER, Gujarati ~296%). Whisper is excised from BOTH the ensemble and the
+ * everyday fallback chain for these — a wrong-looking transcript is
+ * recoverable, a fluent hallucination is not.
+ */
+const WHISPER_UNSAFE_LANGS = new Set(["ml-IN", "gu-IN"]);
+
+/* --------------------------- circuit breakers ----------------------------- */
+
+/**
+ * Per-vendor circuit breaker. Without this, a vendor outage makes every
+ * user interaction wait out the full timeout before falling back. Five
+ * consecutive failures trip the breaker for five minutes; one "half-open"
+ * probe is allowed through when the cooldown expires.
+ */
+const BREAKER_TRIP_AFTER = 5;
+const BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
+
+interface Breaker {
+  failures: number;
+  trippedUntil: number;
+  probing: boolean;
+}
+const breakers = new Map<string, Breaker>();
+
+function breaker(name: string): Breaker {
+  let b = breakers.get(name);
+  if (!b) {
+    b = { failures: 0, trippedUntil: 0, probing: false };
+    breakers.set(name, b);
+  }
+  return b;
+}
+
+/** May we call this vendor right now? Claims the half-open probe slot. */
+function breakerAllows(name: string): boolean {
+  const b = breaker(name);
+  if (Date.now() >= b.trippedUntil) {
+    if (b.failures >= BREAKER_TRIP_AFTER) {
+      if (b.probing) return false; // someone else is already probing
+      b.probing = true; // this request is the half-open probe
+    }
+    return true;
+  }
+  return false;
+}
+
+function breakerRecord(name: string, ok: boolean): void {
+  const b = breaker(name);
+  b.probing = false;
+  if (ok) {
+    b.failures = 0;
+    b.trippedUntil = 0;
+  } else {
+    b.failures += 1;
+    if (b.failures >= BREAKER_TRIP_AFTER) {
+      b.trippedUntil = Date.now() + BREAKER_COOLDOWN_MS;
+      console.warn(`[transcribe] circuit breaker TRIPPED for ${name} (${b.failures} consecutive failures)`);
+    }
+  }
+}
+
+/* ------------------------- hallucination scrub ---------------------------- */
+
+/**
+ * Whisper-style hallucinations on noisy/short clips are fluent loops
+ * ("Thank you. Thank you. Thank you.") or a single phoneme repeated. The
+ * Groq API exposes no no_speech_prob/compression metrics, so detect the
+ * loop shape itself. Deliberately conservative — real answers repeat words
+ * ("double five five") but not whole multi-word phrases 3+ times.
+ */
+function looksHallucinated(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 12) return false;
+  const words = t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").split(/\s+/).filter(Boolean);
+  if (words.length >= 6) {
+    // Phrase looping: the same 2-4 word phrase repeated to fill the clip.
+    for (const n of [2, 3, 4]) {
+      if (words.length >= n * 3) {
+        const first = words.slice(0, n).join(" ");
+        let repeats = 1;
+        for (let i = n; i + n <= words.length; i += n) {
+          if (words.slice(i, i + n).join(" ") === first) repeats += 1;
+          else break;
+        }
+        if (repeats >= 3 && repeats * n >= words.length * 0.8) return true;
+      }
+    }
+    // Vocabulary collapse: many words, almost no distinct ones.
+    const distinct = new Set(words);
+    if (words.length >= 8 && distinct.size <= 2) return true;
+  }
+  return false;
+}
+
 export async function GET() {
   return Response.json({
     envKey: Boolean(process.env.GROQ_API_KEY),
     azure: Boolean(process.env.AZURE_SPEECH_KEY),
     sarvam: Boolean(process.env.SARVAM_API_KEY),
     gemini: Boolean(process.env.GEMINI_API_KEY),
+    // Optional Sarvam WebSocket relay (scripts/sarvam-ws-relay.mjs) for the
+    // opt-in "sarvam-stream" provider; null means clip-based capture only.
+    streamUrl: process.env.SARVAM_STREAM_RELAY_URL || null,
   });
 }
 
@@ -75,13 +188,23 @@ const SARVAM_MAX_BYTES = 30 * 16000 * 2 + 4096;
 
 /**
  * Transcribe one clip with Saaras v3. `verbatim` mode for spelled input (no
- * normalization, so "T W I N S H A" stays letters), `transcribe` otherwise.
+ * normalization, so "T W I N S H A" stays letters); `codemix` for Hindi,
+ * where Hinglish is the norm — it keeps English loanwords in Latin script
+ * instead of force-transliterating them ("मेरा phone number है 98…");
+ * `transcribe` otherwise.
  */
+function sarvamMode(locale: string, hint: string): string {
+  if (hint === "spell") return "verbatim";
+  if (process.env.SARVAM_STT_MODE) return process.env.SARVAM_STT_MODE;
+  if (locale === "hi-IN") return "codemix";
+  return "transcribe";
+}
+
 async function transcribeSarvam(audio: ArrayBuffer, locale: string, hint: string): Promise<string> {
   const form = new FormData();
   form.append("file", new Blob([audio], { type: "audio/wav" }), "audio.wav");
   form.append("model", "saaras:v3");
-  form.append("mode", hint === "spell" ? "verbatim" : "transcribe");
+  form.append("mode", sarvamMode(locale, hint));
   form.append("language_code", locale);
   const res = await fetch(SARVAM_STT_URL, {
     method: "POST",
@@ -121,14 +244,19 @@ async function transcribeAzure(audio: ArrayBuffer, locale: string, detailed = fa
   const data = (await res.json()) as {
     RecognitionStatus?: string;
     DisplayText?: string;
-    NBest?: { Display?: string }[];
+    NBest?: { Display?: string; Lexical?: string }[];
   };
   // NoMatch / InitialSilenceTimeout are "heard nothing", not errors.
   if (data.RecognitionStatus && data.RecognitionStatus !== "Success") return [];
   if (detailed && data.NBest?.length) {
-    return data.NBest.slice(0, 2)
-      .map((n) => (n.Display || "").trim())
-      .filter(Boolean);
+    // Lexical FIRST: it is the raw, ITN-free transcription — measured as the
+    // most faithful hypothesis for names/initials ("tejas k m"), where
+    // Display's inverse-text-normalization guesses ("Tejas, KM.").
+    const top = data.NBest[0];
+    return [top.Lexical || "", top.Display || "", data.NBest[1]?.Display || ""]
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 3);
   }
   const text = (data.DisplayText || "").trim();
   return text ? [text] : [];
@@ -138,13 +266,20 @@ async function transcribeAzure(audio: ArrayBuffer, locale: string, detailed = fa
 
 function whisperPrompt(hint: string, label: string, names: string): string {
   if (hint === "spell") {
-    return "The speaker is spelling a word letter by letter, like: T W I N S H A. Transcribe each letter separately as capital letters.";
+    return (
+      "The speaker is spelling a word letter by letter, like: T W I N S H A. Transcribe each letter separately as capital letters. " +
+      'If the speaker says the word "space" between letters, transcribe it as the word: space — it separates words and must not be dropped.'
+    );
   }
   if (hint === "name") {
+    // Measured: without the initials/no-substitution rules, Whisper's language
+    // model overrides the audio ("Tejas K M" -> "They just gay in.").
     return (
-      `The speaker is saying an Indian person's name or place name` +
+      `Indian name dictation` +
       (label ? ` for the form field "${label}"` : " for a form") +
-      `. Transcribe the name exactly as heard.` +
+      `. The name may be rare, and may contain single-letter initials spoken as separate letters (like "Tejas K M"). ` +
+      `Write initials as separate capital letters. Do NOT expand initials into words. ` +
+      `Do NOT substitute a more common name. Transcribe only the sounds heard.` +
       (names ? ` Names that may occur: ${names}.` : "")
     );
   }
@@ -203,10 +338,12 @@ async function transcribeGroq(
  */
 async function transcribeGemini(audio: ArrayBuffer, hint: string, label: string, names: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY!;
-  const model = process.env.GEMINI_STT_MODEL || "gemini-2.0-flash";
+  // Flash-Lite is tuned for exactly this: short-clip ASR at $0.50/1M audio
+  // tokens (~$0.0008/min) — the audio-native "listener with context" arm.
+  const model = process.env.GEMINI_STT_MODEL || "gemini-3.1-flash-lite";
   const instruction =
     hint === "spell"
-      ? "The audio is a person spelling one word letter by letter (possibly using words like 'bee' for B or 'D for Delhi'). Reply with ONLY the spelled letters, uppercase, separated by single spaces. Digits stay digits."
+      ? "The audio is a person spelling letter by letter (possibly using words like 'bee' for B or 'D for Delhi'). Reply with ONLY the spelled letters, uppercase, separated by single spaces. Digits stay digits. If the speaker says the word 'space' between letter groups, output the word space there — it marks a word boundary."
       : `Transcribe this short audio exactly. It is an Indian speaker answering the form field "${label || "a form field"}".` +
         (names ? ` Names that may occur: ${names}.` : "") +
         " Reply with ONLY the transcription.";
@@ -243,9 +380,108 @@ function normalized(s: string): string {
   return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim();
 }
 
+/** "My name is Tejas K M" -> "Tejas K M" — the form wants the answer alone. */
+function stripCarrier(t: string): string {
+  return t.replace(/^\s*(?:my name is|the name is|name is|it'?s|this is|i am|i'm)\s+/i, "").trim();
+}
+
+/** Of two normalized-equal hypotheses, keep the properly-cased one. */
+function betterCased(a: string, b: string): string {
+  const caps = (s: string) => (s.match(/\p{Lu}/gu) || []).length;
+  return caps(b) > caps(a) ? b : a;
+}
+
+function editDistance(a: string, b: string): number {
+  const s = a.toLowerCase();
+  const t = b.toLowerCase();
+  if (s === t) return 0;
+  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= s.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= t.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[t.length];
+}
+
 /**
- * Generative error correction: reconstruct the intended text from several
- * imperfect hypotheses. Runs only when the engines disagree.
+ * Deterministic dictionary snap for consensus results: engines can AGREE on a
+ * near-miss ("Twinsha T Thilkan"), which would short-circuit past the fusion
+ * LLM that knows the user's confirmed names — so the snap runs here too.
+ * Shape-guarded: word counts must match and initials never map to full words,
+ * so a spoken "Tejas K M" can never be swallowed by a stored "Tejas Kumar".
+ */
+function snapToKnown(text: string, namesCsv: string): string {
+  const heard = text.trim();
+  if (!heard || !namesCsv) return text;
+  const hWords = normalized(heard).split(" ").filter(Boolean);
+  for (const name of namesCsv.split(",").map((n) => n.trim()).filter(Boolean)) {
+    const nWords = normalized(name).split(" ").filter(Boolean);
+    if (nWords.length !== hWords.length) continue;
+    let compatible = true;
+    let dist = 0;
+    let len = 0;
+    for (let i = 0; i < nWords.length; i++) {
+      if ((hWords[i].length === 1) !== (nWords[i].length === 1)) { compatible = false; break; }
+      dist += editDistance(hWords[i], nWords[i]);
+      len += Math.max(hWords[i].length, nWords[i].length);
+    }
+    if (compatible && dist > 0 && dist <= Math.max(1, Math.floor(len * 0.25))) return name;
+    if (compatible && dist === 0) return name; // same letters, engine casing
+  }
+  return text;
+}
+
+/* -------------- native-script name context for the fusion LLM ------------- */
+
+/**
+ * LLMs disambiguate Indic phonemes far better when a name is ALSO shown in
+ * its phonetic native script ("Thilakan / തിലകൻ") than from Latin alone,
+ * which discards aspiration/retroflex distinctions. Cached per server
+ * lifetime; Hindi/Malayalam sessions only; always fails soft to Latin-only.
+ */
+const translitCache = new Map<string, string>();
+
+async function nativeScriptNames(names: string, locale: string): Promise<string> {
+  if (!process.env.SARVAM_API_KEY) return names;
+  const target = locale === "hi-IN" ? "hi-IN" : locale === "ml-IN" ? "ml-IN" : null;
+  if (!target || !names) return names;
+  const list = names.split(",").map((n) => n.trim()).filter(Boolean).slice(0, 8);
+  const out: string[] = [];
+  for (const name of list) {
+    const key = `${target}|${name}`;
+    let native = translitCache.get(key);
+    if (native === undefined) {
+      try {
+        const res = await fetch("https://api.sarvam.ai/transliterate", {
+          method: "POST",
+          headers: {
+            "api-subscription-key": process.env.SARVAM_API_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ input: name, source_language_code: "en-IN", target_language_code: target }),
+          signal: AbortSignal.timeout(2500),
+        });
+        native = res.ok ? ((await res.json()) as { transliterated_text?: string }).transliterated_text || "" : "";
+      } catch {
+        native = "";
+      }
+      translitCache.set(key, native);
+      if (translitCache.size > 300) translitCache.delete(translitCache.keys().next().value as string);
+    }
+    out.push(native ? `${name} (${native})` : name);
+  }
+  return out.join(", ");
+}
+
+/**
+ * Generative error correction (GER, per RobustGER / Whispering-LLaMA): the
+ * LLM reconstructs the intended text from several imperfect hypotheses by
+ * PHONETIC alignment, not string overlap — each recognizer heard the same
+ * sounds and erred differently, so the truth lives in what the variants
+ * sound like, not in which words they share. Runs only on disagreement.
  */
 async function fuseHypotheses(
   hyps: string[],
@@ -256,16 +492,25 @@ async function fuseHypotheses(
 ): Promise<string | null> {
   const system =
     hint === "spell"
-      ? `Several speech recognizers transcribed the SAME audio of one person spelling one word letter by letter. ` +
+      ? `Several speech recognizers transcribed the SAME audio of one person spelling letter by letter. ` +
         `Letters may appear as words ("bee" = B, "double you" = W, "D for Delhi" = D). ` +
-        `Reconstruct the spelled sequence. Reply with ONLY the letters, uppercase, separated by single spaces; digits stay digits. No commentary.`
+        `Reconstruct the spelled sequence. Reply with ONLY the letters, uppercase, separated by single spaces; digits stay digits. ` +
+        `If the speaker said the word "space" between letter groups, KEEP it — output the word space there (it separates words). No commentary.`
       : `Several independent speech recognizers transcribed the SAME short audio: an Indian speaker answering the form field "${label || "unknown"}". ` +
-        `Each recognizer makes different mistakes; the true answer is usually assembled from the pieces they agree on. ` +
-        `Reply with ONLY the single most likely intended answer.\nRules:\n` +
-        `- Never invent a word that appears in no hypothesis.\n` +
+        `The hypotheses are noisy acoustic interpretations of ONE utterance. Align them by SOUND and reconstruct the utterance FAITHFULLY — ` +
+        `a correct reconstruction may combine syllables from different hypotheses (e.g. "Twinsha Tilkan" + "Tvinsha T Thilakan" -> "Twinsha T Thilakan").\n` +
+        `Reply with ONLY the reconstructed answer.\nRules:\n` +
+        `- FAITHFULNESS OVER PLAUSIBILITY: the name may be rare or unusual. NEVER replace it with a different, more common name. ` +
+        `Never introduce syllables that appear in no hypothesis.\n` +
+        `- Single-letter initials stay single letters, separated by spaces ("Tejas K M"). NEVER expand initials into words ` +
+        `("K M" must not become "Kumar") and never merge them ("KM").\n` +
+        `- If a carrier phrase like "my name is" is present, return only the answer itself.\n` +
         `- Never change, add, or drop digits.\n` +
         `- Proper-case names and places.` +
-        (names ? `\n- Names this user has already confirmed: ${names}. If a hypothesis is a close mishearing of one, return that name exactly.` : "");
+        (names
+          ? `\n- Names this user has already confirmed (Latin, with native script where known): ${names}. ` +
+            `Return one of these EXACTLY (in Latin) only when a hypothesis is phonetically nearly identical to it; otherwise ignore this list completely.`
+          : "");
   const user = hyps.map((h, i) => `Recognizer ${i + 1}: ${h}`).join("\n");
 
   const res = await fetch(GROQ_CHAT_URL, {
@@ -320,47 +565,98 @@ export async function POST(req: NextRequest) {
   /* ---- Accuracy path: parallel ensemble for name / spell clips ---- */
   if (hint === "name" || hint === "spell") {
     const runs: { engine: string; p: Promise<string[]> }[] = [];
-    if (process.env.SARVAM_API_KEY && sarvamLang && audio.byteLength <= SARVAM_MAX_BYTES) {
+    if (process.env.SARVAM_API_KEY && sarvamLang && audio.byteLength <= SARVAM_MAX_BYTES && breakerAllows("sarvam")) {
       runs.push({ engine: "sarvam", p: transcribeSarvam(audio, sarvamLang, hint).then((t) => (t ? [t] : [])) });
     }
-    if (groqKey) {
+    // Whisper hallucinates instead of failing on Dravidian/Gujarati speech —
+    // it must not contribute hypotheses there (Voice of India benchmark).
+    if (groqKey && !WHISPER_UNSAFE_LANGS.has(locale) && breakerAllows("groq")) {
       runs.push({ engine: "groq", p: transcribeGroq(audio, contentType, locale, hint, label, names, groqKey).then((t) => (t ? [t] : [])) });
     }
-    if (process.env.AZURE_SPEECH_KEY) {
+    if (process.env.AZURE_SPEECH_KEY && breakerAllows("azure")) {
       runs.push({ engine: "azure", p: transcribeAzure(audio, locale, true) });
     }
-    if (process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY && breakerAllows("gemini")) {
       runs.push({ engine: "gemini", p: transcribeGemini(audio, hint, label, names).then((t) => (t ? [t] : [])) });
     }
 
     if (runs.length > 0) {
-      const settled = await Promise.allSettled(runs.map((r) => r.p));
+      // Collect hypotheses AS THEY ARRIVE. The moment two engines agree on
+      // their top hypothesis we answer — the user shouldn't wait out a slow
+      // straggler to hear a readback the fast engines already settled.
       const hyps: string[] = [];
       const seen = new Set<string>();
-      settled.forEach((s, i) => {
-        if (s.status !== "fulfilled") {
-          console.warn(`[transcribe] ${runs[i].engine} failed in ensemble:`, s.reason instanceof Error ? s.reason.message : s.reason);
-          return;
-        }
-        for (const t of s.value) {
-          const key = normalized(t);
-          if (key && !seen.has(key)) {
-            seen.add(key);
-            hyps.push(t);
-          }
-        }
+      const topByEngine = new Map<string, { norm: string; raw: string }>();
+      let agreed: string | null = null;
+      let settledCount = 0;
+      let finishEarly: () => void = () => {};
+      const allDone = new Promise<void>((resolve) => {
+        finishEarly = resolve;
+        runs.forEach((r) =>
+          r.p
+            .then(
+              (texts) => {
+                breakerRecord(r.engine, true);
+                for (const t of texts) {
+                  if (looksHallucinated(t)) {
+                    console.warn(`[transcribe] ${r.engine} hypothesis dropped as hallucination loop`);
+                    continue;
+                  }
+                  // Spell clips are Latin letters; Saaras verbatim sometimes
+                  // answers in Indic script, which would poison the fusion.
+                  if (hint === "spell" && /[^\x00-\x7F]/.test(t)) continue;
+                  const key = normalized(t);
+                  if (key && !seen.has(key)) {
+                    seen.add(key);
+                    hyps.push(t);
+                  }
+                }
+                const top = normalized(texts[0] || "");
+                if (top) {
+                  topByEngine.set(r.engine, { norm: top, raw: texts[0] });
+                  // For a name with NO dictionary backup, two engines agreeing
+                  // on a near-miss ("Twinsh") must not short-circuit past
+                  // fusion — a third engine may have heard the missing
+                  // syllable. Require 3 votes there; 2 elsewhere (a wrong
+                  // consensus with names present is healed by the snap).
+                  const needed = hint === "name" && !names ? 3 : 2;
+                  const matching = [...topByEngine.values()].filter((v) => v.norm === top);
+                  if (matching.length >= needed) {
+                    agreed = matching.map((m) => m.raw).reduce(betterCased);
+                    finishEarly();
+                  }
+                }
+              },
+              (reason) => {
+                breakerRecord(r.engine, false);
+                console.warn(`[transcribe] ${r.engine} failed in ensemble:`, reason instanceof Error ? reason.message : reason);
+              },
+            )
+            .finally(() => {
+              settledCount += 1;
+              if (settledCount === runs.length) finishEarly();
+            }),
+        );
       });
+      await Promise.race([allDone, delay(ENSEMBLE_BUDGET_MS)]);
 
+      // Name answers must come back as just the name — engines that keep the
+      // carrier phrase ("my name is …") agree on it too, so strip it here —
+      // and a near-miss of a confirmed name snaps to it deterministically.
+      const finalize = (t: string) => (hint === "name" ? snapToKnown(stripCarrier(t), names) : t);
+      if (agreed) return Response.json({ text: finalize(agreed), provider: "consensus", alternatives: hyps });
       if (hyps.length === 0) return Response.json({ text: "", provider: "ensemble" });
-      if (hyps.length === 1) return Response.json({ text: hyps[0], provider: "consensus" });
+      if (hyps.length === 1) return Response.json({ text: finalize(hyps[0]), provider: "consensus" });
 
-      // Engines disagree — let the LLM reconstruct from the pieces.
+      // Engines disagree — GER: the LLM reconstructs the utterance from the
+      // hypotheses, with the user's names shown in Latin + native script.
       if (groqKey) {
-        const fused = await fuseHypotheses(hyps, hint, label, names, groqKey);
-        if (fused) return Response.json({ text: fused, provider: "fusion", alternatives: hyps });
+        const namesCtx = hint === "name" ? await nativeScriptNames(names, locale) : names;
+        const fused = await fuseHypotheses(hyps, hint, label, namesCtx, groqKey);
+        if (fused) return Response.json({ text: finalize(fused), provider: "fusion", alternatives: hyps });
       }
       // No fusion available: prefer the engine best at this clip type.
-      return Response.json({ text: hyps[0], provider: "ensemble", alternatives: hyps });
+      return Response.json({ text: finalize(hyps[0]), provider: "ensemble", alternatives: hyps });
     }
     // No cloud engine configured at all — fall through to the error paths below.
   }
@@ -373,16 +669,70 @@ export async function POST(req: NextRequest) {
     Boolean(process.env.SARVAM_API_KEY) &&
     sarvamLang !== null &&
     audio.byteLength <= SARVAM_MAX_BYTES &&
-    (provider === "sarvam" ||
-      (!locale.startsWith("en") && provider !== "azure" && provider !== "azure-stream"));
-  if (wantsSarvam) {
-    try {
-      const text = await transcribeSarvam(audio, sarvamLang!, hint);
-      // Sarvam answered (possibly with silence) — don't bill a second engine.
-      return Response.json({ text, provider: "sarvam" });
-    } catch (err) {
-      console.warn("[transcribe] sarvam failed, falling through:", err instanceof Error ? err.message : err);
+    // Saaras is Tier-I for Indian speech INCLUDING Indian English (Voice of
+    // India benchmark; measured faithful on initials where Whisper guesses),
+    // so every supported locale promotes to it unless Azure was chosen.
+    // Groq stays the automatic fallback when Sarvam errors.
+    provider !== "azure" &&
+    provider !== "azure-stream";
+  if (wantsSarvam && breakerAllows("sarvam")) {
+    const sarvamP: Promise<{ text: string; provider: string } | null> = transcribeSarvam(audio, sarvamLang!, hint).then(
+      (text) => {
+        breakerRecord("sarvam", true);
+        return { text, provider: "sarvam" };
+      },
+      (err) => {
+        breakerRecord("sarvam", false);
+        console.warn("[transcribe] sarvam failed:", err instanceof Error ? err.message : err);
+        return null;
+      },
+    );
+    // Fast path: Sarvam answers within the hedge window (the normal case) —
+    // one engine billed, done.
+    const early = await Promise.race([sarvamP, delay(SARVAM_HEDGE_MS)]);
+    if (early) return Response.json(early);
+
+    // Sarvam is slow or failed — hedge with Whisper and take the first
+    // success. Whisper-unsafe locales skip the hedge (handled below).
+    if (early === undefined && groqKey && !WHISPER_UNSAFE_LANGS.has(locale) && breakerAllows("groq")) {
+      const groqP: Promise<{ text: string; provider: string } | null> = transcribeGroq(audio, contentType, locale, hint, label, names, groqKey).then(
+        (text) => {
+          breakerRecord("groq", true);
+          return { text: looksHallucinated(text) ? "" : text, provider: "groq" };
+        },
+        (err) => {
+          breakerRecord("groq", false);
+          console.warn("[transcribe] groq hedge failed:", err instanceof Error ? err.message : err);
+          return null;
+        },
+      );
+      const never = new Promise<never>(() => {});
+      const winner = await Promise.race([
+        sarvamP.then((r) => r ?? never),
+        groqP.then((r) => r ?? never),
+        delay(ENGINE_TIMEOUT_MS + 1000).then(() => null),
+      ]);
+      if (winner) return Response.json(winner);
+      return Response.json({ error: "network", detail: "all engines failed" }, { status: 502 });
     }
+    // Sarvam failed outright — fall through to the ordinary chain below.
+  }
+
+  // Whisper-unsafe languages must NEVER drop to Groq Whisper — its failure
+  // mode there is fluent hallucination, not an error. Azure is the only safe
+  // cloud fallback; otherwise tell the client to use its on-device engine.
+  if (WHISPER_UNSAFE_LANGS.has(locale)) {
+    if (process.env.AZURE_SPEECH_KEY && breakerAllows("azure")) {
+      try {
+        const [text] = await transcribeAzure(audio, locale);
+        breakerRecord("azure", true);
+        return Response.json({ text: text ?? "", provider: "azure" });
+      } catch (err) {
+        breakerRecord("azure", false);
+        console.warn("[transcribe] azure fallback failed for whisper-unsafe locale:", err instanceof Error ? err.message : err);
+      }
+    }
+    return Response.json({ error: "no-safe-engine", detail: `no non-Whisper engine available for ${locale}` }, { status: 502 });
   }
 
   // 2) Azure when explicitly requested and a server key is configured.
@@ -390,12 +740,14 @@ export async function POST(req: NextRequest) {
   // fails on the client, so it maps here too.
   const wantsAzure = provider === "azure" || provider === "azure-stream";
   let azureError = "";
-  if (wantsAzure && process.env.AZURE_SPEECH_KEY) {
+  if (wantsAzure && process.env.AZURE_SPEECH_KEY && breakerAllows("azure")) {
     try {
       const [text] = await transcribeAzure(audio, locale);
+      breakerRecord("azure", true);
       if (text) return Response.json({ text, provider: "azure" });
       // Empty result — fall through to Groq as a backstop if we have a key.
     } catch (err) {
+      breakerRecord("azure", false);
       azureError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -412,10 +764,21 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "no-key" }, { status: 400 });
   }
 
+  if (!breakerAllows("groq")) {
+    return Response.json({ error: "groq-tripped", detail: "groq circuit breaker open" }, { status: 502 });
+  }
   try {
     const text = await transcribeGroq(audio, contentType, locale, hint, label, names, groqKey);
+    breakerRecord("groq", true);
+    // A fluent repetition loop is Whisper hallucinating over noise — return
+    // silence so the app re-asks instead of confirming garbage.
+    if (looksHallucinated(text)) {
+      console.warn("[transcribe] groq transcript dropped as hallucination loop");
+      return Response.json({ text: "" });
+    }
     return Response.json({ text });
   } catch (err) {
+    breakerRecord("groq", false);
     return Response.json(
       { error: "network", detail: err instanceof Error ? err.message : String(err) },
       { status: 502 },
