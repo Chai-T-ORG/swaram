@@ -19,6 +19,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -34,7 +35,6 @@ import {
   subscribeKokoroStatus,
   addSpeechListener,
   addTtsStateListener,
-  isSpeaking,
 } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings, setVoiceSettings, migrateVoiceSettings } from "@/lib/voice/voiceSettings";
 import {
@@ -48,6 +48,8 @@ import {
   needsCloudNotice,
   acknowledgeCloudNotice,
   CLOUD_FALLBACK_NOTICE,
+  setBargeInCallback,
+  resumeContinuousListening,
 } from "@/lib/voice/speechToText";
 import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
 import { getProfile } from "@/lib/storage/profileStore";
@@ -71,6 +73,12 @@ import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from
 import { classifyIntent } from "@/lib/voice/intentClassifier";
 import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
 import { logClassification } from "@/lib/voice/intentMetrics";
+import {
+  initialConversation,
+  transitionConversation,
+  type ConversationEvent,
+  type ConversationSnapshot,
+} from "@/lib/voice/conversationState";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
 
@@ -127,6 +135,8 @@ interface VoiceContextValue {
   };
   /** Set by fill page to provide context. */
   setFillContext?: (ctx: VoiceContextValue["fillContext"]) => void;
+  conversation: ConversationSnapshot;
+  transitionConversation: (event: ConversationEvent) => void;
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
@@ -200,6 +210,9 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const pageRef = useRef<PageVoiceConfig>({});
   const announcedRef = useRef<string>("");
   const pageListenerRef = useRef<((text: string, confidence: number) => boolean) | null>(null);
+  // Async routing must only act on the latest utterance. This prevents a slow
+  // network reply from interrupting the user's next request.
+  const routingTurnRef = useRef(0);
 
   const [exclusive, setExclusive] = useState(false);
   const [sttState, setSttState] = useState<"listening" | "paused-silence" | "off">("off");
@@ -219,6 +232,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const [activeFormId, setActiveFormId] = useState<string | null>(null);
   const [micVolume, setMicVolume] = useState(0);
   const [ttsActive, setTtsActive] = useState(false);
+  const [conversation, dispatchConversation] = useReducer(transitionConversation, initialConversation);
 
   const [fillContext, setFillContext] = useState<VoiceContextValue["fillContext"]>(undefined);
   const fillContextRef = useRef(fillContext);
@@ -524,14 +538,15 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   // any offline matcher, then the LLM, which maps arbitrary phrasings and any
   // language onto a real action (or answers as chat). Fails soft.
   const resolveWithLlm = useCallback(
-    async (transcript: string) => {
+    async (transcript: string, turn: number) => {
+      const isCurrentTurn = () => routingTurnRef.current === turn;
       const actions = getAvailableActions();
       const lower = transcript.toLowerCase();
 
       // Fast lane: an action carrying its own offline matcher.
       for (const a of actions) {
         if (a.match && a.match.test(lower)) {
-          a.run();
+          if (isCurrentTurn()) a.run();
           return;
         }
       }
@@ -543,16 +558,20 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         ? `On this screen you can say: ${[...pageOpts, "go home"].slice(0, 5).join(", ")}. What would you like to do?`
         : "I'm here to help you fill forms by voice. You can say: upload, scan, my forms, or profile. What would you like to do?";
       if (!isLlmAvailable()) {
-        speak(nudge);
+        if (isCurrentTurn()) speak(nudge);
         return;
       }
 
+      if (!isCurrentTurn()) return;
       flashToast("Thinking…", 3000);
       const res = await resolveAction(
         transcript,
         { pageLabel: pageRef.current.title, lang: getVoiceSettings().sttLang },
         actions.map((a) => ({ id: a.id, description: a.description })),
       );
+
+      // Ignore a response that completed after the user started a newer turn.
+      if (!isCurrentTurn()) return;
 
       if (res.action === "chat") {
         speak(res.reply || nudge);
@@ -595,13 +614,23 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
       if (state === "paused-silence") {
         flashToast("Microphone paused to save battery. Tap anywhere to resume.", 8000);
       } else if (state === "listening") {
+        dispatchConversation({ type: "LISTENING" });
         flashToast("Listening ready…", 4000);
       }
     });
 
     const handleTranscript = (text: string, confidence: number) => {
       const trimmed = text.trim();
-      if (trimmed.length < 2) return;
+      if (!trimmed) return;
+      const turn = ++routingTurnRef.current;
+
+      // A fill session is an exclusive dialogue. Give it first refusal before
+      // global intent classification so a field answer can never be mistaken
+      // for navigation (for example, back to the upload screen).
+      if (pathname.startsWith("/fill/") && pageListenerRef.current) {
+        flashToast(`"${trimmed}"`);
+        if (pageListenerRef.current(trimmed, confidence)) return;
+      }
 
       // ── Intent classification (local, no LLM) ──
       const ctx = fillContextRef.current;
@@ -637,16 +666,16 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
 
       // Off-topic: speak a polite redirect, don't route to page/global
       if (intent.type === "off_topic") {
-        if (!isSpeaking()) {
-          const redirect = offTopicRedirect({
-            transcript: trimmed,
-            topic: intent.topic,
-            inFillMode: !!pageListenerRef.current,
-            formName: ctx?.formName,
-            currentFieldLabel: ctx?.currentFieldLabel,
-          });
-          speak(redirect);
-        }
+        // speak() interrupts the previous prompt by default. Acknowledge a
+        // genuine interruption instead of making the user repeat themselves.
+        const redirect = offTopicRedirect({
+          transcript: trimmed,
+          topic: intent.topic,
+          inFillMode: !!pageListenerRef.current,
+          formName: ctx?.formName,
+          currentFieldLabel: ctx?.currentFieldLabel,
+        });
+        speak(redirect);
         return;
       }
 
@@ -657,8 +686,8 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         : false;
       if (!consumedByPage) {
         const handled = runGlobalTranscript(trimmed);
-        if (!handled && !pageListenerRef.current && trimmed.length >= 3) {
-          void resolveWithLlm(trimmed);
+        if (!handled && !pageListenerRef.current) {
+          void resolveWithLlm(trimmed, turn);
         }
       }
     };
@@ -668,7 +697,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     return () => {
       removeTranscriptListener(handleTranscript);
     };
-  }, [flashToast, runGlobalTranscript, pathname, addMessage]);
+  }, [flashToast, runGlobalTranscript, resolveWithLlm, pathname, addMessage]);
 
   // Listen to TTS speech outputs to log assistant prompts
   useEffect(() => {
@@ -685,6 +714,18 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, [pathname, addMessage]);
+
+  // Wire up barge-in callback — when speech is detected during TTS, resume listening
+  useEffect(() => {
+    setBargeInCallback(() => {
+      console.log("[VoiceProvider] Barge-in detected — resuming listening");
+      // The barge-in detection in textToSpeech.ts already stops TTS.
+      // We just need to make sure listening resumes (runSpeechQueue handles this
+      // after queue drains, but for immediate resume we call it directly).
+      resumeContinuousListening();
+    });
+    return () => setBargeInCallback(null);
+  }, []);
 
   const startListeningNow = useCallback(() => {
     if (!isSttSupported()) {
@@ -1064,6 +1105,8 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     ttsActive,
     fillContext,
     setFillContext,
+    conversation,
+    transitionConversation: dispatchConversation,
   };
 
   const shellValue: VoiceShellValue = {

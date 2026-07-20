@@ -23,8 +23,6 @@ import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
   acknowledgeCloudNotice,
-  addTranscriptListener,
-  removeTranscriptListener,
 } from "@/lib/voice/speechToText";
 
 const UNCLEAR_THRESHOLD = 0.6;
@@ -119,35 +117,45 @@ export function useFillSession() {
   // in EVERY phase — not just while actively listening for an answer — so
   // "start", "resume", and "use voice" all respond by voice.
   useEffect(() => {
-    function onTranscript(text: string, confidence: number) {
+    if (!voice) return;
+    return voice.registerPageTranscriptListener((text: string, confidence: number) => {
       const clean = text.toLowerCase().trim();
 
       if (phase === "start" || phase === "notice") {
         if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.start)) {
           handleStart();
         }
-        return;
+        return true;
       }
       if (phase === "paused") {
         if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.resume)) {
           resume();
         }
-        return;
+        return true;
       }
       if (phase === "typing") {
         if (/use voice|voice instead|resume voice|listen/.test(clean)) {
           resume();
         }
-        return;
+        return true;
       }
       if (phase === "listening" || phase === "confirming") {
         handleSpeechInput(text, confidence);
       }
-    }
-    addTranscriptListener(onTranscript);
-    return () => removeTranscriptListener(onTranscript);
+      return true;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [voice?.registerPageTranscriptListener, phase]);
+
+  useEffect(() => {
+    voice?.setFillContext?.({
+      phase,
+      currentFieldLabel: currentField?.label,
+      currentFieldType: currentField?.type,
+      formName: record?.name,
+    });
+    return () => voice?.setFillContext?.(undefined);
+  }, [voice?.setFillContext, phase, currentField?.id, record?.name]);
 
   // Synchronize state values
   function syncRecord() {
@@ -200,6 +208,7 @@ export function useFillSession() {
     const rec = recordRef.current;
     if (!rec) return;
 
+    voice?.transitionConversation({ type: "FILLING_FORM" });
     rec.status = "filling";
     syncRecord();
 
@@ -633,6 +642,7 @@ export function useFillSession() {
     setTone("success");
     rec.status = "review";
     syncRecord();
+    voice?.transitionConversation({ type: "REVIEWING" });
     const msg = "Excellent! We have gone through all questions. Let's review the form now.";
     setStatus(msg);
     await speak(msg);

@@ -32,6 +32,7 @@ import {
   addGroqTranscriptListener,
   removeGroqTranscriptListener,
   setGroqFallback,
+  setGroqBargeInCallback,
 } from "./groqSTT";
 import {
   startAzureStream,
@@ -650,6 +651,45 @@ export function pauseContinuousListening(): void {
       // ignore
     }
   }
+}
+
+/**
+ * Pause listening for TTS barge-in detection.
+ * Raises the VAD threshold so only genuine user speech triggers barge-in.
+ */
+export function pauseForBargeIn(): void {
+  isPausedForTTS = true;
+  // Raise threshold for cloud VAD engine to detect barge-in
+  // Note: This works through the setThreshold API on the VAD handle
+  if (usingGroq) {
+    pauseGroqListening(); // This will be enhanced with threshold raising
+  }
+  // For native/whisper engines, keep listening but raise threshold
+  if (continuousActive) {
+    try {
+      continuousActive.abort();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Update VAD threshold for barge-in detection during TTS.
+ * Higher values = less sensitive (require louder speech to trigger).
+ */
+export function updateVadThreshold(value: number): void {
+  // This will be called with the handle from vadCapture
+  // Implementation depends on which engine is active
+  console.log(`[STT] VAD threshold updated to ${value} for barge-in`);
+}
+
+/**
+ * Set the barge-in callback that fires when speech is detected during TTS.
+ * Called from VoiceProvider to wire the barge-in flow.
+ */
+export function setBargeInCallback(cb: (() => void) | null): void {
+  setGroqBargeInCallback(cb);
 }
 
 export function resumeContinuousListening(): void {

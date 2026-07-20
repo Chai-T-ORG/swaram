@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { intentRegex } from "@/lib/voice/intlCommands";
 import { getFile, getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import { analyzeForm, type AnalysisStage } from "@/lib/analysis/analyzeForm";
@@ -19,6 +19,8 @@ import { enhanceFieldsWithLlm } from "@/lib/analysis/enhanceFields";
 import { isLlmAvailable } from "@/lib/voice/llm";
 import { speak } from "@/lib/voice/textToSpeech";
 import type { FormRecord } from "@/lib/types";
+import { getProfile } from "@/lib/storage/profileStore";
+import { matchFieldsToProfile } from "@/lib/matching/fuzzyProfileMatch";
 
 export type StepState = "pending" | "active" | "done";
 
@@ -35,7 +37,9 @@ const STAGE_ORDER: (AnalysisStage | "done")[] = ["reading", "ocr", "layout", "fi
 export function useProcessing() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
+  const voice = useVoice();
   const startedRef = useRef(false);
+  const announcedStageRef = useRef<AnalysisStage | null>(null);
 
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [stage, setStage] = useState<AnalysisStage | "done" | "failed">("reading");
@@ -94,6 +98,7 @@ export function useProcessing() {
 
   async function run() {
     try {
+      voice?.transitionConversation({ type: "PROCESSING" });
       const form = await getForm(formId);
       if (!form) {
         setStage("failed");
@@ -116,15 +121,39 @@ export function useProcessing() {
         return;
       }
 
-      const result = await analyzeForm(blob, form.sourceType, (progress) => {
+      const heartbeat = window.setInterval(() => {
+        // Queue, never interrupt: a progress update must not cut a sentence
+        // that is already being spoken.
+        void speak("I'm still working on your form.", { interrupt: false });
+      }, 7000);
+      let result;
+      try {
+        result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
+        voice?.transitionConversation({
+          type: progress.stage === "fields" || progress.stage === "ordering" ? "EXTRACTING_FIELDS" : "PROCESSING",
+        });
+        if (announcedStageRef.current !== progress.stage) {
+          announcedStageRef.current = progress.stage;
+          const narration: Record<AnalysisStage, string> = {
+            reading: "I'm reading the form.",
+            ocr: "I'm reading the text on the page.",
+            layout: "I'm identifying the form layout.",
+            fields: "I'm finding the fields you can fill in.",
+            ordering: "I'm preparing the questions in order.",
+          };
+          void speak(narration[progress.stage], { interrupt: false });
+        }
         if (progress.stage === "ocr" && progress.page && progress.pageCount) {
           const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
           setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
         } else {
           setDetail("");
         }
-      });
+        });
+      } finally {
+        window.clearInterval(heartbeat);
+      }
 
       // AI pass: refine the OCR'd fields (cleaner labels, correct types,
       // natural questions). Best-effort — falls back to OCR if the LLM is off.
@@ -154,6 +183,7 @@ export function useProcessing() {
       const unclear = fields.filter((f) => f.confidence < 60 && f.source === "ocr").length;
       setUnclearCount(unclear);
       setStage("done");
+      voice?.transitionConversation({ type: "READY_TO_FILL" });
 
       if (fields.length === 0) {
         const message =
@@ -167,7 +197,9 @@ export function useProcessing() {
       // are, and how many will be auto-filled from the saved profile.
       const sectionKind = result.isAcroForm ? "a digital form with built-in fields" : "a scanned form";
       const preview = fields.slice(0, 4).map((f) => f.label).join(", ");
-      const autofillable = fields.filter((f) => f.profileKey && !f.sensitive).length;
+      // A field being compatible with a profile is not evidence that the user
+      // has supplied a value. Only count verified, locally persisted matches.
+      const autofillable = matchFieldsToProfile(fields, getProfile()).length;
       const summary =
         `Your form is ready. It's ${sectionKind} with ${fields.length} field${fields.length === 1 ? "" : "s"}, ` +
         `including ${preview}${fields.length > 4 ? ", and more" : ""}. ` +
@@ -184,6 +216,7 @@ export function useProcessing() {
       setStage("failed");
       const message = "Something went wrong while analyzing the form. Please try again.";
       setStatus(message);
+      voice?.transitionConversation({ type: "ERROR", message });
       speak(message);
     }
   }
@@ -197,7 +230,7 @@ export function useProcessing() {
     return "pending";
   }
 
-  const autofillable = record?.fields.filter((f) => f.profileKey && !f.sensitive).length ?? 0;
+  const autofillable = record ? matchFieldsToProfile(record.fields, getProfile()).length : 0;
 
   return {
     formId,
@@ -212,8 +245,14 @@ export function useProcessing() {
     fieldCount,
     autofillable,
     stepState,
-    goFill: () => router.push(`/fill/${formId}`),
-    goReview: () => router.push(`/review/${formId}`),
+    goFill: () => {
+      voice?.transitionConversation({ type: "FILLING_FORM" });
+      router.push(`/fill/${formId}`);
+    },
+    goReview: () => {
+      voice?.transitionConversation({ type: "REVIEWING" });
+      router.push(`/review/${formId}`);
+    },
   };
 }
 

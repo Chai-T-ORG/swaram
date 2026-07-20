@@ -13,7 +13,10 @@ const FRAME_SIZE = 2048;
 const SPEECH_THRESHOLD = 0.012;
 // Time-based thresholds (sample-rate independent) — the old frame-count VAD
 // waited ~3.8s of silence, which made every command feel broken.
-const MIN_SPEECH_MS = 150;    // need this much speech to count as an utterance
+// A short affirmative, initial, or one-word command can be well under 150 ms.
+// Let STT and the conservative transcript filter decide whether it is useful;
+// VAD should not silently discard a valid user turn based on duration alone.
+const MIN_SPEECH_MS = 60;
 const SILENCE_FLUSH_MS = 500; // end the utterance this long after speech stops
                               // (500ms keeps short commands snappy without
                               //  clipping the natural pauses in a spoken answer)
@@ -27,6 +30,8 @@ export interface VadHandle {
   stop(): void;
   pause(): void;
   resume(): void;
+  /** Update the speech detection threshold (for barge-in during TTS). */
+  setThreshold(value: number): void;
 }
 
 function energy(samples: Float32Array): number {
@@ -41,9 +46,17 @@ function energy(samples: Float32Array): number {
  * client, so there's no aliasing; the transcription service resamples with a
  * proper filter server-side, which is far more accurate. Returns null if the
  * microphone can't be acquired.
+ *
+ * @param onUtterance - Called when a complete utterance is detected
+ * @param options.onSpeechStart - Called when speech first detected (for barge-in)
+ * @param options.bargeInThreshold - Energy threshold for barge-in detection (higher = less sensitive)
  */
 export async function startVadCapture(
   onUtterance: (pcm: Float32Array, sampleRate: number) => void,
+  options?: {
+    onSpeechStart?: () => void;
+    bargeInThreshold?: number;
+  },
 ): Promise<VadHandle | null> {
   let stream = getStream();
   if (!stream) stream = await initMic();
@@ -68,6 +81,10 @@ export async function startVadCapture(
   let paused = false;
   let stopped = false;
 
+  // Barge-in support: raised threshold during TTS so only genuine user speech triggers
+  let speechThreshold = SPEECH_THRESHOLD;
+  const onSpeechStart = options?.onSpeechStart;
+
   const totalMs = (frames: Float32Array[]) =>
     (frames.reduce((s, b) => s + b.length, 0) / sr) * 1000;
   const frameMsOf = (frame: Float32Array) => (frame.length / sr) * 1000;
@@ -91,7 +108,7 @@ export async function startVadCapture(
     const raw = event.inputBuffer.getChannelData(0);
     const samples = new Float32Array(raw.length);
     samples.set(raw); // native-rate mono; no client-side resampling
-    const loud = energy(samples) > SPEECH_THRESHOLD;
+    const loud = energy(samples) > speechThreshold;
 
     if (speechMs === 0) {
       // Idle: keep a short rolling pre-roll so a word's onset isn't lost.
@@ -104,6 +121,8 @@ export async function startVadCapture(
         buffer.push(samples);
         speechMs = frameMsOf(samples);
         silenceMs = 0;
+        // Notify listener that speech started (for barge-in detection)
+        onSpeechStart?.();
       }
       return;
     }
@@ -142,6 +161,9 @@ export async function startVadCapture(
       preRoll = [];
       speechMs = 0;
       silenceMs = 0;
+    },
+    setThreshold(value: number) {
+      speechThreshold = value;
     },
   };
 }

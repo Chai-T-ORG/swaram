@@ -18,6 +18,91 @@ import {
   getDeviceConfig,
   registerRetryCallback,
 } from "./modelManager";
+import { getStream } from "./micManager";
+
+// ── Barge-in detection (Web Audio API AnalyserNode) ──
+const BARGE_IN_RMS_THRESHOLD = 0.015;
+const BARGE_IN_DEBOUNCE_MS = 400;
+let bargeInCleanup: (() => void) | null = null;
+
+/**
+ * Detect user speech during TTS playback using a lightweight AnalyserNode
+ * on the existing mic stream. Returns a cleanup function.
+ */
+function startBargeInDetection(onBargeIn: () => void): () => void {
+  let stream: MediaStream | null = null;
+  let audioCtx: AudioContext | null = null;
+  let animId: number | null = null;
+  let stopped = false;
+  let lastSpeechAt = 0;
+
+  try {
+    stream = getStream();
+    if (!stream) return () => {}; // no mic available
+
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    audioCtx = new AudioCtx();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const tick = () => {
+      if (stopped) return;
+      analyser.getByteFrequencyData(dataArray);
+
+      // Frequency-weighted RMS: weight lower frequencies more (speech band 85–300 Hz)
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const freq = (i * (audioCtx?.sampleRate ?? 48000)) / analyser.fftSize;
+        // Only consider speech frequencies (85–4000 Hz)
+        if (freq >= 85 && freq <= 4000) {
+          // Weight: stronger for speech band, weaker outside
+          const weight = freq <= 300 ? 1.5 : freq <= 1000 ? 1.0 : 0.5;
+          const val = dataArray[i] / 255;
+          weightedSum += val * val * weight;
+          totalWeight += weight;
+        }
+      }
+
+      const rms = totalWeight > 0 ? Math.sqrt(weightedSum / totalWeight) : 0;
+
+      if (rms > BARGE_IN_RMS_THRESHOLD) {
+        const now = Date.now();
+        if (now - lastSpeechAt > BARGE_IN_DEBOUNCE_MS) {
+          lastSpeechAt = now;
+          console.log(`[TTS] Barge-in detected (RMS: ${rms.toFixed(4)})`);
+          onBargeIn();
+          return;
+        }
+      }
+
+      animId = requestAnimationFrame(tick);
+    };
+
+    animId = requestAnimationFrame(tick);
+  } catch (err) {
+    console.warn("[TTS] Barge-in detection init failed:", err);
+  }
+
+  return () => {
+    stopped = true;
+    if (animId) cancelAnimationFrame(animId);
+    if (audioCtx && audioCtx.state !== "closed") {
+      void audioCtx.close();
+    }
+  };
+}
+
+function stopBargeInDetection(): void {
+  if (bargeInCleanup) {
+    bargeInCleanup();
+    bargeInCleanup = null;
+  }
+}
 
 type KokoroModel = {
   generate: (text: string, options: { voice: string }) => Promise<{ audio: Float32Array; sampling_rate: number }>;
@@ -590,6 +675,8 @@ export interface SpeakOptions {
   pitch?: number;
   interrupt?: boolean;
   voiceURI?: string;
+  /** Enable barge-in detection — speech during this utterance cancels TTS. */
+  bargeIn?: boolean;
 }
 
 export type SpeechListener = (text: string) => void;
@@ -689,9 +776,14 @@ function hardStopPlayback(): void {
 /** Speak text aloud. Resolves when this utterance finishes or is superseded. */
 export function speak(text: string, options: SpeakOptions = {}): Promise<void> {
   if (!text.trim() || typeof window === "undefined") return Promise.resolve();
+  // Enable barge-in by default — callers can opt out with bargeIn: false
+  // Complete speech is the safe default. Energy-only barge-in cannot reliably
+  // distinguish a user from speaker leakage, so it caused prompts to stop
+  // halfway through. Explicit user actions (PTT / Stop) still cancel speech.
+  const opts = { interrupt: false, bargeIn: false, ...options };
   return new Promise<void>((resolve) => {
-    const job: SpeechJob = { text, options, resolve };
-    if (options.interrupt !== false) {
+    const job: SpeechJob = { text, options: opts, resolve };
+    if (opts.interrupt !== false) {
       generation += 1; // invalidate any in-flight render
       hardStopPlayback();
       const dropped = speechQueue;
@@ -709,25 +801,48 @@ async function runSpeechQueue(): Promise<void> {
   pauseContinuousListening();
   setTtsActive(true);
 
-  while (speechQueue.length > 0) {
-    const job = speechQueue.shift()!;
-    const myGen = (generation += 1);
+  // Check if any job in the queue has barge-in enabled
+  const bargeInEnabled = speechQueue.some((j) => j.options.bargeIn);
+  let bargeInTriggered = false;
 
-    // Captions show the human-readable text, not the phonetic respelling.
-    speechListeners.forEach((listener) => {
-      try {
-        listener(job.text);
-      } catch (e) {
-        console.error("[TTS] Speech listener error:", e);
-      }
+  // Start barge-in detection if any job has it enabled
+  if (bargeInEnabled) {
+    bargeInCleanup = startBargeInDetection(() => {
+      if (bargeInTriggered) return;
+      bargeInTriggered = true;
+      console.log("[TTS] Barge-in: cancelling speech queue");
+      // Cancel all remaining jobs
+      const remaining = speechQueue.splice(0);
+      remaining.forEach((j) => j.resolve());
+      // Stop current playback
+      generation += 1;
+      hardStopPlayback();
     });
+  }
 
-    try {
-      await renderJob(normalizeForSpeech(job.text), job.options, myGen);
-    } catch (e) {
-      console.warn("[TTS] render failed:", e);
+  try {
+    while (speechQueue.length > 0 && !bargeInTriggered) {
+      const job = speechQueue.shift()!;
+      const myGen = (generation += 1);
+
+      // Captions show the human-readable text, not the phonetic respelling.
+      speechListeners.forEach((listener) => {
+        try {
+          listener(job.text);
+        } catch (e) {
+          console.error("[TTS] Speech listener error:", e);
+        }
+      });
+
+      try {
+        await renderJob(normalizeForSpeech(job.text), job.options, myGen);
+      } catch (e) {
+        console.warn("[TTS] render failed:", e);
+      }
+      job.resolve();
     }
-    job.resolve();
+  } finally {
+    stopBargeInDetection();
   }
 
   queueRunning = false;

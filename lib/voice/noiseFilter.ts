@@ -51,7 +51,6 @@ const FILLER_RE = /^(?:uh+|um+|hmm+|hm+|ah+|eh+|mm+|mhm+|erm+)$/i;
 
 // ── Single-char or 2-char garbage ────────────────────────────────────
 // Allow "I" (English first-person pronoun) and Hindi "मैं" as valid.
-const SHORT_GARBAGE_RE = /^(?![iI]$)[a-zA-Z]{1,2}$/;
 
 // ── All-punctuation / symbol garbage ─────────────────────────────────
 const PUNCT_RE = /^[^\w\u0900-\u097F\u0D00-\u0D7F]+$/u;
@@ -95,9 +94,6 @@ export function detectNoise(raw: string): NoiseCheckResult {
 
   // Filler words when spoken alone
   if (FILLER_RE.test(lower)) return { isNoise: true, reason: "filler" };
-
-  // Single-char / 2-char garbage (allow "I")
-  if (SHORT_GARBAGE_RE.test(trimmed)) return { isNoise: true, reason: "short" };
 
   // All punctuation / symbols
   if (PUNCT_RE.test(trimmed)) return { isNoise: true, reason: "garbage" };

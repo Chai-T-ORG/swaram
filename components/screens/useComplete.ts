@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { getFile, getForm, saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
 import { generateFilledPdf } from "@/lib/pdf/pdfWriter";
@@ -20,6 +20,7 @@ export type CompleteTone = "info" | "success" | "warning" | "error";
 
 export function useComplete() {
   const { formId } = useParams<{ formId: string }>();
+  const voice = useVoice();
   const startedRef = useRef(false);
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -78,6 +79,7 @@ export function useComplete() {
       await saveFile(formId, "filled", filled);
       const updated: FormRecord = { ...form, status: "complete" };
       await saveForm(updated);
+      voice?.transitionConversation({ type: "COMPLETED" });
       setRecord(updated);
       setPdfBlob(filled);
       setPdfUrl(URL.createObjectURL(filled));
@@ -97,7 +99,10 @@ export function useComplete() {
       );
     } catch {
       setTone("error");
-      setStatus("Something went wrong while creating the PDF. Please try again from the review screen.");
+      const message = "Something went wrong while creating the PDF. Please try again from the review screen.";
+      setStatus(message);
+      voice?.transitionConversation({ type: "ERROR", message });
+      speak(message);
     }
   }
 
