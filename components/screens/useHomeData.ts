@@ -19,10 +19,10 @@ export function routeForForm(form: FormRecord): string {
 }
 
 /** Answered share of a form, 0-100. */
-export function formProgress(form: FormRecord): number {
-  if (!form.fields.length) return 0;
-  const done = form.fields.filter((f) => f.status === "answered" || f.status === "autofilled").length;
-  return Math.round((done / form.fields.length) * 100);
+export function formProgress(f: any): number {
+  if (!f || !f.fields || f.fields.length === 0) return 0;
+  const done = f.fields.filter((field: any) => field.status === "answered" || field.status === "autofilled").length;
+  return Math.round((done / f.fields.length) * 100);
 }
 
 export function formatFormDate(ts: number): string {

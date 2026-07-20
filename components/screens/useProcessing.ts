@@ -34,6 +34,8 @@ export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] 
 
 const STAGE_ORDER: (AnalysisStage | "done")[] = ["reading", "ocr", "layout", "fields", "ordering", "done"];
 
+const activeProcesses = new Set<string>();
+
 export function useProcessing() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
@@ -88,9 +90,20 @@ export function useProcessing() {
   );
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    run();
+    if (activeProcesses.has(formId)) {
+      // Form is already being processed in another instance (Strict Mode).
+      const interval = setInterval(async () => {
+        const form = await getForm(formId);
+        if (form && form.status !== "processing") {
+          clearInterval(interval);
+          run(); // Fast-path to 'done' state
+        }
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+    
+    activeProcesses.add(formId);
+    run().finally(() => activeProcesses.delete(formId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

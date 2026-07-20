@@ -259,7 +259,7 @@ interface WordGroup {
  * Empty checkbox squares OCR into junk tokens ("O", "[]", "LJ", "1"...).
  * Drop them when reading option text so they don't break the grouping.
  */
-const CHECKBOX_ARTIFACT = /^[^a-zA-Z0-9]{1,3}$|^[oO0dDcCuUjJlLiI]$|^[\[\](){}|]{1,2}[a-zA-Z]?$/;
+const CHECKBOX_ARTIFACT = /^[^a-zA-Z0-9]{1,3}$|^[oO0dDcCuUjJlLiI1]$|^[\[\](){}|]{1,2}[a-zA-Z]?$|^\{\}$|^\(\)$/i;
 
 function isCheckboxArtifact(word: Word): boolean {
   return CHECKBOX_ARTIFACT.test(word.text.trim());
@@ -269,7 +269,7 @@ function isCheckboxArtifact(word: Word): boolean {
  * Split words into visually separated groups. A gap much wider than the
  * line's own character width means "next column/option starts here".
  */
-function groupWordsByGap(words: Word[], pageW: number): WordGroup[] {
+function groupWordsByGap(words: Word[], pageW: number, checkboxes: DetectedShape[] = []): WordGroup[] {
   const usable = words.filter(
     (w) => !isUnderscoreWord(w) && !isCheckboxArtifact(w) && w.text.trim(),
   );
@@ -283,7 +283,14 @@ function groupWordsByGap(words: Word[], pageW: number): WordGroup[] {
   const groups: WordGroup[] = [];
   let current: Word[] = [];
   for (const word of usable) {
-    if (current.length > 0 && word.bbox.x0 - current[current.length - 1].bbox.x1 > gapThreshold) {
+    const prev = current[current.length - 1];
+    let splitByCheckbox = false;
+    if (prev) {
+      splitByCheckbox = checkboxes.some(
+        (cb) => cb.x > prev.bbox.x1 && cb.x < word.bbox.x1 && Math.abs(cb.y - word.bbox.y0) < Math.max(word.bbox.y1 - word.bbox.y0, 20) * 1.5
+      );
+    }
+    if (current.length > 0 && (word.bbox.x0 - prev.bbox.x1 > gapThreshold || splitByCheckbox)) {
       groups.push(makeGroup(current));
       current = [];
     }
@@ -361,9 +368,9 @@ function isCombRow(row: DetectedShape[], label: string): boolean {
   const normalized = normalizeLabel(label);
   const count = row.length;
   
-  if (/aadhaar|aadhar/i.test(normalized) && (count === 12 || count === 14)) return true;
-  if (/pan\b/i.test(normalized) && count === 10) return true;
-  if (/pin\b|pincode/i.test(normalized) && count === 6) return true;
+  if (/aadhaar|aadhar/i.test(normalized) && count >= 10 && count <= 15) return true;
+  if (/pan\b/i.test(normalized) && count >= 8 && count <= 12) return true;
+  if (/pin\b|pincode/i.test(normalized) && count >= 4 && count <= 8) return true;
 
   return (
     count >= 7 ||
@@ -381,6 +388,21 @@ export async function inferFieldsFromPage(
 ): Promise<FormField[]> {
   const fields: FormField[] = [];
   const usedShapes = new Set<DetectedShape>();
+
+  // Strip handwriting out of lines before layout parsing
+  const writeAreas = shapes.filter(s => s.kind === "box" || s.kind === "line");
+  for (const line of lines) {
+    line.words = line.words.filter(w => {
+      return !writeAreas.some(area => {
+        if (area.kind === "box") {
+          return w.bbox.x0 >= area.x - 5 && w.bbox.x1 <= area.x + area.w + 5 && w.bbox.y0 >= area.y - 10 && w.bbox.y1 <= area.y + area.h + 10;
+        } else {
+          return w.bbox.x1 > area.x && w.bbox.x0 < area.x + area.w && Math.abs(w.bbox.y1 - area.y) < Math.max(area.h * 2, 25);
+        }
+      });
+    });
+  }
+  lines = lines.filter(l => l.words.length > 0);
 
   // Letter counters ("D", "O", "Q"...) look like little squares to the shape
   // detector. A real checkbox is empty, so its center never falls inside an
@@ -433,7 +455,7 @@ export async function inferFieldsFromPage(
     const optionBboxes = groups.map((g) => tickBoxFor(g, lineTop, lineBottom));
     fields.push({
       id: newId(),
-      label: dict?.label ?? cleanLabelText(label),
+      label: cleanLabelText(label),
       type: "choice",
       options,
       optionBboxes,
@@ -478,7 +500,7 @@ export async function inferFieldsFromPage(
       const x1 = Math.max(...row.map((box) => box.x + box.w));
       fields.push({
         id: newId(),
-        label: dict?.label ?? cleanLabelText(labelText),
+        label: cleanLabelText(labelText),
         type: "comb",
         combLength: row.length,
         page: pageIndex,
@@ -501,7 +523,7 @@ export async function inferFieldsFromPage(
 
     fields.push({
       id: newId(),
-      label: dict?.label ?? cleanLabelText(labelText),
+      label: cleanLabelText(labelText),
       type: "choice",
       options: resolvedOptions,
       optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
@@ -545,7 +567,7 @@ export async function inferFieldsFromPage(
     // "(tick one)" style headers: the next line holds the options.
     if (/\b(tick|choose|select)\b.*\b(one|any)\b|\(tick/i.test(raw)) {
       const headerLabel = raw
-        .replace(/^\s*\d+[.)]\s*/, "")
+        
         .replace(/\((tick|choose|select)[^)]*\)/gi, "")
         .replace(/\b(tick|choose|select)\s+(one|any)\b/gi, "")
         .trim();
@@ -560,7 +582,7 @@ export async function inferFieldsFromPage(
 
     // Options line under a pending header.
     if (pendingHeader && line.bbox.y0 - pendingHeader.y1 < pendingHeader.lineHeight * 4) {
-      const groups = groupWordsByGap(line.words, pageW);
+      const groups = groupWordsByGap(line.words, pageW, checkboxes);
       if (groupsLookLikeOptions(groups)) {
         pushChoice(pendingHeader.label, pendingHeader.dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
         pendingHeader = null;
@@ -572,7 +594,7 @@ export async function inferFieldsFromPage(
     }
 
     // Several "Label:" tokens on one line -> one field per segment.
-    const segments = splitLineSegments(line);
+    const segments = splitLineSegments(line, pageW, checkboxes);
     if (segments.length > 1) {
       for (const segment of segments) {
         if (!segment.labelText || segment.labelText.length < 2) continue;
@@ -582,9 +604,23 @@ export async function inferFieldsFromPage(
         if (fields.some((f) => labelsEqual(f.label, segment.labelText) || (dict && f.label === dict.label))) continue;
         fields.push({
           id: newId(),
-          label: dict?.label ?? cleanLabelText(segment.labelText),
+          label: cleanLabelText(segment.labelText),
           type: dict?.type ?? "text",
           options: dict?.type === "choice" ? dict.options : undefined,
+          optionBboxes: (() => {
+            if (dict?.type === "choice" && dict.options) {
+              const foundBboxes: BBox[] = [];
+              for (const opt of dict.options) {
+                const normOpt = opt.toLowerCase();
+                const word = line.words.find(w => w.text.toLowerCase() === normOpt || w.text.toLowerCase().includes(normOpt));
+                if (word) {
+                  foundBboxes.push(toFraction(word.bbox.x0, word.bbox.y0, word.bbox.x1 - word.bbox.x0, Math.max(lineHeight * 1.2, 14), pageW, pageH));
+                }
+              }
+              if (foundBboxes.length > 0) return foundBboxes;
+            }
+            return undefined;
+          })(),
           page: pageIndex,
           bbox: toFraction(
             segment.answerX0,
@@ -612,7 +648,7 @@ export async function inferFieldsFromPage(
 
     const colonIdx = (() => {
       for (let i = 0; i < words.length; i++) {
-        if (/:$/.test(words[i].text.trim()) && !isUnderscoreWord(words[i])) return i;
+        if ((/:$/.test(words[i].text.trim()) || /\?$/.test(words[i].text.trim())) && !isUnderscoreWord(words[i])) return i;
       }
       return -1;
     })();
@@ -634,8 +670,8 @@ export async function inferFieldsFromPage(
     // Options printed right on the line after the colon -> choice field.
     if (colonIdx >= 0) {
       const postWords = words.slice(colonIdx + 1);
-      const groups = groupWordsByGap(postWords, pageW);
-      if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 3 || checkboxes.length > 0)) {
+      const groups = groupWordsByGap(postWords, pageW, checkboxes);
+      if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 2 || checkboxes.length > 0)) {
         pushChoice(labelPart, dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
         continue;
       }
@@ -644,35 +680,61 @@ export async function inferFieldsFromPage(
     // A writable shape counts as evidence: on the same row after the label,
     // or directly below — but "below" only for real label candidates, so
     // stray box edges (photo frames etc.) can't adopt random short lines.
+    
     const isLabelCandidate = Boolean(dict) || endsWithColon || hasUnderscores;
-    const shape = writables.find((s) => {
+    // Pass 1: Try to find a shape exactly on the same row.
+    let shape = writables.find((s) => {
       if (usedShapes.has(s)) return false;
-      const sameRow =
-        overlapY(s.y, s.y + Math.max(s.h, 4), line.bbox.y0 - lineHeight * 0.3, line.bbox.y1 + lineHeight * 0.6) &&
-        s.x >= labelEndX - 12 &&
-        s.x <= line.bbox.x1 + pageW * 0.35;
-      const below =
-        (isLabelCandidate || labelWords.length <= 3) &&
-        s.y > line.bbox.y1 &&
-        s.y < line.bbox.y1 + lineHeight * 1.8 &&
-        s.x < labelEndX + pageW * 0.05 &&
-        s.x + s.w > line.bbox.x0;
-      return sameRow || below;
+      return (isLabelCandidate || labelWords.length <= 3) &&
+             overlapY(s.y, s.y + Math.max(s.h, 4), line.bbox.y0 - lineHeight * 0.3, line.bbox.y1 + lineHeight * 0.6) &&
+             s.x >= labelEndX - 12 &&
+             s.x <= line.bbox.x1 + pageW * 0.15; // Tightened from 0.35
     });
 
+    // Pass 2: Fall back to below ONLY if this label is a strong candidate and no other label is on the same row.
+    if (!shape) {
+      shape = writables.find((s) => {
+        if (usedShapes.has(s)) return false;
+        return (isLabelCandidate || labelWords.length <= 3) &&
+               s.y > line.bbox.y1 &&
+               s.y < line.bbox.y1 + lineHeight * 1.8 &&
+               s.x < labelEndX + pageW * 0.05 &&
+               s.x + s.w > line.bbox.x0;
+      });
+    }
+
     if (!dict && !endsWithColon && !hasUnderscores && !shape) continue;
+
     if (!dict && labelWords.length > 8) continue;
     if (fields.some((f) => labelsEqual(f.label, labelPart) || (dict && f.label === dict.label))) continue;
 
     let bbox: BBox;
+    
     if (shape) {
       usedShapes.add(shape);
+      
+      let mergedH = shape.h;
+      if (shape.kind === "line") {
+        // Look for consecutive lines below it with similar x and w
+        let currentY = shape.y;
+        for (const other of writables) {
+          if (usedShapes.has(other) || other.kind !== "line") continue;
+          if (other.w > pageW * 0.2 && other.x < pageW * 0.4) {
+            if (other.y > currentY && other.y - currentY < lineHeight * 2.5) {
+              usedShapes.add(other);
+              mergedH = (other.y - shape.y) + other.h;
+              currentY = other.y;
+            }
+          }
+        }
+      }
+
       // For an underline, the write area sits on top of it.
       bbox = toFraction(
         shape.x,
         shape.kind === "line" ? shape.y - lineHeight * 1.1 : shape.y,
         shape.w,
-        shape.kind === "line" ? lineHeight * 1.15 : Math.max(shape.h, lineHeight * 1.2),
+        shape.kind === "line" ? mergedH + lineHeight * 1.1 : mergedH,
         pageW,
         pageH,
       );
@@ -693,9 +755,23 @@ export async function inferFieldsFromPage(
 
     fields.push({
       id: newId(),
-      label: dict?.label ?? labelPart,
+      label: labelPart,
       type: dict?.type ?? "text",
       options: dict?.type === "choice" ? dict.options : undefined,
+      optionBboxes: (() => {
+        if (dict?.type === "choice" && dict.options) {
+          const foundBboxes: BBox[] = [];
+          for (const opt of dict.options) {
+            const normOpt = opt.toLowerCase();
+            const word = line.words.find(w => w.text.toLowerCase() === normOpt || w.text.toLowerCase().includes(normOpt));
+            if (word) {
+              foundBboxes.push(toFraction(word.bbox.x0, word.bbox.y0, word.bbox.x1 - word.bbox.x0, Math.max(lineHeight * 1.2, 14), pageW, pageH));
+            }
+          }
+          if (foundBboxes.length === dict.options.length) return foundBboxes;
+        }
+        return undefined;
+      })(),
       page: pageIndex,
       bbox,
       order: fields.length,
@@ -777,42 +853,33 @@ interface LineSegment {
  * line holds several fields side by side. Underscore runs are treated as
  * answer space, not label text.
  */
-function splitLineSegments(line: OcrLine): LineSegment[] {
-  const words = line.words;
-  const colonIdx = words
-    .map((w, i) => (/:$/.test(w.text.trim()) && !isUnderscoreWord(w) ? i : -1))
-    .filter((i) => i >= 0);
-  if (colonIdx.length < 2) return [];
+function splitLineSegments(line: OcrLine, pageW: number, checkboxes: DetectedShape[] = []): LineSegment[] {
+  const groups = groupWordsByGap(line.words, pageW, checkboxes);
+  if (groups.length < 2) return [];
+
+  const hasColon = line.words.some(w => /:$/.test(w.text));
+  const hasDictMatch = groups.some(g => {
+    const dict = matchLabel(g.text);
+    return dict && dict.type !== "choice";
+  });
+  if (!hasColon && !hasDictMatch) return [];
 
   const segments: LineSegment[] = [];
-  let start = 0;
-  for (let k = 0; k < colonIdx.length; k++) {
-    const end = colonIdx[k];
-    const labelWords = words.slice(start, end + 1).filter((w) => !isUnderscoreWord(w));
-    const labelText = labelWords
-      .map((w) => w.text)
-      .join(" ")
-      .replace(/:$/, "")
-      .trim();
-    const nextLabelStart = k + 1 < colonIdx.length ? findSegmentStart(words, end + 1, colonIdx[k + 1]) : -1;
-    const answerX0 = words[end].bbox.x1 + 6;
-    const answerX1 = nextLabelStart >= 0 ? words[nextLabelStart].bbox.x0 - 8 : line.bbox.x1 + 40;
-    const confidence =
-      labelWords.length > 0
-        ? labelWords.reduce((sum, w) => sum + w.confidence, 0) / labelWords.length
-        : line.confidence;
-    segments.push({ labelText, confidence, answerX0, answerX1 });
-    start = nextLabelStart >= 0 ? nextLabelStart : end + 1;
+  for (let k = 0; k < groups.length; k++) {
+    const group = groups[k];
+    const answerX0 = group.x1 + 6;
+    const answerX1 = k + 1 < groups.length ? groups[k+1].x0 - 8 : line.bbox.x1 + 40;
+    const confidence = group.words.length > 0 
+      ? group.words.reduce((sum, w) => sum + w.confidence, 0) / group.words.length
+      : line.confidence;
+    segments.push({
+      labelText: group.text,
+      confidence,
+      answerX0,
+      answerX1
+    });
   }
   return segments;
-}
-
-/** First non-underscore word between two colon words — the next label's start. */
-function findSegmentStart(words: OcrLine["words"], from: number, colonAt: number): number {
-  for (let i = from; i <= colonAt; i++) {
-    if (!/^[_\-.]+$/.test(words[i].text.trim())) return i;
-  }
-  return colonAt;
 }
 
 function cleanLabelText(text: string): string {

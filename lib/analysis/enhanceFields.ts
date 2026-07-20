@@ -94,7 +94,6 @@ export async function enhanceFieldsWithLlm(
 
     out.push({
       ...field,
-      label: typeof llm.label === "string" && llm.label.trim() ? llm.label.trim() : field.label,
       type: nextType,
       options,
       question: typeof llm.question === "string" && llm.question.trim() ? llm.question.trim() : field.question,

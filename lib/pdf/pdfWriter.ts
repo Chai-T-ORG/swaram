@@ -32,7 +32,7 @@ function isYes(value: string): boolean {
 /** Shrink font size until text fits the box width (floor 8pt for legibility). */
 function fitFontSize(font: PDFFont, text: string, maxWidth: number, start = 11): number {
   let size = start;
-  while (size > 8 && font.widthOfTextAtSize(text, size) > maxWidth) {
+  while (size > 14 && font.widthOfTextAtSize(text, size) > maxWidth) {
     size -= 0.5;
   }
   return size;
@@ -40,11 +40,16 @@ function fitFontSize(font: PDFFont, text: string, maxWidth: number, start = 11):
 
 function drawCheckmark(page: PDFPage, bbox: { x: number; y: number; w: number; h: number }, checkFont: PDFFont): void {
   const { width: pw, height: ph } = page.getSize();
-  const boxX = bbox.x * pw;
-  const boxW = Math.max(bbox.w * pw, 6);
+  let boxX = bbox.x * pw;
+  let boxW = Math.max(bbox.w * pw, 6);
   const boxH = Math.max(bbox.h * ph, 6);
   const boxBottom = ph - (bbox.y + bbox.h) * ph;
-  // U+2713 maps to the ZapfDingbats checkmark glyph.
+  
+  if (boxW > boxH * 1.5) {
+    boxX -= 18;
+    boxW = 16;
+  }
+
   const size = Math.min(Math.max(boxH * 0.9, 9), 15);
   page.drawText("✓", {
     x: boxX + Math.max((boxW - size * 0.8) / 2, 0.5),
@@ -125,8 +130,17 @@ function drawAnswer(
   const text = field.value.trim();
 
   if (field.combLength) {
-    // Strip spaces that might have been typed, e.g., for Aadhaar "1234 5678" -> "12345678"
-    const chars = text.replace(/\s+/g, "").split("");
+    let chars: string[];
+    if (field.type === "date") {
+      chars = text.replace(/\D/g, "").split("");
+    } else if (
+      field.profileKey &&
+      ["aadhaar", "pan", "mobile", "pin", "bank_account", "ifsc"].includes(field.profileKey)
+    ) {
+      chars = text.replace(/\s+/g, "").split("");
+    } else {
+      chars = text.split("");
+    }
     const cellW = boxW / field.combLength;
     const size = fitFontSize(font, "W", cellW - 2, 12);
     const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
@@ -135,6 +149,20 @@ function drawAnswer(
       const charX = boxX + i * cellW + (cellW - charW) / 2;
       page.drawText(chars[i], { x: charX, y: baseline, size, font, color: INK });
     }
+    return;
+  }
+
+  // If it's a large box, wrap text.
+  if (boxH > 28 && text.length > 30) {
+    page.drawText(text, {
+      x: boxX + 2,
+      y: boxBottom + boxH - 12, // start near the top of the box
+      size: 11,
+      font,
+      color: INK,
+      maxWidth: boxW - 4,
+      lineHeight: 14,
+    });
     return;
   }
 

@@ -17,6 +17,7 @@ import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
+import { validateField } from "@/lib/validation/rules";
 import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit } from "@/lib/voice/transcriptFormat";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
 import { setSttFieldHint } from "@/lib/voice/groqSTT";
@@ -487,6 +488,13 @@ export function useFillSession() {
     const value = formatAnswer(source, field);
     if (!value) {
       await speak("I didn't catch that. Could you repeat it?");
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    const validationError = validateField(field.label, value);
+    if (validationError) {
+      await speak(`${validationError} Let's try again.`);
       if (alive(id)) setPhase("listening");
       return;
     }
