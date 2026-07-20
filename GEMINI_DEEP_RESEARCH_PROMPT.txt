@@ -1,0 +1,93 @@
+You are researching for the engineering team of Swaram, a voice-first PWA that
+helps blind users in India fill forms by voice. The attached document
+(SWARAM_VOICE_DOSSIER.txt) describes the entire current codebase: read it
+fully first — every recommendation must slot into that architecture and
+respect its constraints (§12) and attack its listed weaknesses (§11).
+
+RESEARCH GOAL
+Make Swaram's speech-to-text pipeline world-class — accuracy and
+responsiveness comparable to ChatGPT's voice mode — primarily using the APIs
+we already pay for (Sarvam AI Saaras v3, Groq Whisper large-v3-turbo + Llama,
+Azure Speech centralindia), and secondarily identifying any additional
+API/service that measurably beats them for Indian-accent English, Hindi,
+Malayalam, code-mixed speech, and Indian proper nouns. A secondary section
+should cover TTS improvements with the same vendors.
+
+QUESTIONS TO ANSWER (in priority order)
+
+1. STREAMING & LATENCY. Sarvam Saaras v3 has a WebSocket streaming endpoint we
+   don't use; Azure has a streaming SDK we barely use. Research: exact current
+   capabilities, protocol details, partial-result semantics, endpointing
+   controls, and pricing of (a) Sarvam Saaras streaming, (b) Azure Speech
+   streaming/fast-transcription, (c) Groq's fastest Whisper options. How do
+   production voice agents (OpenAI Realtime, Gemini Live, Deepgram, Retell,
+   Vapi, LiveKit agents) structure capture -> VAD -> streaming STT -> endpoint
+   detection to feel instant? Give a concrete recommended architecture for our
+   clip-based Next.js pipeline to add streaming/partials without breaking the
+   fallback chain.
+
+2. VAD & ENDPOINTING. Best practice in 2025-26 for browser-side VAD: Silero
+   VAD via onnxruntime-web / @ricky0123/vad-web, AudioWorklet migration off
+   ScriptProcessorNode, adaptive noise floors, and "semantic endpointing"
+   (deciding the user finished the thought, as OpenAI's semantic VAD does).
+   What is proven to work on low-end Android + iOS Safari? Recommend concrete
+   parameters/libraries to replace our RMS-threshold VAD (§5.2).
+
+3. PROPER-NOUN ACCURACY. Our ensemble + LLM fusion (§6.2) is homegrown
+   generative error correction. Survey the state of the art: GER / RobustGER /
+   Whispering-LLaMA literature, ROVER-style N-best combination, Deepgram
+   keyterm prompting, AssemblyAI keyterms_prompt, OpenAI gpt-4o-transcribe
+   prompt biasing, Azure phrase lists + custom speech models, and
+   phoneme/G2P-aware matching for Indic names. Which techniques would
+   measurably improve our fusion given that Groq exposes no N-best and Sarvam
+   has no biasing? Should the fusion LLM see phonetic transcriptions? Is a
+   Gemini audio pass (dormant in our code) the best fourth engine, and which
+   Gemini model/mode is optimal for 2-10 s clips in 2026?
+
+4. INDIAN-LANGUAGE & CODE-SWITCHING STT LANDSCAPE. Rigorously compare, with
+   published benchmarks (WER on Indic datasets: Kathbath, IndicVoices, Svarah,
+   FLEURS) and pricing: Sarvam Saaras v3 (incl. its codemix mode), Azure,
+   Google Chirp/USM, OpenAI gpt-4o-transcribe / whisper-1, Deepgram Nova-3,
+   AssemblyAI Universal, ElevenLabs Scribe, Reverie, AI4Bharat open models
+   (IndicWhisper, IndicConformer) that could run server-side. Which (if any)
+   deserve a slot in our ensemble or as the everyday engine for hi-IN/ml-IN?
+
+5. PERSONALIZATION. Beyond our name dictionary (§7.3): proven approaches for
+   per-user vocabularies, contact/entity biasing, and session context carrying
+   (how ChatGPT voice, Siri, and Google use context). How should confirmed
+   form values, profile data, and field labels flow into each engine we use?
+
+6. HALLUCINATION & ROBUSTNESS. Detecting/suppressing Whisper hallucinations
+   on short clips when the API exposes no logprobs; audio-quality gating;
+   retry/backoff patterns; graceful vendor-outage degradation.
+
+7. EVALUATION HARNESS. Design a benchmark we can actually run: building an
+   Indian-name/accent test set (recorded + TTS-synthesized audio), WER and
+   entity-accuracy metrics, per-engine and per-pipeline-stage measurement, and
+   regression testing inside a Next.js repo. Cite datasets and tooling.
+
+8. TTS (secondary). With Sarvam Bulbul v3 (incl. its dict_id pronunciation
+   dictionaries — unused by us), Azure Neural (incl. SSML phoneme/lexicon
+   support and HD voices), and Kokoro: how to get correct Indian name
+   pronunciation in ENGLISH readback (our transliteration trick only helps
+   hi/ml), lower first-audio latency (streaming synthesis options per vendor),
+   and better prosody for spelled-letter readback. Note Bulbul v3 quirks we
+   verified: lowercase speaker names, 2500-char limit, pitch/loudness are
+   v2-only.
+
+DELIVERABLE FORMAT
+- Executive summary: the 5 highest-leverage changes ranked by (accuracy gain ×
+  latency gain) / (cost × implementation effort), each mapped to the dossier
+  section it modifies.
+- Per-question findings with citations to primary sources (vendor docs,
+  papers, benchmark tables). Include concrete numbers: latency ms, price per
+  minute/character, WER figures with dataset named.
+- A proposed target architecture diagram (text is fine) for the upgraded STT
+  pipeline, distinguishing "everyday path" vs "accuracy path", showing where
+  streaming, new VAD, biasing, fusion, and evaluation hooks live.
+- A migration plan in 3 phases (quick wins ≤1 week, medium ≤1 month,
+  ambitious), each phase shippable on its own.
+- Flag anything in the dossier's assumptions that your research contradicts.
+
+Be skeptical of vendor marketing; prefer measured/benchmarked claims; where
+evidence is thin, say so explicitly rather than extrapolating.

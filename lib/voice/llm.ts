@@ -109,7 +109,7 @@ export async function correctTranscript(
   if (!isLlmAvailable() || cleaned.length < 2) return cleaned;
   const namesHint = userNames.length
     ? `\n- Names this user has already confirmed: ${userNames.slice(-10).join(", ")}. ` +
-      `If the heard text is a close mishearing of one of them, return that name exactly.`
+      `Return one exactly ONLY if the heard text is nearly identical to it; otherwise ignore this list.`
     : "";
   const sys =
     `You clean up ONE speech-to-text answer a user spoke while filling a form. ` +
@@ -117,8 +117,13 @@ export async function correctTranscript(
     `Rules:\n` +
     `- The language is ${langName(lang)} with Indian context (Indian names, towns, addresses).\n` +
     `- Fix obvious mishearings toward a plausible value for this field.\n` +
+    `- FAITHFULNESS OVER PLAUSIBILITY for names: rare names are expected. NEVER swap in a different, ` +
+    `more common name. Single-letter initials stay single letters ("Tejas K M") — never expand ` +
+    `initials into words ("K M" must not become "Kumar").\n` +
     `- NEVER change, add, or drop digits. Keep every number exactly as spoken.\n` +
     `- Do not invent words that weren't said. If it already looks right, return it unchanged.\n` +
+    `- If the text is an incoherent repetition loop (the same phrase over and over) or clearly ` +
+    `unrelated noise rather than an answer to this field, reply with exactly: (unclear)\n` +
     `- Proper-case names and places. Keep it concise.` +
     namesHint;
   const user =
@@ -133,6 +138,9 @@ export async function correctTranscript(
     { temperature: 0, maxTokens: 60, fast: true },
   );
   const result = (out || "").trim().replace(/^["']+|["']+$/g, "");
+  // The model judged the clip an incoherent loop/noise — return nothing so
+  // the fill loop asks again instead of confirming a hallucination.
+  if (/^\(unclear\)$/i.test(result)) return "";
   // Guard against a rambling or empty reply — fall back to the original.
   if (!result || result.length > cleaned.length * 3 + 24) return cleaned;
   return result;

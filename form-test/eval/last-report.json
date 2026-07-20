@@ -1,0 +1,173 @@
+{
+  "at": "2026-07-20T06:51:51.058Z",
+  "avgWer": 0.007407407407407407,
+  "entityRate": 1,
+  "avgMs": 2004,
+  "results": [
+    {
+      "id": "name-twinsha-full",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "Twinsha T Thilakan",
+      "got": "Twinsha T Thilakan",
+      "provider": "consensus",
+      "ms": 765,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "name-twinsha-nodict",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "Twinsha T Thilakan",
+      "got": "Twinsha T Thilakan",
+      "provider": "fusion",
+      "ms": 3193,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "name-tejas",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "Tejas Kumar",
+      "got": "Tejas Kumar",
+      "provider": "consensus",
+      "ms": 1976,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "name-initials-tejas",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "Tejas K M",
+      "got": "Tejas K M",
+      "provider": "fusion",
+      "ms": 2366,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "name-initials-carrier",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "Tejas K M",
+      "got": "Tejas K M",
+      "provider": "fusion",
+      "ms": 2581,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "name-initials-head",
+      "lang": "en-IN",
+      "hint": "name",
+      "expected": "P V Sindhu",
+      "got": "P. V. Sindhu",
+      "provider": "fusion",
+      "ms": 2722,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "phone-10digit",
+      "lang": "en-IN",
+      "hint": "",
+      "expected": "My phone number is 9840950950",
+      "got": "My phone number is 9840950950",
+      "provider": "sarvam",
+      "ms": 710,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "pincode",
+      "lang": "en-IN",
+      "hint": "",
+      "expected": "670563",
+      "got": "670563",
+      "provider": "groq",
+      "ms": 2942,
+      "wer": 0,
+      "entity": true
+    },
+    {
+      "id": "address-en",
+      "lang": "en-IN",
+      "hint": "",
+      "expected": "Flat number 12 Sree Nilayam Temple Road Kannur Kerala",
+      "got": "Flat number 12, Shri Nilayam Temple Road, Kannur, Kerala.",
+      "provider": "groq",
+      "ms": 2901,
+      "wer": 0.1111111111111111,
+      "entity": null
+    },
+    {
+      "id": "date-spoken",
+      "lang": "en-IN",
+      "hint": "",
+      "expected": "25th May 2002",
+      "got": "25th May 2002",
+      "provider": "groq",
+      "ms": 2791,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "spell-twinsha",
+      "lang": "en-IN",
+      "hint": "spell",
+      "expected": "T W I N S H A",
+      "got": "T W I N S H A.",
+      "provider": "consensus",
+      "ms": 1271,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "spell-multiword-space",
+      "lang": "en-IN",
+      "hint": "spell",
+      "expected": "T W I N S H A space T space T H I L A K A N",
+      "got": "T W I N S H A space T space T H I L A K A N.",
+      "provider": "consensus",
+      "ms": 1692,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "hindi-name",
+      "lang": "hi-IN",
+      "hint": "",
+      "expected": "मेरा नाम तेजस कुमार है",
+      "got": "मेरा नाम तेजस कुमार है।",
+      "provider": "sarvam",
+      "ms": 483,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "malayalam-name",
+      "lang": "ml-IN",
+      "hint": "",
+      "expected": "എന്റെ പേര് തിലകൻ എന്നാണ്",
+      "got": "എന്റെ പേര് തിലകൻ എന്നാണ്.",
+      "provider": "azure",
+      "ms": 3026,
+      "wer": 0,
+      "entity": null
+    },
+    {
+      "id": "command-yes",
+      "lang": "en-IN",
+      "hint": "",
+      "expected": "Yes that is correct",
+      "got": "Yes, that is correct.",
+      "provider": "sarvam",
+      "ms": 646,
+      "wer": 0,
+      "entity": null
+    }
+  ]
+}

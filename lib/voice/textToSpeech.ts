@@ -463,20 +463,20 @@ const CLIENT_TTS_CACHE_MAX = 40;
 const TTS_CACHE_NAME = "swaram-tts-v1";
 const PERSIST_MAX = 200;
 
-/** A stable, opaque Request key for a (lang, text) pair. */
-function persistKey(text: string, lang: string): string {
-  return `https://swaram.local/tts/${encodeURIComponent(lang)}/${encodeURIComponent(text)}`;
+/** A stable, opaque Request key for a (lang, text, readback-mode) triple. */
+function persistKey(text: string, lang: string, nameReadback = false): string {
+  return `https://swaram.local/tts/${encodeURIComponent(lang)}${nameReadback ? "/nr" : ""}/${encodeURIComponent(text)}`;
 }
 
 function cacheStorageAvailable(): boolean {
   return typeof caches !== "undefined";
 }
 
-async function persistentGet(text: string, lang: string): Promise<Blob | null> {
+async function persistentGet(text: string, lang: string, nameReadback = false): Promise<Blob | null> {
   if (!cacheStorageAvailable()) return null;
   try {
     const cache = await caches.open(TTS_CACHE_NAME);
-    const hit = await cache.match(persistKey(text, lang));
+    const hit = await cache.match(persistKey(text, lang, nameReadback));
     if (!hit) return null;
     const blob = await hit.blob();
     return blob.size > 0 ? blob : null;
@@ -485,12 +485,12 @@ async function persistentGet(text: string, lang: string): Promise<Blob | null> {
   }
 }
 
-async function persistentSet(text: string, lang: string, blob: Blob): Promise<void> {
+async function persistentSet(text: string, lang: string, blob: Blob, nameReadback = false): Promise<void> {
   if (!cacheStorageAvailable()) return;
   try {
     const cache = await caches.open(TTS_CACHE_NAME);
     await cache.put(
-      persistKey(text, lang),
+      persistKey(text, lang, nameReadback),
       new Response(blob, { headers: { "Content-Type": blob.type || "audio/mpeg" } }),
     );
     // Bound the store. Cache.keys() is insertion-ordered, so the oldest
@@ -505,13 +505,13 @@ async function persistentSet(text: string, lang: string, blob: Blob): Promise<vo
   }
 }
 
-async function fetchTTS(text: string, lang: string): Promise<Blob> {
-  const key = `${lang}|${text}`;
+async function fetchTTS(text: string, lang: string, nameReadback = false): Promise<Blob> {
+  const key = `${lang}|${nameReadback ? "nr|" : ""}${text}`;
   const memBlob = clientTtsCache.get(key);
   if (memBlob) return memBlob;
 
   // L2: persisted from an earlier session — instant and free.
-  const persisted = await persistentGet(text, lang);
+  const persisted = await persistentGet(text, lang, nameReadback);
   if (persisted) {
     clientTtsCache.set(key, persisted);
     return persisted;
@@ -520,7 +520,7 @@ async function fetchTTS(text: string, lang: string): Promise<Blob> {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, lang }),
+    body: JSON.stringify({ text, lang, ...(nameReadback ? { nameReadback: true } : {}) }),
   });
   if (!res.ok) throw new Error("tts-http-" + res.status);
   const blob = await res.blob();
@@ -530,7 +530,7 @@ async function fetchTTS(text: string, lang: string): Promise<Blob> {
   if (clientTtsCache.size > CLIENT_TTS_CACHE_MAX) {
     clientTtsCache.delete(clientTtsCache.keys().next().value as string);
   }
-  void persistentSet(text, lang, blob); // fire-and-forget
+  void persistentSet(text, lang, blob, nameReadback); // fire-and-forget
   return blob;
 }
 
@@ -544,9 +544,9 @@ export function prefetchTTS(text: string, lang = "en-IN"): void {
 }
 
 /** Speak one line via the cloud proxy. Rejects (to trigger fallback) on failure. */
-function playServerTTS(text: string, lang: string, rate: number, myGen: number): Promise<void> {
+function playServerTTS(text: string, lang: string, rate: number, myGen: number, nameReadback = false): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    fetchTTS(text, lang)
+    fetchTTS(text, lang, nameReadback)
       .then((blob) => {
         if (jobCancelled(myGen)) return resolve();
         const url = URL.createObjectURL(blob);
@@ -584,6 +584,12 @@ export interface SpeakOptions {
   pitch?: number;
   interrupt?: boolean;
   voiceURI?: string;
+  /**
+   * This line reads a person's name back to the user: route it through the
+   * TTS path that pronounces Indian names correctly (Bulbul + pronunciation
+   * dictionary). No-op until SARVAM_TTS_DICT_ID is configured server-side.
+   */
+  nameReadback?: boolean;
 }
 
 export type SpeechListener = (text: string) => void;
@@ -736,7 +742,7 @@ async function renderJob(text: string, options: SpeakOptions, myGen: number): Pr
 
   if (settings.ttsProvider === "cloud" || settings.ttsProvider === "google") {
     try {
-      await playServerTTS(text, settings.sttLang || "en-IN", rate, myGen);
+      await playServerTTS(text, settings.sttLang || "en-IN", rate, myGen, options.nameReadback);
       return;
     } catch (err) {
       console.warn("[TTS] Cloud voice failed, falling back to system:", err);
