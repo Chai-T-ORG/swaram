@@ -217,11 +217,20 @@ export default function ScanDesktop() {
 
             {/* Shutter Button & Auto-capture Ring */}
             {sc.cameraState === "active" && (
-              <div className="absolute inset-x-0 bottom-4 flex flex-col items-center gap-1.5 z-20">
+              <div className="absolute inset-x-0 bottom-4 flex flex-col items-center gap-2 z-20">
                 {sc.autoCaptureProgress > 0 && (
                   <span className="rounded-full bg-ink/75 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm animate-pulse">
                     Hold steady…
                   </span>
+                )}
+                {sc.capturedPages.length > 0 && sc.autoCaptureProgress === 0 && (
+                  <button
+                    type="button"
+                    onClick={sc.finishScan}
+                    className="rounded-full bg-accent px-4 py-1.5 text-xs font-bold text-on-accent shadow-md hover:scale-105 active:scale-95 transition-transform"
+                  >
+                    Done ({sc.capturedPages.length} {sc.capturedPages.length === 1 ? 'page' : 'pages'})
+                  </button>
                 )}
                 <div className="relative grid place-items-center">
                   <svg className="absolute -inset-1.5 h-19 w-19 -rotate-90 pointer-events-none" viewBox="0 0 76 76">
@@ -326,11 +335,11 @@ export default function ScanDesktop() {
                   </button>
                   <button
                     type="button"
-                    onClick={sc.accept}
+                    onClick={sc.acceptPage}
                     className="btn-primary min-h-12 px-8 text-sm font-bold shadow-float"
                   >
                     <IconCheck className="h-4.5 w-4.5 mr-1.5" />
-                    Use this scan
+                    Keep page
                   </button>
                 </div>
               </div>

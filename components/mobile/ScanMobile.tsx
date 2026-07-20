@@ -182,6 +182,15 @@ export default function ScanMobile() {
                     Hold steady…
                   </span>
                 )}
+                {sc.capturedPages.length > 0 && sc.autoCaptureProgress === 0 && (
+                  <button
+                    type="button"
+                    onClick={sc.finishScan}
+                    className="rounded-full bg-accent px-4 py-1.5 text-xs font-bold text-on-accent shadow-md active:scale-95 transition-transform"
+                  >
+                    Done ({sc.capturedPages.length} {sc.capturedPages.length === 1 ? 'page' : 'pages'})
+                  </button>
+                )}
                 <div className="relative grid place-items-center">
                   {/* SVG Progress Ring */}
                   <svg className="absolute -inset-1.5 h-21 w-21 -rotate-90 pointer-events-none" viewBox="0 0 84 84">
@@ -300,11 +309,11 @@ export default function ScanMobile() {
               <div className="sticky bottom-2 z-20 -mx-1 rounded-full bg-surface/60 p-1 backdrop-blur">
                 <button
                   type="button"
-                  onClick={sc.accept}
+                  onClick={sc.acceptPage}
                   className="btn-primary min-h-14 w-full text-base font-bold shadow-float"
                 >
                   <IconCheck className="h-5 w-5 mr-1.5" />
-                  Use this scan
+                  Keep page
                 </button>
               </div>
             </>

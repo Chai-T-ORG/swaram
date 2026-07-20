@@ -17,6 +17,8 @@ import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import { newId, type FormRecord } from "@/lib/types";
 import { speak } from "@/lib/voice/textToSpeech";
+import { loadOpenCv, autoCropImageBlob } from "@/lib/vision/shapeDetector";
+import { imagesToPdf } from "@/lib/pdf/imagesToPdf";
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
@@ -90,63 +92,107 @@ export function useUploadScreen() {
     ],
   });
 
-  async function handleFile(file: File | undefined | null) {
-    if (!file) return;
-    const isAccepted = ACCEPTED.includes(file.type) || /\.(pdf|jpe?g|png)$/i.test(file.name);
-    if (!isAccepted) {
-      setTone("error");
-      const message = `${file.name} is not a supported file. Please choose a PDF, JPG, or PNG.`;
-      setStatus(message);
-      speak(message);
-      return;
+  async function handleFiles(fileList: FileList | File[] | undefined | null) {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+
+    let hasPdf = false;
+    let hasImage = false;
+    for (const f of files) {
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      const isImg = f.type.startsWith("image/") || /\.(jpe?g|png)$/i.test(f.name);
+      if (isPdf) hasPdf = true;
+      if (isImg) hasImage = true;
+      if (!isPdf && !isImg) {
+        setTone("error");
+        const message = `${f.name} is not a supported file. Please choose PDF, JPG, or PNG.`;
+        setStatus(message);
+        speak(message);
+        return;
+      }
     }
-    if (file.size > MAX_BYTES) {
+
+    if (hasPdf && hasImage) {
       setTone("error");
-      const message = "That file is larger than 50 megabytes. Please choose a smaller file.";
+      const message = "Please upload either a single PDF or multiple images, but not a mix.";
       setStatus(message);
       speak(message);
       return;
     }
 
+    if (hasPdf && files.length > 1) {
+      setTone("error");
+      const message = "Please upload only one PDF at a time.";
+      setStatus(message);
+      speak(message);
+      return;
+    }
+
+    for (const f of files) {
+      if (f.size > MAX_BYTES) {
+        setTone("error");
+        const message = `${f.name} is larger than 50 megabytes. Please choose smaller files.`;
+        setStatus(message);
+        speak(message);
+        return;
+      }
+    }
+
     try {
       setTone("info");
-      setStatus(`Reading ${file.name}…`);
+      setStatus(`Processing ${files.length} file${files.length > 1 ? "s" : ""}…`);
       setProgress(0);
-      const bytes = await readWithProgress(file, (pct) => setProgress(pct));
-      const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+      let finalBlob: Blob;
+      let finalName = files[0].name;
+
+      if (hasPdf) {
+        const bytes = await readWithProgress(files[0], (pct) => setProgress(pct));
+        finalBlob = new Blob([bytes], { type: "application/pdf" });
+      } else {
+        await loadOpenCv();
+        const processedBlobs: Blob[] = [];
+        for (let i = 0; i < files.length; i++) {
+          setStatus(`Processing image ${i + 1} of ${files.length}…`);
+          const croppedBlob = await autoCropImageBlob(files[i]);
+          processedBlobs.push(croppedBlob);
+          setProgress(Math.round(((i + 1) / files.length) * 50));
+        }
+        setStatus("Creating PDF...");
+        finalBlob = await imagesToPdf(processedBlobs);
+        setProgress(100);
+        finalName = files.length > 1 ? "Scanned images.pdf" : finalName.replace(/\.(jpe?g|png)$/i, ".pdf");
+      }
+
       const record: FormRecord = {
         id: newId(),
-        name: file.name,
+        name: finalName,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         status: "processing",
-        sourceType: isPdf ? "pdf" : "image",
+        sourceType: "pdf",
         isAcroForm: false,
         pageCount: 0,
         pageDims: [],
         fields: [],
       };
-      await saveFile(
-        record.id,
-        "original",
-        new Blob([bytes], { type: file.type || (isPdf ? "application/pdf" : "image/jpeg") }),
-      );
+
+      await saveFile(record.id, "original", finalBlob);
       await saveForm(record);
-      setProgress(100);
       setTone("success");
-      setStatus(`${file.name} uploaded. Analyzing your form now.`);
+      setStatus(`${files.length} file${files.length > 1 ? "s" : ""} uploaded. Analyzing your form now.`);
       speak("Got it. Analyzing your form now.");
       router.push(`/processing/${record.id}`);
     } catch {
       setProgress(null);
       setTone("error");
-      const message = "Something went wrong while reading that file. Please try again.";
+      const message = "Something went wrong while processing. Please try again.";
       setStatus(message);
       speak(message);
     }
   }
 
-  return { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker };
+  return { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFiles, openPicker };
 }
 
 function readWithProgress(file: File, onProgress: (pct: number) => void): Promise<ArrayBuffer> {

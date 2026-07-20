@@ -12,7 +12,7 @@ import { useUploadScreen } from "@/components/screens/useUploadScreen";
 import { IconArrowLeft, IconUpload, IconDoc, IconCamera, IconLoader } from "@/components/icons";
 
 export default function UploadDesktop() {
-  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker } = useUploadScreen();
+  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFiles, openPicker } = useUploadScreen();
 
   return (
     <motion.div
@@ -48,7 +48,7 @@ export default function UploadDesktop() {
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          handleFile(e.dataTransfer.files?.[0]);
+          handleFiles(e.dataTransfer.files);
         }}
         className={`card flex flex-col items-center gap-6 py-16 text-center transition-all duration-300 ${
           dragging
@@ -70,10 +70,11 @@ export default function UploadDesktop() {
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
           className="sr-only"
           id="file-input"
-          onChange={(e) => handleFile(e.target.files?.[0])}
+          onChange={(e) => handleFiles(e.target.files)}
         />
 
         <button type="button" className="btn-primary" onClick={openPicker}>

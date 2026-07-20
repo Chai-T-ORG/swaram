@@ -14,6 +14,7 @@ import { saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import { newId, type FormRecord } from "@/lib/types";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
 import { loadOpenCv, checkDocumentInFrame, detectCorners, warpPerspectiveCanvas } from "@/lib/vision/shapeDetector";
+import { imagesToPdf } from "@/lib/pdf/imagesToPdf";
 
 export type CameraState = "idle" | "starting" | "active" | "captured" | "confirm" | "error";
 export type ScanTone = "info" | "warning" | "error" | "success";
@@ -133,6 +134,8 @@ export function useScanCapture() {
   const [torchOn, setTorchOn] = useState(false);
   const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
 
+  const [capturedPages, setCapturedPages] = useState<Blob[]>([]);
+
   // Voice commands gated by cameraState. English fast lanes are precise
   // regexes; the multilingual "yes" keywords accept the scan, and the
   // adaptive actions below catch any other phrasing or language.
@@ -148,11 +151,12 @@ export function useScanCapture() {
               `use (it|this|that)|looks good|keep (it|this)|\\baccept\\b|\\bconfirm\\b|continue|${intentRegex("yes").source}`,
               "iu",
             ),
-            () => accept(),
+            () => acceptPage(),
             "use it",
           ],
         ]
       : [
+          [/finish( scanning)?|done( scanning)?/i, () => finishScan(), "finish scan"],
           [/start( the)? camera|open( the)? camera|turn on( the)? camera/i, () => startCamera(), "start camera"],
           [
             /\bcapture\b|\bsnap\b|\bshoot\b|(take|click) (a |the )?(photo|picture|pic|snap)/i,
@@ -171,7 +175,7 @@ export function useScanCapture() {
             id: "accept_scan",
             description: "Keep this scan and continue to form analysis.",
             match: /\b(ok|okay|good|fine|great|keep|save|yes|done|perfect|proceed)\b/i,
-            run: () => accept(),
+            run: () => acceptPage(),
           },
           {
             id: "retake_photo",
@@ -182,6 +186,12 @@ export function useScanCapture() {
         ]
       : cameraState === "active"
         ? [
+            {
+              id: "finish_scan",
+              description: "Finish scanning and process the pages.",
+              match: /\b(finish|done)\b/i,
+              run: () => finishScan(),
+            },
             {
               id: "capture_photo",
               description: "Take the photo of the form right now.",
@@ -215,16 +225,18 @@ export function useScanCapture() {
       title: "Scan a printed form",
       hint:
         cameraState === "confirm"
-          ? "Say use it to accept this scan, or retake to try again."
-          : "Say start camera, then hold the form up. I capture automatically.",
+          ? "Say keep page to save it, or retake to try again."
+          : capturedPages.length > 0
+            ? "Say capture for the next page, or done scanning to finish."
+            : "Say start camera, then hold the form up. I capture automatically.",
       description:
         cameraState === "confirm"
-          ? "Review your scan. You can drag the corner handles to adjust the frame, or say use it or retake."
+          ? "Review your scan. You can drag the corner handles to adjust the frame, or say keep page or retake."
           : "Scanner page. Say start camera to open the camera, hold your form up with all four corners in the frame, and I will guide you and capture automatically. You can also say capture, or say upload to pick a file instead.",
       commands: voiceCommands,
       actions: voiceActions,
     },
-    [cameraState, cvReady, corners, rotation, warpedPreviewUrl],
+    [cameraState, cvReady, corners, rotation, warpedPreviewUrl, capturedPages.length],
   );
 
   useEffect(() => {
@@ -707,7 +719,7 @@ export function useScanCapture() {
     startCamera(); // startCamera → stopEverything revokes both preview URLs
   }
 
-  async function accept() {
+  async function acceptPage() {
     const rawCanvas = rawCanvasRef.current;
     if (!rawCanvas || corners.length !== 8) return;
 
@@ -737,10 +749,41 @@ export function useScanCapture() {
       return;
     }
 
-    await ingest(blob, "Scanned form");
+    setCapturedPages((prev) => {
+      const next = [...prev, blob];
+      const msg = `Page ${next.length} saved. Hold up the next page, or say done scanning.`;
+      setGuidance(msg);
+      speak(msg);
+      return next;
+    });
+
+    setCorners([]);
+    setRotation(0);
+    setDetectionFailed(false);
+    capturingRef.current = false;
+    startCamera();
   }
 
-  async function ingest(blob: Blob, baseName: string) {
+  async function finishScan() {
+    if (capturedPages.length === 0) return;
+    setCameraState("idle");
+    setTone("info");
+    const msg = "Creating PDF...";
+    setGuidance(msg);
+    speak(msg);
+
+    try {
+      const pdfBlob = await imagesToPdf(capturedPages);
+      await ingestPdf(pdfBlob, "Scanned form");
+    } catch (e) {
+      setTone("error");
+      const err = "Failed to create PDF. Please try again.";
+      setGuidance(err);
+      speak(err);
+    }
+  }
+
+  async function ingestPdf(blob: Blob, baseName: string) {
     stopEverything();
     const record: FormRecord = {
       id: newId(),
@@ -748,7 +791,7 @@ export function useScanCapture() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       status: "processing",
-      sourceType: "image",
+      sourceType: "pdf",
       isAcroForm: false,
       pageCount: 0,
       pageDims: [],
@@ -757,6 +800,10 @@ export function useScanCapture() {
     await saveFile(record.id, "original", blob);
     await saveForm(record);
     router.push(`/processing/${record.id}`);
+  }
+
+  async function ingest(blob: Blob, baseName: string) {
+    await ingestPdf(blob, baseName);
   }
 
   return {
@@ -782,7 +829,9 @@ export function useScanCapture() {
     startCamera: () => startCamera(),
     capture,
     retake,
-    accept,
+    acceptPage,
+    finishScan,
+    capturedPages,
     updateCorner,
     commitCornerChange,
     rotate90,

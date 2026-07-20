@@ -13,7 +13,7 @@ import { useUploadScreen } from "@/components/screens/useUploadScreen";
 import { IconUpload, IconCamera, IconLoader, IconChevronRight } from "@/components/icons";
 
 export default function UploadMobile() {
-  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker } = useUploadScreen();
+  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFiles, openPicker } = useUploadScreen();
 
   return (
     <motion.div
@@ -32,10 +32,11 @@ export default function UploadMobile() {
       <input
         ref={inputRef}
         type="file"
+        multiple
         accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
         className="sr-only"
         id="file-input"
-        onChange={(e) => handleFile(e.target.files?.[0])}
+        onChange={(e) => handleFiles(e.target.files)}
       />
 
       <button
@@ -49,7 +50,7 @@ export default function UploadMobile() {
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          handleFile(e.dataTransfer.files?.[0]);
+          handleFiles(e.dataTransfer.files);
         }}
         className={`card flex min-h-24 cursor-pointer items-center gap-4 p-5 text-left transition-all duration-300 ${
           dragging

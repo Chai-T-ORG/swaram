@@ -546,3 +546,47 @@ export async function warpPerspectiveCanvas(
     dst.delete();
   }
 }
+
+/**
+ * Convenience wrapper: converts an image Blob to a Canvas,
+ * attempts to detect its corners, and returns a cropped (warped) JPEG Blob.
+ * If no document is found or OpenCV fails, returns the original Blob.
+ */
+export async function autoCropImageBlob(blob: Blob): Promise<Blob> {
+  // Use imageBitmap if available (browser), fallback to createImageBitmap
+  let img: ImageBitmap | HTMLImageElement;
+  try {
+    img = await createImageBitmap(blob);
+  } catch {
+    // Safari fallback
+    const url = URL.createObjectURL(blob);
+    img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    URL.revokeObjectURL(url);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return blob;
+  ctx.drawImage(img, 0, 0);
+
+  const corners = await detectCorners(canvas);
+  if (!corners || corners.length !== 8) {
+    return blob; // No distinct quad found, return original
+  }
+
+  const warped = await warpPerspectiveCanvas(canvas, corners);
+  if (warped === canvas) {
+    return blob; // Warping failed
+  }
+
+  return new Promise<Blob>((resolve) => {
+    warped.toBlob((b) => resolve(b || blob), "image/jpeg", 0.9);
+  });
+}
