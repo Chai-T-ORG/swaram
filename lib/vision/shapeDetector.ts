@@ -300,13 +300,29 @@ function sortCorners(points: number[]): number[] {
     pts.push({ x: points[i], y: points[i + 1] });
   }
 
-  const sum = pts.map((p) => p.x + p.y);
-  const diff = pts.map((p) => p.y - p.x);
+  const cx = pts.reduce((sum, p) => sum + p.x, 0) / 4;
+  const cy = pts.reduce((sum, p) => sum + p.y, 0) / 4;
 
-  const tl = pts[sum.indexOf(Math.min(...sum))];
-  const br = pts[sum.indexOf(Math.max(...sum))];
-  const tr = pts[diff.indexOf(Math.min(...diff))];
-  const bl = pts[diff.indexOf(Math.max(...diff))];
+  pts.sort((a, b) => {
+    const angleA = Math.atan2(a.y - cy, a.x - cx);
+    const angleB = Math.atan2(b.y - cy, b.x - cx);
+    return angleA - angleB;
+  });
+
+  let minDist = Infinity;
+  let tlIndex = 0;
+  for (let i = 0; i < 4; i++) {
+    const dist = pts[i].x * pts[i].x + pts[i].y * pts[i].y;
+    if (dist < minDist) {
+      minDist = dist;
+      tlIndex = i;
+    }
+  }
+
+  const tl = pts[tlIndex];
+  const tr = pts[(tlIndex + 1) % 4];
+  const br = pts[(tlIndex + 2) % 4];
+  const bl = pts[(tlIndex + 3) % 4];
 
   return [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y];
 }
@@ -320,7 +336,6 @@ function quadAreaOf(pts: number[]): number {
   }
   return Math.abs(area) / 2;
 }
-
 export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[] | null> {
   const cv = await loadOpenCv();
   if (!cv) return null;
@@ -334,24 +349,19 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
   const h = canvas.height;
   const frameArea = w * h;
   const minArea = frameArea * 0.1;
-  const maxArea = frameArea * 0.95;
-  const borderX = w * 0.02;
-  const borderY = h * 0.02;
-
-  let bestScore = 0;
-  let bestPoints: number[] | null = null;
+  const maxArea = frameArea * 0.85; // Strict: documents taking >85% are either vignettes or don't need cropping
 
   /**
-   * Score every plausible 4-corner candidate in a binary mask. The hull is
-   * convex by construction; a held sheet (fingers, curled corner) often
-   * approximates to 5-6 points at tight tolerance before collapsing to its
-   * 4 true corners, hence the epsilon escalation. Quads that hug the frame
-   * are the merged-background blob, never the paper — rejected outright.
+   * Evaluates a binary mask and returns the best 4-corner polygon (if any)
+   * that represents a paper-like sheet.
    */
-  const considerContours = (mask: unknown, mode: number) => {
+  const getBestQuad = (mask: unknown, mode: number): number[] | null => {
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
     cv.findContours(mask as never, contours, hierarchy, mode, cv.CHAIN_APPROX_SIMPLE);
+
+    let bestScore = 0;
+    let bestPoints: number[] | null = null;
 
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
@@ -365,23 +375,33 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
       cv.convexHull(contour, hull, false, true);
       const hullPeri = cv.arcLength(hull, true);
 
-      for (const eps of [0.02, 0.04, 0.06, 0.09]) {
+      // Wider epsilon range: allows cut-off corners (5-gons) to collapse into 4-gons
+      for (const eps of [0.02, 0.03, 0.04, 0.05, 0.07, 0.09, 0.12]) {
         const approx = new cv.Mat();
         cv.approxPolyDP(hull, approx, eps * hullPeri, true);
-        if ((approx as any).rows === 4) {
+        
+        if ((approx as any).rows === 4 && cv.isContourConvex(approx)) {
           const pts: number[] = [];
           for (let j = 0; j < 4; j++) {
             pts.push((approx as any).data32S[j * 2], (approx as any).data32S[j * 2 + 1]);
           }
+          
           const qa = quadAreaOf(pts);
-          let borderCorners = 0;
-          for (let j = 0; j < 4; j++) {
-            const x = pts[j * 2];
-            const y = pts[j * 2 + 1];
-            if (x < borderX || x > w - borderX || y < borderY || y > h - borderY) borderCorners++;
+          
+          const minX = Math.min(pts[0], pts[2], pts[4], pts[6]);
+          const maxX = Math.max(pts[0], pts[2], pts[4], pts[6]);
+          const minY = Math.min(pts[1], pts[3], pts[5], pts[7]);
+          const maxY = Math.max(pts[1], pts[3], pts[5], pts[7]);
+          const wSpan = (maxX - minX) / w;
+          const hSpan = (maxY - minY) / h;
+
+          // ULTIMATE VIGNETTE KILLER:
+          // If a quad spans >92% in BOTH dimensions, or >96% in ANY dimension, it's a camera lens artifact.
+          if ((wSpan > 0.92 && hSpan > 0.92) || wSpan > 0.96 || hSpan > 0.96) {
+            approx.delete();
+            continue;
           }
-          // A photographed sheet keeps its corners near 90° even under
-          // perspective; |cos| > 0.5 (outside 60°–120°) is never the paper.
+
           let maxCos = 0;
           for (let j = 0; j < 4; j++) {
             const v1x = pts[((j + 3) % 4) * 2] - pts[j * 2];
@@ -393,19 +413,18 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
             );
             maxCos = Math.max(maxCos, cos);
           }
-          if (qa >= minArea && qa <= maxArea && borderCorners < 3 && maxCos <= 0.5) {
-            // Prefer large, rectangular, and right-angled: a paper sheet
-            // fills its bounding box; sprawling background contours don't.
-            const rect = cv.boundingRect(approx);
-            const rectangularity = qa / Math.max(1, rect.width * rect.height);
-            const score = qa * rectangularity * (1 - maxCos);
+
+          // Relaxed maxCos to 0.6 (approx 53 degrees) to allow for steeper camera angles
+          if (qa >= minArea && qa <= maxArea && maxCos <= 0.6) {
+            // Score primarily by area, but heavily penalize non-rectangular shapes (maxCos > 0)
+            const score = qa * Math.pow(1 - maxCos, 2);
             if (score > bestScore) {
               bestScore = score;
               bestPoints = pts;
             }
           }
           approx.delete();
-          break;
+          break; // Found a valid 4-gon for this hull, no need to increase epsilon
         }
         approx.delete();
       }
@@ -415,23 +434,24 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
 
     contours.delete();
     hierarchy.delete();
+    return bestPoints;
   };
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, work, new cv.Size(5, 5), 0);
 
-    // Path A — the paper is usually the brightest region in frame: segment it
-    // directly (robust on busy/colored backgrounds where edges are hopeless).
-    const bright = new cv.Mat();
-    cv.threshold(work, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kernel);
-    considerContours(bright, cv.RETR_EXTERNAL);
-    bright.delete();
+    // Path B — edge outline with ONE gentle gap-closing dilation.
+    // Most reliable for physical boundaries; immune to vignettes/lighting gradients.
+    const edges = new cv.Mat();
+    cv.Canny(work, edges, 30, 100);
+    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
+    const quadB = getBestQuad(edges, cv.RETR_LIST);
+    edges.delete();
+    if (quadB) return sortCorners(quadB.map(Math.round));
 
-    // Path S — whiteness: paper is bright AND unsaturated. Warm light-colored
-    // backgrounds (cream fabric, wood) fool a pure brightness split, but they
-    // carry saturation the paper doesn't.
+    // Path S — whiteness: paper is bright AND unsaturated.
+    // Extremely reliable on colored/wood backgrounds where edges might have gaps.
     const rgb = new cv.Mat();
     cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
     const hsv = new cv.Mat();
@@ -454,30 +474,30 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
     val.delete();
     chans.delete();
     cv.morphologyEx(white, white, cv.MORPH_CLOSE, kernel);
-    considerContours(white, cv.RETR_EXTERNAL);
+    const quadS = getBestQuad(white, cv.RETR_EXTERNAL);
     white.delete();
+    if (quadS) return sortCorners(quadS.map(Math.round));
 
-    // Path B — edge outline with ONE gentle gap-closing dilation. RETR_LIST,
-    // because on textured backgrounds the dilated texture merges into a blob
-    // and the paper survives only as a hole inside it.
-    const edges = new cv.Mat();
-    cv.Canny(work, edges, 30, 100);
-    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
-    considerContours(edges, cv.RETR_LIST);
-    edges.delete();
-
-    // Path C — adaptive threshold: survives uneven lighting and soft shadows
-    // that defeat the single global Otsu split.
+    // Path C — adaptive threshold.
+    // Survives soft shadows on white desks, but vulnerable to camera vignettes.
     const adaptive = new cv.Mat();
     const rawBlock = Math.max(3, Math.round(Math.min(w, h) / 8));
     const blockSize = rawBlock % 2 === 1 ? rawBlock : rawBlock + 1;
     cv.adaptiveThreshold(work, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, blockSize, 5);
     cv.morphologyEx(adaptive, adaptive, cv.MORPH_CLOSE, kernel);
-    considerContours(adaptive, cv.RETR_LIST);
+    const quadC = getBestQuad(adaptive, cv.RETR_LIST);
     adaptive.delete();
+    if (quadC) return sortCorners(quadC.map(Math.round));
 
-    if (!bestPoints) return null;
-    return sortCorners((bestPoints as number[]).map((v) => Math.round(v)));
+    // Path A — global brightness threshold.
+    const bright = new cv.Mat();
+    cv.threshold(work, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kernel);
+    const quadA = getBestQuad(bright, cv.RETR_EXTERNAL);
+    bright.delete();
+    if (quadA) return sortCorners(quadA.map(Math.round));
+
+    return null;
   } catch (error) {
     console.warn("[swaram] detectCorners failed:", error);
     return null;
@@ -552,7 +572,7 @@ export async function warpPerspectiveCanvas(
  * attempts to detect its corners, and returns a cropped (warped) JPEG Blob.
  * If no document is found or OpenCV fails, returns the original Blob.
  */
-export async function autoCropImageBlob(blob: Blob): Promise<Blob> {
+export async function autoCropImageBlob(blob: Blob): Promise<{ originalWithBox: Blob; cropped: Blob } | Blob> {
   // Use imageBitmap if available (browser), fallback to createImageBitmap
   let img: ImageBitmap | HTMLImageElement;
   try {
@@ -569,24 +589,82 @@ export async function autoCropImageBlob(blob: Blob): Promise<Blob> {
     URL.revokeObjectURL(url);
   }
 
-  const canvas = document.createElement("canvas");
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return blob;
-  ctx.drawImage(img, 0, 0);
+  const MAX_WORKING_DIM = 1920;
+  let w = img.width;
+  let h = img.height;
 
-  const corners = await detectCorners(canvas);
+  if (Math.max(w, h) > MAX_WORKING_DIM) {
+    const scale = MAX_WORKING_DIM / Math.max(w, h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  const workingCanvas = document.createElement("canvas");
+  workingCanvas.width = w;
+  workingCanvas.height = h;
+  const ctx = workingCanvas.getContext("2d");
+  if (!ctx) return blob;
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const MAX_PROBE_DIM = 600;
+  let pw = w;
+  let ph = h;
+  let probeScale = 1;
+  if (Math.max(pw, ph) > MAX_PROBE_DIM) {
+    probeScale = MAX_PROBE_DIM / Math.max(pw, ph);
+    pw = Math.round(pw * probeScale);
+    ph = Math.round(ph * probeScale);
+  }
+
+  let probeCanvas = workingCanvas;
+  if (probeScale < 1) {
+    probeCanvas = document.createElement("canvas");
+    probeCanvas.width = pw;
+    probeCanvas.height = ph;
+    const pctx = probeCanvas.getContext("2d");
+    if (pctx) {
+      pctx.drawImage(workingCanvas, 0, 0, pw, ph);
+    } else {
+      probeCanvas = workingCanvas;
+      probeScale = 1;
+    }
+  }
+
+  const corners = await detectCorners(probeCanvas);
   if (!corners || corners.length !== 8) {
     return blob; // No distinct quad found, return original
   }
 
-  const warped = await warpPerspectiveCanvas(canvas, corners);
-  if (warped === canvas) {
+  const scaledCorners = corners.map((c) => Math.round(c / probeScale));
+  const warped = await warpPerspectiveCanvas(workingCanvas, scaledCorners);
+  if (warped === workingCanvas) {
     return blob; // Warping failed
   }
 
-  return new Promise<Blob>((resolve) => {
+  ctx.strokeStyle = "#FF00FF";
+  ctx.lineWidth = Math.max(4, Math.round(Math.min(w, h) * 0.01));
+  ctx.beginPath();
+  ctx.moveTo(scaledCorners[0], scaledCorners[1]);
+  ctx.lineTo(scaledCorners[2], scaledCorners[3]);
+  ctx.lineTo(scaledCorners[4], scaledCorners[5]);
+  ctx.lineTo(scaledCorners[6], scaledCorners[7]);
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.fillStyle = "#00FFFF";
+  for (let i = 0; i < 8; i += 2) {
+    ctx.beginPath();
+    ctx.arc(scaledCorners[i], scaledCorners[i + 1], ctx.lineWidth * 2, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  const croppedBlob = await new Promise<Blob>((resolve) => {
     warped.toBlob((b) => resolve(b || blob), "image/jpeg", 0.9);
   });
+
+  const originalWithBoxBlob = await new Promise<Blob>((resolve) => {
+    workingCanvas.toBlob((b) => resolve(b || blob), "image/jpeg", 0.9);
+  });
+
+  return { originalWithBox: originalWithBoxBlob, cropped: croppedBlob };
 }

@@ -73,8 +73,9 @@ export default async function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="h-full bg-surface text-ink">
+      <body className="h-full bg-surface text-ink" suppressHydrationWarning>
         <DeviceProvider initialDevice={initialDevice}>
           <VoiceProvider>
             <SetupOverlay />

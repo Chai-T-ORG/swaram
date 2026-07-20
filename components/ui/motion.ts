@@ -1,6 +1,6 @@
 "use client";
 
-import { type Variants, useReducedMotion } from "framer-motion";
+import { type Variants } from "framer-motion";
 
 /**
  * Swaram Global Motion Tiers & Spring Specs
@@ -23,12 +23,6 @@ export function useSwaramTransition(
   config: "orb" | "fast" | "normal" | "slow" | "ease",
   delay: number = 0
 ) {
-  const shouldReduce = useReducedMotion();
-
-  if (shouldReduce) {
-    return { type: "tween" as const, duration: 0.05, delay: 0 };
-  }
-
   const typeMap = {
     orb: SPRING_ORB,
     fast: SPRING_FAST,
@@ -47,12 +41,11 @@ export function useSwaramTransition(
  * Stagger container variants.
  */
 export function useStaggerContainer(staggerDelay = 0.05, delayChildren = 0): Variants {
-  const shouldReduce = useReducedMotion();
   return {
     hidden: {},
     visible: {
       transition: {
-        staggerChildren: shouldReduce ? 0 : staggerDelay,
+        staggerChildren: staggerDelay,
         delayChildren,
       },
     },
@@ -63,17 +56,14 @@ export function useStaggerContainer(staggerDelay = 0.05, delayChildren = 0): Var
  * Helper motion variant properties for staggered entrance.
  */
 export function useItemTransition(yOffset = 8): Variants {
-  const shouldReduce = useReducedMotion();
   return {
-    hidden: { opacity: 0, y: shouldReduce ? 0 : yOffset },
+    hidden: { opacity: 0, y: yOffset },
     visible: {
       opacity: 1,
       y: 0,
-      transition: shouldReduce
-        ? { duration: 0.05 }
-        : { type: "spring" as const, stiffness: 210, damping: 22 },
+      transition: { type: "spring" as const, stiffness: 210, damping: 22 },
     },
-    exit: { opacity: 0, y: shouldReduce ? 0 : -yOffset, transition: { duration: 0.15 } },
+    exit: { opacity: 0, y: -yOffset, transition: { duration: 0.15 } },
   };
 }
 
@@ -81,11 +71,10 @@ export function useItemTransition(yOffset = 8): Variants {
  * Common page route transition variants.
  */
 export function usePageTransition() {
-  const shouldReduce = useReducedMotion();
   return {
-    initial: { opacity: 0, y: shouldReduce ? 0 : 10 },
+    initial: { opacity: 0, y: 10 },
     animate: { opacity: 1, y: 0 },
-    exit: { opacity: 0, y: shouldReduce ? 0 : -10 },
-    transition: shouldReduce ? { duration: 0.05 } : { duration: 0.25, ease: "easeInOut" as const },
+    exit: { opacity: 0, y: -10 },
+    transition: { duration: 0.25, ease: "easeInOut" as const },
   };
 }

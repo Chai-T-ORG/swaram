@@ -1,18 +1,12 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 
 /**
  * CharReveal: splits text into individual characters and animates them upwards in a stagger.
  */
 export function CharReveal({ text, className = "" }: { text: string; className?: string }) {
-  const shouldReduce = useReducedMotion();
-
-  if (shouldReduce) {
-    return <span className={className}>{text}</span>;
-  }
-
   const chars = text.split("");
 
   const container = {
@@ -63,12 +57,6 @@ export function CharReveal({ text, className = "" }: { text: string; className?:
  * WordReveal: splits text into words and animates them upwards in a stagger.
  */
 export function WordReveal({ text, className = "" }: { text: string; className?: string }) {
-  const shouldReduce = useReducedMotion();
-
-  if (shouldReduce) {
-    return <span className={className}>{text}</span>;
-  }
-
   const words = text.split(" ");
 
   const container = {
@@ -126,18 +114,9 @@ export function TiltCard({
   className?: string;
   onClick?: () => void;
 }) {
-  const shouldReduce = useReducedMotion();
   const [coords, setCoords] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-
-  if (shouldReduce) {
-    return (
-      <div className={className} onClick={onClick}>
-        {children}
-      </div>
-    );
-  }
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!cardRef.current) return;
