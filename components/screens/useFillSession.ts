@@ -18,7 +18,7 @@ import type { FormField, FormRecord } from "@/lib/types";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
-import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { parseFillCommand, isNameField, needsConfirmation, plausibleAnswer } from "@/lib/voice/fillCommands";
 import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
@@ -29,6 +29,21 @@ import {
 
 const UNCLEAR_THRESHOLD = 0.6;
 
+/** Confidence thresholds for answer acceptance. */
+const HIGH_CONFIDENCE = 0.98;   // ≥ this → auto-fill without asking
+const MED_CONFIDENCE = 0.95;    // ≥ this → ask confirmation, < this → ask to repeat
+
+/**
+ * Detect letter-by-letter spelling patterns in a transcript.
+ * Matches "A N S H" or "a n s h" — individual single letters separated by spaces.
+ */
+function isSpellingPattern(text: string): boolean {
+  const tokens = text.toLowerCase().trim().split(/\s+/);
+  if (tokens.length < 2) return false;
+  const letterTokens = tokens.filter((t) => /^[a-z]$/.test(t) || t in { double: 1, triple: 1, space: 1 });
+  return letterTokens.length >= 2 && letterTokens.length / tokens.length > 0.6;
+}
+
 export type FillPhase =
   | "loading"
   | "start"
@@ -37,6 +52,7 @@ export type FillPhase =
   | "listening"
   | "confirming"
   | "typing"
+  | "verifying"
   | "paused"
   | "done";
 
@@ -78,6 +94,8 @@ export function useFillSession() {
   const listenKindRef = useRef<"answer" | "confirm">("answer");
   /** When true, the next answer utterance is dictated letters (spell mode). */
   const spellInputRef = useRef(false);
+  /** When a field ID is set, it's locked — no new answers accepted until unlocked. */
+  const lockedFieldRef = useRef<string | null>(null);
 
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
@@ -283,6 +301,7 @@ export function useFillSession() {
     retriesRef.current = 0;
     noSpeechRef.current = 0;
     unclearTriedRef.current = false;
+    lockedFieldRef.current = null; // unlock for new field
     setPhase("asking");
     setTone("info");
     setStatus(questionFor(field));
@@ -308,6 +327,13 @@ export function useFillSession() {
     const clean = transcript.toLowerCase().trim();
     const cmd = parseFillCommand(clean);
 
+    // Field is locked — reject new answers until they go back or re-ask.
+    if (lockedFieldRef.current && !cmd) {
+      await speak("This field is already answered. Say go back to change it, or continue to the next question.");
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
     // Commands work in both answer and confirm modes.
     if (cmd === "help") {
       await speak(
@@ -318,7 +344,11 @@ export function useFillSession() {
     }
     if (cmd === "repeat") { handleCommand("repeat", posRef.current, id); return; }
     if (cmd === "skip") { handleCommand("skip", posRef.current, id); return; }
-    if (cmd === "back") { handleCommand("back", posRef.current, id); return; }
+    if (cmd === "back") {
+      lockedFieldRef.current = null; // unlock when going back
+      handleCommand("back", posRef.current, id);
+      return;
+    }
     if (cmd === "type") { spellInputRef.current = false; setPhase("typing"); return; }
     if (cmd === "pause") {
       setPhase("paused");
@@ -343,10 +373,19 @@ export function useFillSession() {
       setHeard(value);
       listenKindRef.current = "confirm";
       setPhase("confirming");
-      setStatus(`Spelled: “${value}”. Correct?`);
+      setStatus(`Spelled: "${value}". Correct?`);
       await speak(`I got: ${spellOut(value)}. Is that correct?`);
       if (alive(id)) setPhase("listening");
       return;
+    }
+
+    // Auto-detect spelling pattern for name fields: "A N S H" → enter spell mode
+    if (listenKindRef.current !== "confirm") {
+      const field = fieldAt(posRef.current);
+      if (field && isNameField(field) && isSpellingPattern(clean)) {
+        enterSpellMode(id);
+        return;
+      }
     }
 
     // Smart assist: let the user ask what to put or what a field means.
@@ -449,11 +488,30 @@ export function useFillSession() {
       return;
     }
 
-    if (!needsConfirmation(field, isUnclear(field))) {
+    // Confidence-based routing:
+    //   < 0.95  → ask to repeat (too uncertain)
+    //   ≥ 0.95  → normal confirmation flow (spell-back for names/numbers)
+    //   ≥ 0.98  → auto-fill (skip confirmation for simple fields)
+    if (confidence < MED_CONFIDENCE) {
+      retriesRef.current += 1;
+      if (retriesRef.current >= 3) {
+        await speak("Let's type it instead.");
+        if (alive(id)) setPhase("typing");
+        return;
+      }
+      const spellHint = isNameField(field) ? " You can say: let me spell." : "";
+      await speak(`I'm not confident I heard that right. Could you say it once more?${spellHint}`);
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    // High confidence + field doesn't need confirmation → auto-fill
+    if (confidence >= HIGH_CONFIDENCE && !needsConfirmation(field, isUnclear(field))) {
       commit(pos, value, id, `${value}.`);
       return;
     }
 
+    // Medium confidence or confirmation-required field → spell back for verification
     pendingConfirmRef.current = value;
     setConfirmValue(value);
     setHeard(value);
@@ -519,7 +577,15 @@ export function useFillSession() {
     if (field) {
       field.value = val;
       field.status = "answered";
+      lockedFieldRef.current = field.id; // lock the field after answering
       syncRecord();
+
+      // DOM verification: confirm the value actually stuck
+      const verified = queueRef.current[pos]?.value === val;
+      if (!verified) {
+        setTone("warning");
+        console.warn(`[fill] DOM verification failed for "${field.label}": expected "${val}", got "${queueRef.current[pos]?.value}"`);
+      }
 
       if (voice) {
         voice.addMessage("user", val);
@@ -599,6 +665,7 @@ export function useFillSession() {
   }
 
   function doBack() {
+    lockedFieldRef.current = null; // unlock when going back
     const id = beginRun();
     handleCommand("back", posRef.current, id);
   }
@@ -618,6 +685,10 @@ export function useFillSession() {
       setStatus("Type an answer, or skip this field.");
       return;
     }
+    // Set verifying phase while we commit and check the DOM value
+    setPhase("verifying");
+    setTone("info");
+    setStatus("Verifying your answer...");
     commit(posRef.current, value, id);
   }
 
@@ -666,6 +737,8 @@ export function useFillSession() {
     confirmValue,
     /** True while the session is waiting on a yes/no for confirmValue. */
     confirmMode: listenKindRef.current === "confirm",
+    /** True when the current field is locked (already answered, waiting for go-back). */
+    fieldLocked: lockedFieldRef.current !== null,
     typedValue,
     setTypedValue,
     heard,

@@ -221,6 +221,8 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const [ttsActive, setTtsActive] = useState(false);
 
   const [fillContext, setFillContext] = useState<VoiceContextValue["fillContext"]>(undefined);
+  const fillContextRef = useRef(fillContext);
+  fillContextRef.current = fillContext;
 
   // One-time: move legacy installs off the old (silent-on-mobile) Kokoro default.
   useEffect(() => {
@@ -266,14 +268,22 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         const dataArray = new Uint8Array(bufferLength);
         source.connect(analyser);
 
-        const update = () => {
+        let lastUpdate = 0;
+        let lastVolume = 0;
+
+        const update = (now: number) => {
           analyser.getByteFrequencyData(dataArray);
           let sum = 0;
           for (let i = 0; i < bufferLength; i++) {
             sum += dataArray[i];
           }
           const avg = sum / bufferLength;
-          setMicVolume(Math.min(1, avg / 120));
+          const clamped = Math.min(1, avg / 120);
+          if (Math.abs(clamped - lastVolume) > 0.02 || now - lastUpdate > 200) {
+            lastVolume = clamped;
+            lastUpdate = now;
+            setMicVolume(clamped);
+          }
           animationId = requestAnimationFrame(update);
         };
         animationId = requestAnimationFrame(update);
@@ -594,11 +604,12 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
       if (trimmed.length < 2) return;
 
       // ── Intent classification (local, no LLM) ──
+      const ctx = fillContextRef.current;
       const intent = classifyIntent(trimmed, {
-        phase: fillContext?.phase,
-        currentFieldLabel: fillContext?.currentFieldLabel,
-        currentFieldType: fillContext?.currentFieldType,
-        formName: fillContext?.formName,
+        phase: ctx?.phase,
+        currentFieldLabel: ctx?.currentFieldLabel,
+        currentFieldType: ctx?.currentFieldType,
+        formName: ctx?.formName,
         lang: getVoiceSettings().sttLang,
       });
       logClassification(intent, pathname.startsWith("/fill/") ? "fill" : "global");
@@ -631,8 +642,8 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
             transcript: trimmed,
             topic: intent.topic,
             inFillMode: !!pageListenerRef.current,
-            formName: fillContext?.formName,
-            currentFieldLabel: fillContext?.currentFieldLabel,
+            formName: ctx?.formName,
+            currentFieldLabel: ctx?.currentFieldLabel,
           });
           speak(redirect);
         }

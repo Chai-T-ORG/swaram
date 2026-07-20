@@ -410,23 +410,33 @@ function getTtsAudioEl(): HTMLAudioElement {
   return ttsAudioEl;
 }
 
+// A separate element used only for unlockAudioPlayback so it never races with
+// an in-flight playServerTTS call on the shared ttsAudioEl.
+let unlockAudioEl: HTMLAudioElement | null = null;
+
 // A 44-byte silent WAV — played once on a user gesture to unlock playback.
 const SILENT_WAV =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
 /**
  * Unlock audio output. MUST be called from a real user gesture (tap/click/key).
- * Primes the shared <audio> element plus the speechSynthesis/AudioContext
+ * Primes a hidden <audio> element plus the speechSynthesis/AudioContext
  * fallbacks so the first spoken line isn't swallowed by autoplay policy.
+ * Uses a dedicated element so it never races with playServerTTS on the shared
+ * ttsAudioEl.
  */
 export function unlockAudioPlayback(): void {
   if (typeof window === "undefined") return;
-  const el = getTtsAudioEl();
+  if (!unlockAudioEl) {
+    unlockAudioEl = new Audio();
+    unlockAudioEl.preload = "auto";
+  }
   try {
-    el.muted = true;
-    el.src = SILENT_WAV;
-    const p = el.play();
+    unlockAudioEl.muted = true;
+    unlockAudioEl.src = SILENT_WAV;
+    const p = unlockAudioEl.play();
     if (p && typeof p.then === "function") {
+      const el = unlockAudioEl;
       p.then(() => {
         el.pause();
         el.currentTime = 0;
@@ -434,12 +444,8 @@ export function unlockAudioPlayback(): void {
       }).catch(() => {
         el.muted = false;
       });
-    } else {
-      el.muted = false;
     }
-  } catch {
-    el.muted = false;
-  }
+  } catch {}
   unlockSafariSpeech();
   getAudioContext();
 }
