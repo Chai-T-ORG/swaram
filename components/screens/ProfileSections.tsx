@@ -7,13 +7,23 @@
  */
 
 import { speak } from "@/lib/voice/textToSpeech";
-import type { TtsProvider, SttProvider, MicMode } from "@/lib/voice/voiceSettings";
+import { resetOnboarding, type TtsProvider, type SttProvider, type MicMode } from "@/lib/voice/voiceSettings";
 import { PROFILE_FIELDS, STT_LANGS, type ProfileSettings } from "./useProfileSettings";
-import { IconCheck, IconInfo, IconShield, IconTrash, IconUser, IconWave } from "@/components/icons";
+import { IconCheck, IconInfo, IconShield, IconTrash, IconUser, IconWave, IconRefresh } from "@/components/icons";
 
 export function VoiceSection({ p }: { p: ProfileSettings }) {
   return (
     <div className="flex flex-col gap-6">
+      <section className="card flex items-center justify-between p-5 border border-line bg-raised shadow-sm">
+        <div className="flex items-center gap-3.5">
+          <img src="/logo.png" alt="Swaram Logo" className="h-11 w-11 rounded-2xl object-contain shadow-xs" />
+          <div>
+            <h2 className="font-display text-lg text-ink leading-tight">Swaram Voice Assistant</h2>
+            <p className="text-xs text-soft">Voice-first form engine for blind and low-vision users.</p>
+          </div>
+        </div>
+      </section>
+
       <section className="card flex flex-col gap-5">
         <h2 className="border-b border-line pb-3 font-display text-lg text-ink">Voice &amp; speech</h2>
 
@@ -169,6 +179,26 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
         </div>
 
         <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
+          <label className="text-xs font-bold uppercase text-soft">
+            First-run welcome setup
+          </label>
+          <p className="max-w-sm text-xs leading-relaxed text-soft">
+            Replay the initial voice onboarding flow to test your microphone or change listening options. Your saved profile details and model caches will not be lost.
+          </p>
+          <button
+            type="button"
+            className="btn-secondary min-h-12 max-w-sm text-xs self-start flex items-center gap-2"
+            onClick={() => {
+              resetOnboarding();
+              window.dispatchEvent(new Event("swaram_replay_onboarding"));
+            }}
+          >
+            <IconRefresh className="h-4 w-4 text-accent" />
+            <span>Replay welcome onboarding</span>
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
           <label htmlFor="stt-provider-select" className="text-xs font-bold uppercase text-soft">
             Speech recognition
           </label>
@@ -178,9 +208,10 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
             value={p.sttProvider}
             onChange={(e) => p.selectSttProvider(e.target.value as SttProvider)}
           >
-            <option value="groq">Cloud Whisper (Groq) — most accurate, needs internet</option>
+            <option value="groq">Cloud — Sarvam + Whisper (best for Indian speech), needs internet</option>
             <option value="azure">Azure Speech (Regional) — tuned per language, needs internet</option>
             <option value="azure-stream">Azure Speech — real-time (beta) — fastest, auto-detects language</option>
+            <option value="sarvam-stream">Sarvam — real-time (beta) — instant Indian-language recognition</option>
             <option value="auto">Automatic — cloud when online, on-device otherwise</option>
             <option value="whisper">On-device Whisper — private &amp; offline (~150MB)</option>
             <option value="native">Browser built-in — instant, no download</option>
@@ -190,6 +221,13 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
             <p className="mt-1 max-w-sm text-[11px] leading-normal text-soft">
               Real-time streaming: text appears as you speak, auto-detecting English, Hindi, Malayalam or French. If it
               can&rsquo;t connect it falls back to the standard Azure path automatically.
+            </p>
+          )}
+
+          {p.sttProvider === "sarvam-stream" && (
+            <p className="mt-1 max-w-sm text-[11px] leading-normal text-soft">
+              Real-time Sarvam streaming: answers finalize a fraction of a second after you stop speaking. Needs the
+              local relay (npm run stt:relay); without it, this falls back to the standard Sarvam path automatically.
             </p>
           )}
 

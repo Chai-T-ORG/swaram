@@ -1,24 +1,23 @@
 "use client";
 
-import React, { useState, useRef } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { type Variants, useReducedMotion } from "framer-motion";
 
 /**
- * Springs definition as requested by the direction:
- * - Softer spring for the orb.
- * - Faster spring for small elements/inputs: stiffness 260, damping 24.
- * - Standard spring for card and normal container transitions.
+ * Swaram Global Motion Tiers & Spring Specs
+ * - Immediate interaction feedback (taps/buttons): 120–180ms
+ * - State changes, cards & inputs: 180–280ms
+ * - Page & step transitions: 250–350ms
+ * - Ambient effects: slow, subtle, 60fps composited
  */
-export const SPRING_ORB = { type: "spring", stiffness: 180, damping: 20 };
-export const SPRING_FAST = { type: "spring", stiffness: 260, damping: 24 };
-export const SPRING_NORMAL = { type: "spring", stiffness: 210, damping: 22 };
-export const SPRING_SLOW = { type: "spring", stiffness: 120, damping: 18 };
+export const SPRING_ORB = { type: "spring" as const, stiffness: 180, damping: 20 };
+export const SPRING_FAST = { type: "spring" as const, stiffness: 260, damping: 24 };
+export const SPRING_NORMAL = { type: "spring" as const, stiffness: 210, damping: 22 };
+export const SPRING_SLOW = { type: "spring" as const, stiffness: 120, damping: 18 };
 
-export const TRANSITION_EASE = { type: "tween", ease: "easeInOut", duration: 0.25 };
+export const TRANSITION_EASE = { type: "tween" as const, ease: [0.22, 1, 0.36, 1] as const, duration: 0.25 };
 
 /**
- * Hook to retrieve the appropriate motion transition config,
- * honoring prefers-reduced-motion.
+ * Hook to retrieve motion transition configs while respecting prefers-reduced-motion.
  */
 export function useSwaramTransition(
   config: "orb" | "fast" | "normal" | "slow" | "ease",
@@ -27,7 +26,7 @@ export function useSwaramTransition(
   const shouldReduce = useReducedMotion();
 
   if (shouldReduce) {
-    return { type: "tween", duration: 0.05, delay: 0 };
+    return { type: "tween" as const, duration: 0.05, delay: 0 };
   }
 
   const typeMap = {
@@ -47,11 +46,11 @@ export function useSwaramTransition(
 /**
  * Stagger container variants.
  */
-export function useStaggerContainer(staggerDelay = 0.06, delayChildren = 0) {
+export function useStaggerContainer(staggerDelay = 0.05, delayChildren = 0): Variants {
   const shouldReduce = useReducedMotion();
   return {
-    initial: {},
-    animate: {
+    hidden: {},
+    visible: {
       transition: {
         staggerChildren: shouldReduce ? 0 : staggerDelay,
         delayChildren,
@@ -63,11 +62,30 @@ export function useStaggerContainer(staggerDelay = 0.06, delayChildren = 0) {
 /**
  * Helper motion variant properties for staggered entrance.
  */
-export function useItemTransition(yOffset = 8) {
+export function useItemTransition(yOffset = 8): Variants {
   const shouldReduce = useReducedMotion();
   return {
-    initial: { opacity: 0, y: shouldReduce ? 0 : yOffset },
+    hidden: { opacity: 0, y: shouldReduce ? 0 : yOffset },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: shouldReduce
+        ? { duration: 0.05 }
+        : { type: "spring" as const, stiffness: 210, damping: 22 },
+    },
+    exit: { opacity: 0, y: shouldReduce ? 0 : -yOffset, transition: { duration: 0.15 } },
+  };
+}
+
+/**
+ * Common page route transition variants.
+ */
+export function usePageTransition() {
+  const shouldReduce = useReducedMotion();
+  return {
+    initial: { opacity: 0, y: shouldReduce ? 0 : 10 },
     animate: { opacity: 1, y: 0 },
-    exit: { opacity: 0, y: shouldReduce ? 0 : -yOffset },
+    exit: { opacity: 0, y: shouldReduce ? 0 : -10 },
+    transition: shouldReduce ? { duration: 0.05 } : { duration: 0.25, ease: "easeInOut" as const },
   };
 }

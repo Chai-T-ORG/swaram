@@ -1,0 +1,131 @@
+{
+  "note": "Golden STT test set. Audio clips live in ./audio/<id>.wav — synthesized via Azure TTS (male voices, independent of the recognizers under test) until replaced by real recordings. `spoken` is what the voice says; `text` + altSpellings are accepted transcriptions; `entity` is the exact string the form needs.",
+  "cases": [
+    {
+      "id": "name-twinsha-full",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Full Name",
+      "names": ["Twinsha T Thilakan"],
+      "text": "Twinsha T Thilakan",
+      "altSpellings": ["Tvinsha T Thilakan", "Twinsha T Tilakan"],
+      "entity": "Twinsha T Thilakan"
+    },
+    {
+      "id": "name-twinsha-nodict",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Full Name",
+      "text": "Twinsha T Thilakan",
+      "altSpellings": ["Tvinsha T Thilakan", "Twinsha T Tilakan", "Twinsha T Tilkan"]
+    },
+    {
+      "id": "name-tejas",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Father's Name",
+      "names": ["Tejas Kumar"],
+      "text": "Tejas Kumar",
+      "entity": "Tejas Kumar"
+    },
+    {
+      "id": "name-initials-tejas",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Full Name",
+      "spoken": "Tejas K M",
+      "text": "Tejas K M",
+      "altSpellings": ["Tejas KM", "Teejas K M", "Tejas K.M."],
+      "entity": "Tejas K M"
+    },
+    {
+      "id": "name-initials-carrier",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Full Name",
+      "spoken": "My name is Tejas K M",
+      "text": "Tejas K M",
+      "altSpellings": ["My name is Tejas K M", "My name is Tejas KM", "Tejas KM"],
+      "entity": "Tejas K M"
+    },
+    {
+      "id": "name-initials-head",
+      "lang": "en-IN",
+      "hint": "name",
+      "label": "Full Name",
+      "spoken": "P V Sindhu",
+      "text": "P V Sindhu",
+      "altSpellings": ["PV Sindhu", "P. V. Sindhu"],
+      "entity": "P V Sindhu"
+    },
+    {
+      "id": "phone-10digit",
+      "lang": "en-IN",
+      "spoken": "My phone number is nine eight four zero nine five zero nine five zero",
+      "text": "My phone number is 9840950950",
+      "altSpellings": ["My phone number is nine eight four zero nine five zero nine five zero"],
+      "entity": "9840950950"
+    },
+    {
+      "id": "pincode",
+      "lang": "en-IN",
+      "spoken": "Six seven zero five six three",
+      "text": "670563",
+      "altSpellings": ["six seven zero five six three"],
+      "entity": "670563"
+    },
+    {
+      "id": "address-en",
+      "lang": "en-IN",
+      "spoken": "Flat number 12, Sree Nilayam, Temple Road, Kannur, Kerala",
+      "text": "Flat number 12 Sree Nilayam Temple Road Kannur Kerala",
+      "altSpellings": ["Flat number twelve Sree Nilayam Temple Road Kannur Kerala", "Flat No 12 Shri Nilayam Temple Road Kannur Kerala"]
+    },
+    {
+      "id": "date-spoken",
+      "lang": "en-IN",
+      "spoken": "Twenty fifth May two thousand and two",
+      "text": "25th May 2002",
+      "altSpellings": ["Twenty fifth May 2002", "25 May 2002", "twenty fifth may two thousand and two"]
+    },
+    {
+      "id": "spell-twinsha",
+      "lang": "en-IN",
+      "hint": "spell",
+      "label": "Full Name",
+      "spoken": "T. W. I. N. S. H. A.",
+      "text": "T W I N S H A",
+      "altSpellings": ["TWINSHA", "T W I N S H A."]
+    },
+    {
+      "id": "spell-multiword-space",
+      "lang": "en-IN",
+      "hint": "spell",
+      "label": "Full Name",
+      "spoken": "T. W. I. N. S. H. A. space T. space T. H. I. L. A. K. A. N.",
+      "text": "T W I N S H A space T space T H I L A K A N",
+      "altSpellings": ["T W I N S H A SPACE T SPACE T H I L A K A N", "TWINSHA space T space THILAKAN"]
+    },
+    {
+      "id": "hindi-name",
+      "lang": "hi-IN",
+      "spoken": "मेरा नाम तेजस कुमार है",
+      "text": "मेरा नाम तेजस कुमार है",
+      "altSpellings": ["mera naam Tejas Kumar hai", "मेरा नाम Tejas Kumar है"]
+    },
+    {
+      "id": "malayalam-name",
+      "lang": "ml-IN",
+      "spoken": "എന്റെ പേര് തിലകൻ എന്നാണ്",
+      "text": "എന്റെ പേര് തിലകൻ എന്നാണ്",
+      "altSpellings": ["ente peru Thilakan ennanu"]
+    },
+    {
+      "id": "command-yes",
+      "lang": "en-IN",
+      "spoken": "Yes, that is correct",
+      "text": "Yes that is correct",
+      "altSpellings": ["Yes, that's correct"]
+    }
+  ]
+}

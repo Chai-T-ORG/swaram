@@ -28,24 +28,29 @@ export default function VoiceControl({ variant, className = "" }: VoiceControlPr
   const shell = useVoiceShell();
   if (!voice) return null;
 
-  const { sttState, micMode, toast, micVolume, ttsActive, wakeMic } = voice;
+  const { sttState, micMode, toast, micVolume, ttsActive, wakeMic, voiceUiState } = voice;
   const { isTouch, onMicPointerDown, onMicPointerUp, onMicPointerCancel, togglePtt } = shell;
 
-  const listening = sttState === "listening";
-  const thinking = !listening && toast.startsWith("Thinking");
-  const orbState = listening ? "listening" : ttsActive ? "speaking" : thinking ? "thinking" : "idle";
+  const orbState = voiceUiState;
 
-  const heading = listening
-    ? "Listening…"
-    : ttsActive
-    ? "Speaking"
-    : thinking
-    ? "Thinking…"
-    : sttState === "paused-silence"
-    ? "Microphone paused"
-    : micMode === "ptt"
-    ? "I'm listening whenever you're ready."
-    : "Microphone off";
+  const heading =
+    orbState === "listening"
+      ? "Listening…"
+      : orbState === "speaking"
+      ? "Speaking"
+      : orbState === "thinking"
+      ? "Thinking…"
+      : orbState === "paused"
+      ? "Microphone paused"
+      : orbState === "success"
+      ? "Ready"
+      : orbState === "error"
+      ? "Microphone issue"
+      : micMode === "ptt"
+      ? "I'm listening whenever you're ready."
+      : "Microphone off";
+
+  const listening = orbState === "listening";
 
   const hint = listening
     ? micMode === "ptt"
@@ -118,9 +123,6 @@ export default function VoiceControl({ variant, className = "" }: VoiceControlPr
           <p className="text-sm font-bold leading-tight text-ink">{heading}</p>
           <p className="mt-0.5 truncate text-[11px] text-soft">{toast || hint}</p>
         </div>
-        <div className="w-16 h-8 shrink-0 overflow-hidden flex items-center" aria-hidden="true">
-          <VoiceStrands width={64} height={32} />
-        </div>
       </motion.div>
     );
   }
@@ -132,8 +134,6 @@ export default function VoiceControl({ variant, className = "" }: VoiceControlPr
       className={`flex flex-col items-center gap-1 touch-none select-none cursor-pointer rounded-3xl p-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${className}`}
     >
       <VoiceOrb state={orbState} volume={micVolume} size="lg" />
-      {/* The voice as a filament of light — Swaram's signature visual. The
-          mask fades the canvas edges so no rectangle ghosts on dark. */}
       <div
         className="-mt-3 w-[460px] max-w-full [mask-image:radial-gradient(ellipse_65%_90%_at_center,black_55%,transparent_98%)]"
         aria-hidden="true"

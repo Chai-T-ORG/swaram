@@ -5,6 +5,7 @@
  * not perceive color; the label is the information).
  */
 
+import { motion, useReducedMotion } from "framer-motion";
 import type { FormStatus, FieldStatus } from "@/lib/types";
 import {
   IconCheck,
@@ -33,23 +34,37 @@ const FIELD_STATUS: Record<FieldStatus, { label: string; icon: typeof IconCheck;
 };
 
 export function StatusChip({ status, className = "" }: { status: FormStatus; className?: string }) {
+  const prefersReducedMotion = useReducedMotion();
   const s = FORM_STATUS[status];
   const Icon = s.icon;
   return (
-    <span className={`chip ${s.cls} text-[11px] font-bold ${className}`}>
+    <motion.span
+      key={status}
+      initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 24 }}
+      className={`chip ${s.cls} text-[11px] font-bold ${className}`}
+    >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {s.label}
-    </span>
+    </motion.span>
   );
 }
 
 export function FieldStatusChip({ status, className = "" }: { status: FieldStatus; className?: string }) {
+  const prefersReducedMotion = useReducedMotion();
   const s = FIELD_STATUS[status];
   const Icon = s.icon;
   return (
-    <span className={`chip ${s.cls} text-[11px] font-bold ${className}`}>
+    <motion.span
+      key={status}
+      initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 24 }}
+      className={`chip ${s.cls} text-[11px] font-bold ${className}`}
+    >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {s.label}
-    </span>
+    </motion.span>
   );
 }

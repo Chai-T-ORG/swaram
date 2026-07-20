@@ -95,6 +95,8 @@ export interface ConversationMessage {
   timestamp: number;
 }
 
+export type VoiceUiState = "idle" | "listening" | "thinking" | "speaking" | "paused" | "success" | "error";
+
 interface VoiceContextValue {
   setPage: (config: PageVoiceConfig) => () => void;
   announce: (text: string) => void;
@@ -114,6 +116,7 @@ interface VoiceContextValue {
   setActiveFormId: (id: string | null) => void;
   micVolume: number;
   ttsActive: boolean;
+  voiceUiState: VoiceUiState;
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
@@ -153,6 +156,7 @@ interface VoiceShellValue {
   onMicPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onMicPointerCancel: () => void;
   togglePtt: () => void;
+  voiceUiState: VoiceUiState;
 }
 
 const VoiceShellContext = createContext<VoiceShellValue | null>(null);
@@ -1010,6 +1014,20 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     };
   }, [micMode, sttState, startListeningNow]);
 
+  const listening = sttState === "listening";
+  const thinking = !listening && toast.startsWith("Thinking");
+  const isError = toast.toLowerCase().includes("fail") || toast.toLowerCase().includes("error") || toast.toLowerCase().includes("denied");
+  const isSuccess = toast.toLowerCase().includes("ready") || toast.toLowerCase().includes("saved") || toast.toLowerCase().includes("done") || toast.toLowerCase().includes("complete");
+
+  const voiceUiState: VoiceUiState =
+    isError ? "error"
+    : isSuccess ? "success"
+    : listening ? "listening"
+    : ttsActive ? "speaking"
+    : thinking ? "thinking"
+    : sttState === "paused-silence" ? "paused"
+    : "idle";
+
   const contextValue: VoiceContextValue = {
     setPage,
     announce: (text) => speak(text),
@@ -1024,6 +1042,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     setActiveFormId,
     micVolume,
     ttsActive,
+    voiceUiState,
   };
 
   const shellValue: VoiceShellValue = {
@@ -1045,6 +1064,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     onMicPointerUp,
     onMicPointerCancel,
     togglePtt,
+    voiceUiState,
   };
 
   return (

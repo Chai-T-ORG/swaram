@@ -19,7 +19,7 @@ export default function HomeMobile() {
   const { greeting, userName, isTouch } = useVoiceShell();
   const { recent, activeForm } = useHomeData();
 
-  const welcomeText = `${greeting || "Hello"}${userName && userName !== "User" ? `, ${userName}` : ""}.`;
+  const welcomeText = userName && userName !== "User" ? `Welcome back, ${userName}.` : "Welcome back.";
 
   return (
     <div className="flex flex-col gap-6 pb-8">
@@ -28,7 +28,7 @@ export default function HomeMobile() {
           <WordReveal text={welcomeText} />
         </h1>
         <p className="mt-2 text-sm text-soft">
-          {isTouch ? "Tap the orb below and tell me what you need." : "Hold the space bar and tell me what you need."}
+          How may I assist you today?
         </p>
       </section>
 
