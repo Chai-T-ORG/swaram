@@ -446,6 +446,13 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
     const edges = new cv.Mat();
     cv.Canny(work, edges, 30, 100);
     cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
+    
+    // CRITICAL FIX: If the document is cut off by the camera frame, Canny produces an open U-shape.
+    // By drawing a solid 2px white border around the entire image, we force those open curves
+    // to connect to the frame boundary, closing the polygon perfectly.
+    // The giant frame boundary contour itself will be rejected by the wSpan/hSpan check.
+    cv.rectangle(edges, new cv.Point(0, 0), new cv.Point(w - 1, h - 1), new cv.Scalar(255, 255, 255, 255), 2);
+
     const quadB = getBestQuad(edges, cv.RETR_LIST);
     edges.delete();
     if (quadB) return sortCorners(quadB.map(Math.round));
@@ -473,29 +480,19 @@ export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[]
     sat.delete();
     val.delete();
     chans.delete();
+    
+    // Also draw border for white mask just in case
+    cv.rectangle(white, new cv.Point(0, 0), new cv.Point(w - 1, h - 1), new cv.Scalar(0, 0, 0, 0), 2);
     cv.morphologyEx(white, white, cv.MORPH_CLOSE, kernel);
     const quadS = getBestQuad(white, cv.RETR_EXTERNAL);
     white.delete();
     if (quadS) return sortCorners(quadS.map(Math.round));
 
-    // Path C — adaptive threshold.
-    // Survives soft shadows on white desks, but vulnerable to camera vignettes.
-    const adaptive = new cv.Mat();
-    const rawBlock = Math.max(3, Math.round(Math.min(w, h) / 8));
-    const blockSize = rawBlock % 2 === 1 ? rawBlock : rawBlock + 1;
-    cv.adaptiveThreshold(work, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, blockSize, 5);
-    cv.morphologyEx(adaptive, adaptive, cv.MORPH_CLOSE, kernel);
-    const quadC = getBestQuad(adaptive, cv.RETR_LIST);
-    adaptive.delete();
-    if (quadC) return sortCorners(quadC.map(Math.round));
-
-    // Path A — global brightness threshold.
-    const bright = new cv.Mat();
-    cv.threshold(work, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kernel);
-    const quadA = getBestQuad(bright, cv.RETR_EXTERNAL);
-    bright.delete();
-    if (quadA) return sortCorners(quadA.map(Math.round));
+    // We INTENTIONALLY REMOVED Path C (Adaptive) and Path A (Otsu).
+    // On dark desks, they create massive "vignette" blobs that look like rectangles
+    // and hijack the cropping algorithm. If Canny and Saturation fail to find a 
+    // perfect 4-corner document, it is MUCH safer to return null (no crop) 
+    // than to violently warp the background desk.
 
     return null;
   } catch (error) {
@@ -572,7 +569,7 @@ export async function warpPerspectiveCanvas(
  * attempts to detect its corners, and returns a cropped (warped) JPEG Blob.
  * If no document is found or OpenCV fails, returns the original Blob.
  */
-export async function autoCropImageBlob(blob: Blob): Promise<{ originalWithBox: Blob; cropped: Blob } | Blob> {
+export async function autoCropImageBlob(blob: Blob): Promise<Blob> {
   // Use imageBitmap if available (browser), fallback to createImageBitmap
   let img: ImageBitmap | HTMLImageElement;
   try {
@@ -641,30 +638,7 @@ export async function autoCropImageBlob(blob: Blob): Promise<{ originalWithBox: 
     return blob; // Warping failed
   }
 
-  ctx.strokeStyle = "#FF00FF";
-  ctx.lineWidth = Math.max(4, Math.round(Math.min(w, h) * 0.01));
-  ctx.beginPath();
-  ctx.moveTo(scaledCorners[0], scaledCorners[1]);
-  ctx.lineTo(scaledCorners[2], scaledCorners[3]);
-  ctx.lineTo(scaledCorners[4], scaledCorners[5]);
-  ctx.lineTo(scaledCorners[6], scaledCorners[7]);
-  ctx.closePath();
-  ctx.stroke();
-
-  ctx.fillStyle = "#00FFFF";
-  for (let i = 0; i < 8; i += 2) {
-    ctx.beginPath();
-    ctx.arc(scaledCorners[i], scaledCorners[i + 1], ctx.lineWidth * 2, 0, 2 * Math.PI);
-    ctx.fill();
-  }
-
-  const croppedBlob = await new Promise<Blob>((resolve) => {
+  return new Promise<Blob>((resolve) => {
     warped.toBlob((b) => resolve(b || blob), "image/jpeg", 0.9);
   });
-
-  const originalWithBoxBlob = await new Promise<Blob>((resolve) => {
-    workingCanvas.toBlob((b) => resolve(b || blob), "image/jpeg", 0.9);
-  });
-
-  return { originalWithBox: originalWithBoxBlob, cropped: croppedBlob };
 }

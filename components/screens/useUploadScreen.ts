@@ -151,35 +151,16 @@ export function useUploadScreen() {
         finalBlob = new Blob([bytes], { type: "application/pdf" });
       } else {
         await loadOpenCv();
-        const uncroppedBlobs: Blob[] = [];
         const croppedBlobs: Blob[] = [];
         for (let i = 0; i < files.length; i++) {
           setStatus(`Processing image ${i + 1} of ${files.length}…`);
           const result = await autoCropImageBlob(files[i]);
-          if (result instanceof Blob) {
-            uncroppedBlobs.push(result);
-            croppedBlobs.push(result);
-          } else {
-            uncroppedBlobs.push(result.originalWithBox);
-            croppedBlobs.push(result.cropped);
-          }
+          croppedBlobs.push(result);
           setProgress(Math.round(((i + 1) / files.length) * 50));
         }
-        setStatus("Creating diagnostic PDF...");
-        finalBlob = await imagesToPdf([...uncroppedBlobs, ...croppedBlobs]);
+        setStatus("Creating PDF from images...");
+        finalBlob = await imagesToPdf(croppedBlobs);
         setProgress(100);
-        
-        // TEMPORARY DEBUG: Download the diagnostic PDF directly and abort the normal flow
-        const url = URL.createObjectURL(finalBlob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "diagnostic_crop.pdf";
-        a.click();
-        
-        setTone("success");
-        setStatus("Diagnostic PDF downloaded. Answering flow is temporarily disabled.");
-        speak("Diagnostic PDF downloaded.");
-        return;
       }
 
       const record: FormRecord = {
