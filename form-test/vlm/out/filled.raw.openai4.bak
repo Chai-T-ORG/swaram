@@ -1,0 +1,1408 @@
+[
+  {
+    "page": 0,
+    "fields": [
+      {
+        "label": "Full Name of Applicant",
+        "type": "comb",
+        "combLength": 25,
+        "value": "ANJALI S NAIR",
+        "bbox": [
+          313,
+          114,
+          334,
+          681
+        ]
+      },
+      {
+        "label": "Date of Birth",
+        "type": "date",
+        "combLength": 8,
+        "cellBboxes": [
+          [
+            366,
+            253,
+            386,
+            274
+          ],
+          [
+            366,
+            274,
+            386,
+            294
+          ],
+          [
+            366,
+            319,
+            386,
+            338
+          ],
+          [
+            366,
+            338,
+            386,
+            358
+          ],
+          [
+            366,
+            371,
+            386,
+            391
+          ],
+          [
+            366,
+            391,
+            386,
+            411
+          ],
+          [
+            366,
+            411,
+            386,
+            432
+          ],
+          [
+            366,
+            432,
+            386,
+            462
+          ]
+        ],
+        "value": "14/07/2007",
+        "bbox": [
+          366,
+          253,
+          386,
+          462
+        ]
+      },
+      {
+        "label": "Gender",
+        "type": "choice",
+        "options": [
+          "Male",
+          "Female",
+          "Other"
+        ],
+        "optionBboxes": [
+          [
+            372,
+            655,
+            385,
+            674
+          ],
+          [
+            370,
+            728,
+            387,
+            752
+          ],
+          [
+            372,
+            827,
+            385,
+            846
+          ]
+        ],
+        "value": "Female",
+        "bbox": [
+          370,
+          655,
+          387,
+          891
+        ]
+      },
+      {
+        "label": "Father's / Guardian's Name",
+        "type": "text",
+        "value": "Suresh Kumar S",
+        "bbox": [
+          413,
+          353,
+          426,
+          923
+        ]
+      },
+      {
+        "label": "Mother's Name",
+        "type": "text",
+        "value": "Latha Nair",
+        "bbox": [
+          444,
+          353,
+          457,
+          923
+        ]
+      },
+      {
+        "label": "Community / Category",
+        "type": "choice",
+        "options": [
+          "General",
+          "OBC",
+          "SC",
+          "ST",
+          "EWS"
+        ],
+        "optionBboxes": [
+          [
+            475,
+            353,
+            486,
+            367
+          ],
+          [
+            475,
+            449,
+            486,
+            464
+          ],
+          [
+            475,
+            523,
+            486,
+            538
+          ],
+          [
+            475,
+            587,
+            486,
+            602
+          ],
+          [
+            475,
+            651,
+            486,
+            666
+          ]
+        ],
+        "value": "OBC",
+        "bbox": [
+          475,
+          353,
+          486,
+          694
+        ]
+      },
+      {
+        "label": "Aadhaar Number",
+        "type": "comb",
+        "combLength": 12,
+        "cellBboxes": [
+          [
+            499,
+            353,
+            519,
+            373
+          ],
+          [
+            499,
+            373,
+            519,
+            393
+          ],
+          [
+            499,
+            393,
+            519,
+            413
+          ],
+          [
+            499,
+            413,
+            519,
+            444
+          ],
+          [
+            499,
+            459,
+            519,
+            479
+          ],
+          [
+            499,
+            479,
+            519,
+            499
+          ],
+          [
+            499,
+            499,
+            519,
+            519
+          ],
+          [
+            499,
+            519,
+            519,
+            550
+          ],
+          [
+            499,
+            565,
+            519,
+            585
+          ],
+          [
+            499,
+            585,
+            519,
+            605
+          ],
+          [
+            499,
+            605,
+            519,
+            625
+          ],
+          [
+            499,
+            625,
+            519,
+            656
+          ]
+        ],
+        "value": "482177349210",
+        "bbox": [
+          499,
+          353,
+          519,
+          656
+        ]
+      },
+      {
+        "label": "PAN",
+        "type": "comb",
+        "combLength": 10,
+        "value": "",
+        "bbox": [
+          530,
+          353,
+          550,
+          581
+        ]
+      },
+      {
+        "label": "Mobile Number",
+        "type": "comb",
+        "combLength": 10,
+        "value": "9847213560",
+        "bbox": [
+          560,
+          353,
+          581,
+          581
+        ]
+      },
+      {
+        "label": "Email Address",
+        "type": "text",
+        "value": "anjali.nair2007@gmail.com",
+        "bbox": [
+          602,
+          353,
+          611,
+          923
+        ]
+      },
+      {
+        "label": "Permanent Address",
+        "type": "text",
+        "value": "Chembakassery House, 24/118 Thottumugham Road, Aluva",
+        "bbox": [
+          632,
+          113,
+          690,
+          923
+        ]
+      },
+      {
+        "label": "PIN Code",
+        "type": "comb",
+        "combLength": 6,
+        "value": "683101",
+        "bbox": [
+          701,
+          207,
+          722,
+          344
+        ]
+      },
+      {
+        "label": "District",
+        "type": "text",
+        "value": "Ernakulam",
+        "bbox": [
+          707,
+          449,
+          721,
+          647
+        ]
+      },
+      {
+        "label": "State",
+        "type": "text",
+        "value": "Kerala",
+        "bbox": [
+          707,
+          727,
+          721,
+          923
+        ]
+      },
+      {
+        "label": "Is your address for correspondence the same as permanent address?",
+        "type": "choice",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "optionBboxes": [
+          [
+            743,
+            521,
+            754,
+            536
+          ],
+          [
+            743,
+            590,
+            754,
+            605
+          ]
+        ],
+        "value": "Yes",
+        "bbox": [
+          743,
+          521,
+          754,
+          627
+        ]
+      }
+    ]
+  },
+  {
+    "page": 1,
+    "fields": [
+      {
+        "label": "Name of Institution",
+        "type": "text",
+        "value": "Adi Shankara Institute of Engg. & Technology",
+        "bbox": [
+          132,
+          353,
+          143,
+          923
+        ]
+      },
+      {
+        "label": "Course / Programme",
+        "type": "text",
+        "value": "B.Tech",
+        "bbox": [
+          163,
+          353,
+          174,
+          589
+        ]
+      },
+      {
+        "label": "Branch",
+        "type": "text",
+        "value": "Computer Science and Engg.",
+        "bbox": [
+          163,
+          682,
+          174,
+          923
+        ]
+      },
+      {
+        "label": "Register Number",
+        "type": "comb",
+        "combLength": 9,
+        "value": "ASE23CS45",
+        "bbox": [
+          185,
+          353,
+          206,
+          558
+        ]
+      },
+      {
+        "label": "Current Semester",
+        "type": "comb",
+        "combLength": 2,
+        "value": "04",
+        "bbox": [
+          217,
+          353,
+          237,
+          398
+        ]
+      },
+      {
+        "label": "Year of Admission",
+        "type": "comb",
+        "combLength": 4,
+        "value": "2023",
+        "bbox": [
+          217,
+          642,
+          237,
+          734
+        ]
+      },
+      {
+        "label": "Academic Record",
+        "type": "table",
+        "columns": [
+          "Board / University",
+          "Year",
+          "Max. Marks",
+          "Marks Obt.",
+          "% / CGPA"
+        ],
+        "rows": [
+          {
+            "rowLabel": "SSLC / Class X",
+            "cells": [
+              {
+                "value": "Kerala State Board",
+                "bbox": [
+                  305,
+                  298,
+                  325,
+                  499
+                ]
+              },
+              {
+                "value": "2022",
+                "bbox": [
+                  305,
+                  499,
+                  325,
+                  592
+                ]
+              },
+              {
+                "value": "500",
+                "bbox": [
+                  305,
+                  592,
+                  325,
+                  702
+                ]
+              },
+              {
+                "value": "489",
+                "bbox": [
+                  305,
+                  702,
+                  325,
+                  810
+                ]
+              },
+              {
+                "value": "97.8%",
+                "bbox": [
+                  305,
+                  810,
+                  325,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "HSE / Class XII",
+            "cells": [
+              {
+                "value": "Kerala State Board",
+                "bbox": [
+                  325,
+                  298,
+                  345,
+                  499
+                ]
+              },
+              {
+                "value": "2024",
+                "bbox": [
+                  325,
+                  499,
+                  345,
+                  592
+                ]
+              },
+              {
+                "value": "500",
+                "bbox": [
+                  325,
+                  592,
+                  345,
+                  702
+                ]
+              },
+              {
+                "value": "465",
+                "bbox": [
+                  325,
+                  702,
+                  345,
+                  810
+                ]
+              },
+              {
+                "value": "93.0%",
+                "bbox": [
+                  325,
+                  810,
+                  345,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "Semester 1",
+            "cells": [
+              {
+                "value": "APJAKTU",
+                "bbox": [
+                  345,
+                  298,
+                  366,
+                  499
+                ]
+              },
+              {
+                "value": "2024",
+                "bbox": [
+                  345,
+                  499,
+                  366,
+                  592
+                ]
+              },
+              {
+                "value": "-",
+                "bbox": [
+                  345,
+                  592,
+                  366,
+                  702
+                ]
+              },
+              {
+                "value": "-",
+                "bbox": [
+                  345,
+                  702,
+                  366,
+                  810
+                ]
+              },
+              {
+                "value": "9.13",
+                "bbox": [
+                  345,
+                  810,
+                  366,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "Semester 2",
+            "cells": [
+              {
+                "value": "APJAKTU",
+                "bbox": [
+                  366,
+                  298,
+                  385,
+                  499
+                ]
+              },
+              {
+                "value": "2025",
+                "bbox": [
+                  366,
+                  499,
+                  385,
+                  592
+                ]
+              },
+              {
+                "value": "-",
+                "bbox": [
+                  366,
+                  592,
+                  385,
+                  702
+                ]
+              },
+              {
+                "value": "-",
+                "bbox": [
+                  366,
+                  702,
+                  385,
+                  810
+                ]
+              },
+              {
+                "value": "9.48",
+                "bbox": [
+                  366,
+                  810,
+                  385,
+                  923
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "label": "Annual Family Income in figures",
+        "type": "comb",
+        "combLength": 8,
+        "value": "285000",
+        "bbox": [
+          429,
+          438,
+          450,
+          621
+        ]
+      },
+      {
+        "label": "Annual Family Income in words",
+        "type": "text",
+        "value": "Rupees Two Lakh Eighty Five Thousand Only",
+        "bbox": [
+          467,
+          404,
+          479,
+          923
+        ]
+      },
+      {
+        "label": "Occupation of Father / Guardian",
+        "type": "choice",
+        "options": [
+          "Salaried",
+          "Self-employed",
+          "Agriculture",
+          "Daily wage",
+          "Pensioner",
+          "Unemployed",
+          "Deceased",
+          "Other (specify)"
+        ],
+        "optionBboxes": [
+          [
+            536,
+            113,
+            547,
+            127
+          ],
+          [
+            536,
+            210,
+            547,
+            224
+          ],
+          [
+            536,
+            346,
+            547,
+            360
+          ],
+          [
+            536,
+            458,
+            547,
+            473
+          ],
+          [
+            536,
+            573,
+            547,
+            587
+          ],
+          [
+            561,
+            113,
+            572,
+            127
+          ],
+          [
+            561,
+            237,
+            572,
+            252
+          ],
+          [
+            561,
+            346,
+            572,
+            360
+          ]
+        ],
+        "value": "Salaried",
+        "bbox": [
+          536,
+          113,
+          573,
+          923
+        ]
+      },
+      {
+        "label": "Other occupation specification",
+        "type": "text",
+        "value": "",
+        "bbox": [
+          566,
+          484,
+          573,
+          923
+        ]
+      },
+      {
+        "label": "Bank Account Number",
+        "type": "comb",
+        "combLength": 16,
+        "value": "1234567890123456",
+        "bbox": [
+          589,
+          353,
+          610,
+          676
+        ]
+      },
+      {
+        "label": "IFSC Code",
+        "type": "comb",
+        "combLength": 11,
+        "value": "SBIN0001234",
+        "bbox": [
+          621,
+          353,
+          641,
+          603
+        ]
+      },
+      {
+        "label": "Account Type",
+        "type": "choice",
+        "options": [
+          "Savings",
+          "Current"
+        ],
+        "optionBboxes": [
+          [
+            627,
+            759,
+            637,
+            773
+          ],
+          [
+            627,
+            852,
+            638,
+            867
+          ]
+        ],
+        "value": "Savings",
+        "bbox": [
+          627,
+          757,
+          638,
+          920
+        ]
+      },
+      {
+        "label": "Bank Name & Branch",
+        "type": "text",
+        "value": "State Bank of India, Aluva Branch",
+        "bbox": [
+          659,
+          353,
+          671,
+          923
+        ]
+      }
+    ]
+  },
+  {
+    "page": 2,
+    "fields": [
+      {
+        "label": "Category applied for",
+        "type": "choice",
+        "options": [
+          "Merit-based",
+          "Means-based (financial need)",
+          "Sports Quota",
+          "Persons with Disability"
+        ],
+        "optionBboxes": [
+          [
+            155,
+            113,
+            165,
+            127
+          ],
+          [
+            155,
+            233,
+            165,
+            248
+          ],
+          [
+            155,
+            465,
+            165,
+            480
+          ],
+          [
+            155,
+            594,
+            165,
+            609
+          ]
+        ],
+        "value": "Means-based (financial need)",
+        "bbox": [
+          154,
+          113,
+          166,
+          733
+        ]
+      },
+      {
+        "label": "Documents enclosed",
+        "type": "choice",
+        "options": [
+          "Income Certificate",
+          "Caste / Community Certificate",
+          "Bank Passbook (first page)",
+          "Aadhaar copy",
+          "Mark lists (all)",
+          "Bonafide Certificate",
+          "Disability Certificate"
+        ],
+        "optionBboxes": [
+          [
+            214,
+            113,
+            225,
+            127
+          ],
+          [
+            214,
+            272,
+            225,
+            287
+          ],
+          [
+            214,
+            506,
+            225,
+            520
+          ],
+          [
+            238,
+            113,
+            249,
+            127
+          ],
+          [
+            238,
+            245,
+            249,
+            259
+          ],
+          [
+            238,
+            378,
+            249,
+            392
+          ],
+          [
+            262,
+            113,
+            273,
+            127
+          ]
+        ],
+        "value": [
+          "Income Certificate",
+          "Caste / Community Certificate",
+          "Bank Passbook (first page)",
+          "Aadhaar copy",
+          "Mark lists (all)",
+          "Bonafide Certificate"
+        ],
+        "bbox": [
+          214,
+          113,
+          273,
+          745
+        ]
+      },
+      {
+        "label": "Are you receiving any other scholarship or stipend this year?",
+        "type": "choice",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "optionBboxes": [
+          [
+            297,
+            588,
+            308,
+            602
+          ],
+          [
+            297,
+            657,
+            308,
+            672
+          ]
+        ],
+        "value": "No",
+        "bbox": [
+          297,
+          588,
+          309,
+          672
+        ]
+      },
+      {
+        "label": "If Yes, name of scheme",
+        "type": "text",
+        "value": "",
+        "bbox": [
+          326,
+          294,
+          337,
+          580
+        ]
+      },
+      {
+        "label": "Amount (Rs.)",
+        "type": "comb",
+        "combLength": 7,
+        "value": "",
+        "bbox": [
+          313,
+          723,
+          334,
+          882
+        ]
+      },
+      {
+        "label": "Particulars of Family Members",
+        "type": "table",
+        "columns": [
+          "Name",
+          "Relationship",
+          "Age",
+          "Occupation",
+          "Annual Income (Rs.)"
+        ],
+        "rows": [
+          {
+            "rowLabel": "1",
+            "cells": [
+              {
+                "value": "Anjali S Nair",
+                "bbox": [
+                  449,
+                  153,
+                  470,
+                  397
+                ]
+              },
+              {
+                "value": "Self",
+                "bbox": [
+                  449,
+                  397,
+                  470,
+                  540
+                ]
+              },
+              {
+                "value": "19",
+                "bbox": [
+                  449,
+                  540,
+                  470,
+                  606
+                ]
+              },
+              {
+                "value": "Student",
+                "bbox": [
+                  449,
+                  606,
+                  470,
+                  783
+                ]
+              },
+              {
+                "value": "0",
+                "bbox": [
+                  449,
+                  783,
+                  470,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "2",
+            "cells": [
+              {
+                "value": "Suresh Kumar S",
+                "bbox": [
+                  470,
+                  153,
+                  491,
+                  397
+                ]
+              },
+              {
+                "value": "Father",
+                "bbox": [
+                  470,
+                  397,
+                  491,
+                  540
+                ]
+              },
+              {
+                "value": "52",
+                "bbox": [
+                  470,
+                  540,
+                  491,
+                  606
+                ]
+              },
+              {
+                "value": "Driver, KSRTC",
+                "bbox": [
+                  470,
+                  606,
+                  491,
+                  783
+                ]
+              },
+              {
+                "value": "210000",
+                "bbox": [
+                  470,
+                  783,
+                  491,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "3",
+            "cells": [
+              {
+                "value": "Latha Nair",
+                "bbox": [
+                  491,
+                  153,
+                  512,
+                  397
+                ]
+              },
+              {
+                "value": "Mother",
+                "bbox": [
+                  491,
+                  397,
+                  512,
+                  540
+                ]
+              },
+              {
+                "value": "48",
+                "bbox": [
+                  491,
+                  540,
+                  512,
+                  606
+                ]
+              },
+              {
+                "value": "Homemaker",
+                "bbox": [
+                  491,
+                  606,
+                  512,
+                  783
+                ]
+              },
+              {
+                "value": "0",
+                "bbox": [
+                  491,
+                  783,
+                  512,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "4",
+            "cells": [
+              {
+                "value": "Arjun S Nair",
+                "bbox": [
+                  512,
+                  153,
+                  534,
+                  397
+                ]
+              },
+              {
+                "value": "Brother",
+                "bbox": [
+                  512,
+                  397,
+                  534,
+                  540
+                ]
+              },
+              {
+                "value": "15",
+                "bbox": [
+                  512,
+                  540,
+                  534,
+                  606
+                ]
+              },
+              {
+                "value": "Student",
+                "bbox": [
+                  512,
+                  606,
+                  534,
+                  783
+                ]
+              },
+              {
+                "value": "0",
+                "bbox": [
+                  512,
+                  783,
+                  534,
+                  923
+                ]
+              }
+            ]
+          },
+          {
+            "rowLabel": "5",
+            "cells": [
+              {
+                "value": "",
+                "bbox": [
+                  534,
+                  153,
+                  555,
+                  397
+                ]
+              },
+              {
+                "value": "",
+                "bbox": [
+                  534,
+                  397,
+                  555,
+                  540
+                ]
+              },
+              {
+                "value": "",
+                "bbox": [
+                  534,
+                  540,
+                  555,
+                  606
+                ]
+              },
+              {
+                "value": "",
+                "bbox": [
+                  534,
+                  606,
+                  555,
+                  783
+                ]
+              },
+              {
+                "value": "",
+                "bbox": [
+                  534,
+                  783,
+                  555,
+                  923
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "page": 3,
+    "fields": [
+      {
+        "label": "Address for Correspondence",
+        "type": "text",
+        "value": "NOT APPLICABLE (Section 1.12 = Yes)",
+        "bbox": [
+          158,
+          113,
+          194,
+          923
+        ]
+      },
+      {
+        "label": "PIN Code",
+        "type": "comb",
+        "combLength": 6,
+        "value": "",
+        "bbox": [
+          205,
+          207,
+          225,
+          344
+        ]
+      },
+      {
+        "label": "District",
+        "type": "text",
+        "value": "",
+        "bbox": [
+          223,
+          447,
+          224,
+          646
+        ]
+      },
+      {
+        "label": "State",
+        "type": "text",
+        "value": "",
+        "bbox": [
+          223,
+          723,
+          224,
+          923
+        ]
+      },
+      {
+        "label": "Place",
+        "type": "text",
+        "value": "Aluva, Ernakulam",
+        "bbox": [
+          448,
+          173,
+          459,
+          421
+        ]
+      },
+      {
+        "label": "Date",
+        "type": "date",
+        "combLength": 8,
+        "cellBboxes": [
+          [
+            440,
+            527,
+            460,
+            550
+          ],
+          [
+            440,
+            550,
+            460,
+            572
+          ],
+          [
+            440,
+            585,
+            460,
+            608
+          ],
+          [
+            440,
+            608,
+            460,
+            631
+          ],
+          [
+            440,
+            643,
+            460,
+            666
+          ],
+          [
+            440,
+            666,
+            460,
+            689
+          ],
+          [
+            440,
+            689,
+            460,
+            713
+          ],
+          [
+            440,
+            713,
+            460,
+            736
+          ]
+        ],
+        "value": "15/08/2026",
+        "bbox": [
+          440,
+          527,
+          460,
+          736
+        ]
+      },
+      {
+        "label": "Signature of Applicant",
+        "type": "signature",
+        "value": "",
+        "bbox": [
+          505,
+          113,
+          562,
+          366
+        ]
+      }
+    ]
+  }
+]

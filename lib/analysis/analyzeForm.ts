@@ -19,6 +19,8 @@ import { orderFields } from "../vision/fieldClusterer";
 import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
 import { recognizeCanvas } from "../ocr/tesseractEngine";
 import { deskewCanvas } from "../vision/deskew";
+import { schemaToFields, type VlmPage } from "./vlmAdapter";
+import { canvasToPngBlob, extractPageFields } from "./vlmClient";
 
 export type AnalysisStage =
   | "reading"      // opening the file
@@ -47,6 +49,16 @@ export interface AnalysisResult {
 const MAX_PAGES = 10;
 const UNDERSCORE_RUN = /_{3,}|\.{6,}/;
 
+/**
+ * Rollout flag for VLM-native analysis (opt-out — defaults ON). Set
+ * NEXT_PUBLIC_VLM_ANALYSIS=off (or 0/false/no) to force the legacy
+ * Sarvam/Tesseract pipeline, e.g. to A/B the two or disable VLM fast.
+ */
+export function vlmAnalysisEnabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_VLM_ANALYSIS ?? "").trim().toLowerCase();
+  return v !== "off" && v !== "0" && v !== "false" && v !== "no";
+}
+
 export async function analyzeForm(
   blob: Blob,
   sourceType: "pdf" | "image",
@@ -68,7 +80,117 @@ export async function analyzeForm(
   return analyzeImage(blob, onProgress);
 }
 
+/* ------------------------------------------------------------------ */
+/* VLM-native path (primary): one grounded vision pass per page.       */
+/* Falls back to the legacy Sarvam/Tesseract + shapes pipeline if the  */
+/* VLM route is unavailable (offline, unconfigured, quota, error).     */
+/* ------------------------------------------------------------------ */
+
 async function analyzeScannedPdf(
+  blob: Blob,
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  if (vlmAnalysisEnabled()) {
+    try {
+      const vlm = await analyzePdfWithVlm(bytes, onProgress);
+      if (vlm && vlm.fields.length > 0) return vlm;
+    } catch (error) {
+      console.warn("[swaram] VLM analysis failed; falling back to legacy pipeline.", error);
+    }
+  }
+  return analyzeScannedPdfLegacy(blob, bytes, onProgress);
+}
+
+async function analyzeImage(
+  blob: Blob,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  if (vlmAnalysisEnabled()) {
+    try {
+      const vlm = await analyzeImageWithVlm(blob, onProgress);
+      if (vlm && vlm.fields.length > 0) return vlm;
+    } catch (error) {
+      console.warn("[swaram] VLM image analysis failed; falling back to legacy pipeline.", error);
+    }
+  }
+  return analyzeImageLegacy(blob, onProgress);
+}
+
+/**
+ * Render each page and send it to the VLM route. Returns null (triggering the
+ * legacy fallback) when the route yields nothing at all. If the very first page
+ * fails we abort early so an unconfigured/offline route falls back fast without
+ * rendering every page.
+ */
+async function analyzePdfWithVlm(
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult | null> {
+  const pdf = await loadPdfDocument(bytes);
+  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+  const pageDims: PageDim[] = new Array(pageCount);
+  const pngs: Blob[] = [];
+
+  // Render pages sequentially (pdf.js), collecting PNGs + page dims.
+  try {
+    for (let i = 0; i < pageCount; i++) {
+      onProgress({ stage: "reading", page: i + 1, pageCount });
+      const rendered = await renderPageToCanvas(pdf, i + 1);
+      pageDims[i] = { width: rendered.pageWidthPts, height: rendered.pageHeightPts };
+      pngs.push(await canvasToPngBlob(rendered.canvas));
+      rendered.canvas.width = 0; // release bitmap memory
+    }
+  } finally {
+    await pdf.cleanup();
+  }
+
+  // Extract every page IN PARALLEL — the biggest latency win, especially for a
+  // reasoning model (~22s/page becomes ~22s for the whole form). A page that
+  // fails is dropped; if all fail (route unavailable) we return null → fallback.
+  onProgress({ stage: "ocr", pageCount });
+  let done = 0;
+  const settled = await Promise.allSettled(
+    pngs.map((png, i) =>
+      extractPageFields(png, i + 1, pageCount).then((result) => {
+        onProgress({ stage: "ocr", page: ++done, pageCount, pct: done / pageCount });
+        return result;
+      }),
+    ),
+  );
+
+  const pages: VlmPage[] = [];
+  for (const s of settled) {
+    if (s.status === "fulfilled") pages.push(s.value);
+    else console.warn("[swaram] VLM page failed; keeping other pages.", s.reason);
+  }
+  if (pages.reduce((n, p) => n + p.fields.length, 0) === 0) return null;
+  pages.sort((a, b) => a.page - b.page); // keep reading order if a page dropped out
+
+  onProgress({ stage: "fields", pageCount });
+  const fields = schemaToFields(pages); // already in reading order; don't re-cluster
+  onProgress({ stage: "ordering" });
+  return { isAcroForm: false, fields, pageDims, pageCount, shapesUnavailable: false };
+}
+
+async function analyzeImageWithVlm(
+  blob: Blob,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult | null> {
+  onProgress({ stage: "ocr", pct: 0.1 });
+  const canvas = await imageBlobToCanvas(blob);
+  const pageDims: PageDim[] = [{ width: canvas.width, height: canvas.height }];
+  const png = await canvasToPngBlob(canvas);
+  const page = await extractPageFields(png, 1, 1);
+  if (page.fields.length === 0) return null;
+
+  onProgress({ stage: "fields" });
+  const fields = schemaToFields([page]);
+  onProgress({ stage: "ordering" });
+  return { isAcroForm: false, fields, pageDims, pageCount: 1, shapesUnavailable: false };
+}
+
+async function analyzeScannedPdfLegacy(
   blob: Blob,
   bytes: ArrayBuffer,
   onProgress: (progress: AnalysisProgress) => void,
@@ -136,7 +258,7 @@ async function analyzeScannedPdf(
   };
 }
 
-async function analyzeImage(
+async function analyzeImageLegacy(
   blob: Blob,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {

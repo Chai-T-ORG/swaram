@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { getFile, getForm, saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
 import { generateFilledPdf } from "@/lib/pdf/pdfWriter";
 import { extractProfileUpdates } from "@/lib/matching/fuzzyProfileMatch";
 import { mergeIntoProfile } from "@/lib/storage/profileStore";
@@ -143,7 +144,7 @@ export function useComplete() {
     setReading(true);
     await speak("Here is your completed form.", { interrupt: true });
     for (const field of [...record.fields].sort((a, b) => a.order - b.order)) {
-      await speak(`${field.label}: ${field.value || "blank"}.`, { interrupt: false });
+      await speak(`${field.label}: ${fieldDisplayValue(field) || "blank"}.`, { interrupt: false });
     }
     setReading(false);
   }

@@ -69,16 +69,24 @@ function drawAnswer(
   if (!field.value.trim()) return;
   const { width: pw, height: ph } = page.getSize();
 
-  // Choice with detected option positions: tick the box of the chosen option.
+  // Choice with detected option positions: tick the box of EACH chosen option
+  // (multi-select values arrive comma-separated, e.g. "Aadhaar copy, Mark lists").
   if (field.type === "choice" && field.options?.length && field.optionBboxes?.length) {
-    const value = field.value.trim().toLowerCase();
-    let index = field.options.findIndex((o) => o.trim().toLowerCase() === value);
-    if (index < 0) index = field.options.findIndex((o) => o.trim().toLowerCase().includes(value) || value.includes(o.trim().toLowerCase()));
-    const target = index >= 0 ? field.optionBboxes[index] : null;
-    if (target) {
-      drawCheckmark(page, target, checkFont);
-      return;
+    const chosen = field.value
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    let ticked = 0;
+    for (const pick of chosen) {
+      let index = field.options.findIndex((o) => o.trim().toLowerCase() === pick);
+      if (index < 0) index = field.options.findIndex((o) => o.trim().toLowerCase().includes(pick) || pick.includes(o.trim().toLowerCase()));
+      const target = index >= 0 ? field.optionBboxes[index] : null;
+      if (target) {
+        drawCheckmark(page, target, checkFont);
+        ticked++;
+      }
     }
+    if (ticked > 0) return;
   }
 
   if (field.type === "signature") {
@@ -141,6 +149,30 @@ function drawAnswer(
     } else {
       chars = text.split("");
     }
+    // Precise path: one box per character (grouped combs / boxed dates). Used
+    // only when we have a full parallel set of cells; otherwise fall through to
+    // uniform division so nothing regresses.
+    const cells = field.combCells;
+    if (cells && chars.length > 0 && cells.length >= chars.length) {
+      for (let i = 0; i < chars.length; i++) {
+        const c = cells[i];
+        const cx = c.x * pw;
+        const cw = Math.max(c.w * pw, 4);
+        const ch = Math.max(c.h * ph, 4);
+        const cBottom = ph - (c.y + c.h) * ph;
+        const size = fitFontSize(font, "W", cw - 2, 12);
+        const charW = font.widthOfTextAtSize(chars[i], size);
+        page.drawText(chars[i], {
+          x: cx + (cw - charW) / 2,
+          y: cBottom + Math.max(ch * 0.22, 2.5),
+          size,
+          font,
+          color: INK,
+        });
+      }
+      return;
+    }
+
     const cellW = boxW / field.combLength;
     const size = fitFontSize(font, "W", cellW - 2, 12);
     const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
@@ -167,8 +199,14 @@ function drawAnswer(
   }
 
   const size = fitFontSize(font, text, boxW - 4);
-  // The bbox bottom is the writing line — sit the text on it, not across it.
-  const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
+  // A thin bbox IS the printed underline (the model boxes the line itself), so
+  // sit the text just above its TOP edge — font-size-independent, so long fields
+  // whose font shrinks don't drop onto the line. A tall bbox is an open answer
+  // area: write near its bottom.
+  const isUnderline = field.bbox.h < 0.008;
+  const baseline = isUnderline
+    ? ph - field.bbox.y * ph + 3
+    : boxBottom + Math.max(boxH * 0.22, size * 0.4);
   page.drawText(text, {
     x: boxX + 2,
     y: baseline,

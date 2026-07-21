@@ -15,6 +15,7 @@ import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { isLlmAvailable, assist, correctTranscript } from "@/lib/voice/llm";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
+import { expandTableCells, applyCellValue, parseCount, type CellRef, type RowCountRef } from "@/lib/analysis/tableCells";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { validateField } from "@/lib/validation/rules";
@@ -74,6 +75,10 @@ export function useFillSession() {
   const posRef = useRef(0);
   const queueRef = useRef<FormField[]>([]);
   const generationRef = useRef(0);
+  /** Synthetic table-cell queue items -> their {tableId,row,col} in record.fields. */
+  const cellMapRef = useRef<Map<string, CellRef>>(new Map());
+  /** Synthetic "how many entries?" items -> the list table they gate. */
+  const rowCountMapRef = useRef<Map<string, RowCountRef>>(new Map());
   const onlySkippedRef = useRef(searchParams.get("only") === "skipped");
   const retriesRef = useRef(0);
   const noSpeechRef = useRef(0);
@@ -89,11 +94,16 @@ export function useFillSession() {
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
 
-  const currentField = record?.fields.find((f) => f.id === currentId) ?? null;
+  // currentId may point at a synthetic table-cell field that lives only in the
+  // queue, so fall back to searching the queue when it isn't in record.fields.
+  const currentField =
+    record?.fields.find((f) => f.id === currentId) ??
+    queueRef.current.find((f) => f.id === currentId) ??
+    null;
   const queueLength = queueRef.current.length;
-  const questionNumber = record
-    ? record.fields.length - queueLength + Math.min(posRef.current + 1, queueLength)
-    : 1;
+  // Progress is queue-relative: table expansion makes the queue longer than
+  // record.fields, so counting against record.fields would go negative.
+  const questionNumber = queueLength > 0 ? Math.min(posRef.current + 1, queueLength) : 1;
 
   // Track active components
   useEffect(() => {
@@ -204,7 +214,11 @@ export function useFillSession() {
       return;
     }
 
-    queueRef.current = pending;
+    // Expand any table fields into one synthetic question per empty cell,
+    // gating list tables (family members etc.) behind a "how many?" question.
+    cellMapRef.current = new Map();
+    rowCountMapRef.current = new Map();
+    queueRef.current = expandTableCells(pending, cellMapRef.current, rowCountMapRef.current);
     posRef.current = 0;
     const id = beginRun();
 
@@ -260,10 +274,12 @@ export function useFillSession() {
   async function askField(pos: number, id: number) {
     let field = fieldAt(pos);
 
-    // Automatically skip signatures and unmet dependencies
+    // Automatically skip signatures and unmet dependencies. Tables are normally
+    // expanded into per-cell questions before they reach the queue; this skip
+    // only guards the jumpToField path, which uses the raw record.fields.
     while (field) {
       let skip = false;
-      if (field.type === "signature") {
+      if (field.type === "signature" || field.type === "table") {
         skip = true;
       } else if (field.dependsOn) {
         const target = recordRef.current?.fields.find((f) => f.profileKey === field!.dependsOn!.fieldKey);
@@ -610,6 +626,27 @@ export function useFillSession() {
     if (field) {
       field.value = val;
       field.status = "answered";
+      // If this is a synthetic table cell, mirror the answer into its parent
+      // table's value grid so write-back (table path) picks it up.
+      const cell = cellMapRef.current.get(field.id);
+      if (cell) {
+        const table = rec.fields.find((f) => f.id === cell.tableId);
+        if (table) applyCellValue(table, cell, val);
+      }
+      // If this is a "how many entries?" answer, drop the cell questions for
+      // rows beyond the requested count from the rest of the queue.
+      const rowCount = rowCountMapRef.current.get(field.id);
+      if (rowCount) {
+        const n = parseCount(val);
+        if (n !== null) {
+          const keep = Math.max(0, Math.min(n, rowCount.maxRows));
+          queueRef.current = queueRef.current.filter((qf, i) => {
+            if (i <= pos) return true;
+            const c = cellMapRef.current.get(qf.id);
+            return !(c && c.tableId === rowCount.tableId && c.row >= keep);
+          });
+        }
+      }
       syncRecord();
 
       // A confirmed name is learned for good: future STT snaps to it, the LLM
@@ -759,7 +796,7 @@ export function useFillSession() {
     currentField,
     currentId,
     questionNumber,
-    total: record?.fields.length || 0,
+    total: queueLength > 0 ? queueLength : record?.fields.length || 0,
     confirmValue,
     /** True while the session is waiting on a yes/no for confirmValue. */
     confirmMode: listenKindRef.current === "confirm",

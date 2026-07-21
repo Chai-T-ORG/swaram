@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
 
 export type ReviewTone = "info" | "success" | "warning" | "error";
@@ -104,7 +105,9 @@ export function useReview() {
     setReading(true);
     for (const field of [...record.fields].sort((a, b) => a.order - b.order)) {
       const answer =
-        field.status === "skipped" || field.status === "unclear" ? "skipped" : field.value || "blank";
+        field.status === "skipped" || field.status === "unclear"
+          ? "skipped"
+          : fieldDisplayValue(field) || "blank";
       await speak(`${field.label}: ${answer}.`, { interrupt: false });
     }
     setReading(false);

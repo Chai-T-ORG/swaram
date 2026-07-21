@@ -26,8 +26,8 @@ export type StepState = "pending" | "active" | "done";
 
 export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
   { key: "reading", label: "Opening your form" },
-  { key: "ocr", label: "Reading text with Sarvam AI" },
-  { key: "layout", label: "Detecting layout grid" },
+  { key: "ocr", label: "Reading your form with AI vision" },
+  { key: "layout", label: "Understanding the layout" },
   { key: "fields", label: "Identifying input fields" },
   { key: "ordering", label: "Preparing voice checklist" },
 ];
@@ -138,7 +138,7 @@ export function useProcessing() {
           if (progress.page && progress.pageCount) {
             setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
           } else {
-            setDetail(pct ? `processing securely with Sarvam AI — ${pct}` : "sending to Sarvam AI");
+            setDetail(pct ? `processing securely with AI vision — ${pct}` : "sending to AI vision");
           }
         } else {
           setDetail("");
