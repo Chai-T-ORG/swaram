@@ -84,7 +84,7 @@ export default function PreviewMobile() {
   }
 
   const pageCount = pv.record.pageCount || 1;
-  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox"];
+  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox", "comb"];
   const pageFields = pv.sortedFields.filter(
     (f) => f.page === pv.currentPage && f.bbox !== null,
   );

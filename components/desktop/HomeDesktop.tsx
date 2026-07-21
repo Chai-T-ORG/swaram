@@ -167,7 +167,7 @@ export default function HomeDesktop() {
             </Link>
           </div>
           <ul className="flex flex-col gap-3 w-full">
-            {recent.map((form) => (
+            {recent.map((form: any) => (
               <li key={form.id} className="w-full">
                 <Link
                   href={routeForForm(form)}

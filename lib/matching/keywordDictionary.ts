@@ -49,11 +49,31 @@ const NON_FILLABLE = [
   /^photo$/,
   /\bfor office use\b/,
   /\boffice use only\b/,
+  /\bregistration no\b/,
+  /\bdate received\b/,
   /\bdeclaration\b/,
   /\binstructions?\b/,
+  /\bone letter per box\b/,
+  /\bleave .*blank\b/,
+  /\bdo not use initials\b/,
+  /\bdo not staple\b/,
+  /\blast date for submission\b/,
   /\bthumb impression\b/,
   /\bseal\b/,
   /\battested?\b/,
+  /\bdo not overwrite\b/,
+  /\bstrike out\b/,
+  /\bcorrection fluid\b/,
+  /\bdirectorate\b/,
+  /\bgovernment of\b/,
+  /\bdepartment of\b/,
+  /\bministry of\b/,
+  /\bscholarship\b/,
+  /\bapplication form\b/,
+  /\bacademic year\b/,
+  /\bform no\b/,
+  /\bform number\b/,
+  /\bfor office use\b/,
 ];
 
 export function isNonFillableLabel(text: string): boolean {
@@ -77,7 +97,8 @@ export function matchLabel(text: string): DictEntry | null {
       if (normSyn.length <= bestLen) continue;
       if (
         normalized === normSyn ||
-        new RegExp(`(^|\\s)${normSyn.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&")}($|\\s|:)`).test(normalized)
+        new RegExp(`(^|\\s)${normSyn.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&")}($|\\s|:)`).test(normalized) ||
+        (normalized.startsWith(normSyn) && entry.type === "choice")
       ) {
         best = entry;
         bestLen = normSyn.length;

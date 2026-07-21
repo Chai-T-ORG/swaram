@@ -2,7 +2,7 @@
  * Form analysis pipeline. Everything runs in the browser:
  *
  *   PDF -> AcroForm?  -> yes: read fields via pdf-lib (no OCR)
- *                     -> no:  render pages (pdf.js) -> OCR (tesseract.js)
+ *                     -> no:  Sarvam Document Intelligence -> render pages (pdf.js)
  *                             -> shapes (opencv.js, best-effort)
  *                             -> keyword dictionary matching
  *                             -> column clustering + reading order
@@ -12,10 +12,15 @@ import type { BBox, FormField, PageDim } from "../types";
 import { newId } from "../types";
 import { detectAcroform, extractAcroformFields } from "../pdf/acroformDetector";
 import { loadPdfDocument, renderPageToCanvas, imageBlobToCanvas } from "../pdf/pdfReader";
-import { recognizeCanvas, type OcrLine } from "../ocr/tesseractEngine";
-import { detectShapes, loadOpenCv, preprocessForOcr, type DetectedShape } from "../vision/shapeDetector";
+import type { OcrLine } from "../ocr/tesseractEngine";
+import { detectShapes, loadOpenCv, type DetectedShape } from "../vision/shapeDetector";
 import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
 import { orderFields } from "../vision/fieldClusterer";
+import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
+import { recognizeCanvas } from "../ocr/tesseractEngine";
+import { deskewCanvas } from "../vision/deskew";
+import { schemaToFields, type VlmPage } from "./vlmAdapter";
+import { canvasToPngBlob, extractPageFields } from "./vlmClient";
 
 export type AnalysisStage =
   | "reading"      // opening the file
@@ -44,6 +49,16 @@ export interface AnalysisResult {
 const MAX_PAGES = 10;
 const UNDERSCORE_RUN = /_{3,}|\.{6,}/;
 
+/**
+ * Rollout flag for VLM-native analysis (opt-out — defaults ON). Set
+ * NEXT_PUBLIC_VLM_ANALYSIS=off (or 0/false/no) to force the legacy
+ * Sarvam/Tesseract pipeline, e.g. to A/B the two or disable VLM fast.
+ */
+export function vlmAnalysisEnabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_VLM_ANALYSIS ?? "").trim().toLowerCase();
+  return v !== "off" && v !== "0" && v !== "false" && v !== "no";
+}
+
 export async function analyzeForm(
   blob: Blob,
   sourceType: "pdf" | "image",
@@ -59,18 +74,136 @@ export async function analyzeForm(
       onProgress({ stage: "ordering", pct: 1 });
       return { isAcroForm: true, fields, pageDims, pageCount, shapesUnavailable: false };
     }
-    return analyzeScannedPdf(bytes, onProgress);
+    return analyzeScannedPdf(blob, bytes, onProgress);
   }
 
   return analyzeImage(blob, onProgress);
 }
 
+/* ------------------------------------------------------------------ */
+/* VLM-native path (primary): one grounded vision pass per page.       */
+/* Falls back to the legacy Sarvam/Tesseract + shapes pipeline if the  */
+/* VLM route is unavailable (offline, unconfigured, quota, error).     */
+/* ------------------------------------------------------------------ */
+
 async function analyzeScannedPdf(
+  blob: Blob,
   bytes: ArrayBuffer,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
-  // Start warming OpenCV while pdf.js renders.
+  if (vlmAnalysisEnabled()) {
+    try {
+      const vlm = await analyzePdfWithVlm(bytes, onProgress);
+      if (vlm && vlm.fields.length > 0) return vlm;
+    } catch (error) {
+      console.warn("[swaram] VLM analysis failed; falling back to legacy pipeline.", error);
+    }
+  }
+  return analyzeScannedPdfLegacy(blob, bytes, onProgress);
+}
+
+async function analyzeImage(
+  blob: Blob,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  if (vlmAnalysisEnabled()) {
+    try {
+      const vlm = await analyzeImageWithVlm(blob, onProgress);
+      if (vlm && vlm.fields.length > 0) return vlm;
+    } catch (error) {
+      console.warn("[swaram] VLM image analysis failed; falling back to legacy pipeline.", error);
+    }
+  }
+  return analyzeImageLegacy(blob, onProgress);
+}
+
+/**
+ * Render each page and send it to the VLM route. Returns null (triggering the
+ * legacy fallback) when the route yields nothing at all. If the very first page
+ * fails we abort early so an unconfigured/offline route falls back fast without
+ * rendering every page.
+ */
+async function analyzePdfWithVlm(
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult | null> {
+  const pdf = await loadPdfDocument(bytes);
+  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+  const pageDims: PageDim[] = new Array(pageCount);
+  const pngs: Blob[] = [];
+
+  // Render pages sequentially (pdf.js), collecting PNGs + page dims.
+  try {
+    for (let i = 0; i < pageCount; i++) {
+      onProgress({ stage: "reading", page: i + 1, pageCount });
+      const rendered = await renderPageToCanvas(pdf, i + 1);
+      pageDims[i] = { width: rendered.pageWidthPts, height: rendered.pageHeightPts };
+      pngs.push(await canvasToPngBlob(rendered.canvas));
+      rendered.canvas.width = 0; // release bitmap memory
+    }
+  } finally {
+    await pdf.cleanup();
+  }
+
+  // Extract every page IN PARALLEL — the biggest latency win, especially for a
+  // reasoning model (~22s/page becomes ~22s for the whole form). A page that
+  // fails is dropped; if all fail (route unavailable) we return null → fallback.
+  onProgress({ stage: "ocr", pageCount });
+  let done = 0;
+  const settled = await Promise.allSettled(
+    pngs.map((png, i) =>
+      extractPageFields(png, i + 1, pageCount).then((result) => {
+        onProgress({ stage: "ocr", page: ++done, pageCount, pct: done / pageCount });
+        return result;
+      }),
+    ),
+  );
+
+  const pages: VlmPage[] = [];
+  for (const s of settled) {
+    if (s.status === "fulfilled") pages.push(s.value);
+    else console.warn("[swaram] VLM page failed; keeping other pages.", s.reason);
+  }
+  if (pages.reduce((n, p) => n + p.fields.length, 0) === 0) return null;
+  pages.sort((a, b) => a.page - b.page); // keep reading order if a page dropped out
+
+  onProgress({ stage: "fields", pageCount });
+  const fields = schemaToFields(pages); // already in reading order; don't re-cluster
+  onProgress({ stage: "ordering" });
+  return { isAcroForm: false, fields, pageDims, pageCount, shapesUnavailable: false };
+}
+
+async function analyzeImageWithVlm(
+  blob: Blob,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult | null> {
+  onProgress({ stage: "ocr", pct: 0.1 });
+  const canvas = await imageBlobToCanvas(blob);
+  const pageDims: PageDim[] = [{ width: canvas.width, height: canvas.height }];
+  const png = await canvasToPngBlob(canvas);
+  const page = await extractPageFields(png, 1, 1);
+  if (page.fields.length === 0) return null;
+
+  onProgress({ stage: "fields" });
+  const fields = schemaToFields([page]);
+  onProgress({ stage: "ordering" });
+  return { isAcroForm: false, fields, pageDims, pageCount: 1, shapesUnavailable: false };
+}
+
+async function analyzeScannedPdfLegacy(
+  blob: Blob,
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
   const cvWarmup = loadOpenCv();
+  
+  let sarvamPages: Record<string, unknown> | null = null;
+  try {
+    const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
+    sarvamPages = sarvam.pages;
+  } catch (error) {
+    console.warn("Sarvam API failed, falling back to local Tesseract OCR.", error);
+  }
 
   const pdf = await loadPdfDocument(bytes);
   const pageCount = Math.min(pdf.numPages, MAX_PAGES);
@@ -82,11 +215,6 @@ async function analyzeScannedPdf(
     const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
     pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
 
-    onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct: 0 });
-    const ocr = await recognizeCanvas(rendered.canvas, (pct) =>
-      onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct }),
-    );
-
     onProgress({ stage: "layout", page: pageIndex + 1, pageCount });
     const cv = await cvWarmup;
     let shapes: DetectedShape[] = [];
@@ -96,9 +224,18 @@ async function analyzeScannedPdf(
       shapesUnavailable = true;
     }
     onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
+    
+    let lines: OcrLine[];
+    if (sarvamPages && sarvamPages[String(pageIndex + 1)]) {
+      lines = sarvamPageToLines(sarvamPages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+    } else {
+      const ocrResult = await recognizeCanvas(rendered.canvas, (pct) => onProgress({ stage: "ocr", pct, page: pageIndex + 1, pageCount }));
+      lines = ocrResult.lines;
+    }
+
     allFields.push(
       ...await inferFieldsFromPage(
-        mergeLinesIntoRows(ocr.lines),
+        mergeLinesIntoRows(lines),
         shapes,
         rendered.canvas.width,
         rendered.canvas.height,
@@ -121,32 +258,37 @@ async function analyzeScannedPdf(
   };
 }
 
-async function analyzeImage(
+async function analyzeImageLegacy(
   blob: Blob,
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult> {
   const cvWarmup = loadOpenCv();
-  const canvas = await imageBlobToCanvas(blob);
-
-  onProgress({ stage: "ocr", page: 1, pageCount: 1, pct: 0 });
-  // Photos benefit from lighting normalization before OCR (no-op without OpenCV).
-  const ocrCanvas = await preprocessForOcr(canvas);
-  const ocr = await recognizeCanvas(ocrCanvas, (pct) =>
-    onProgress({ stage: "ocr", page: 1, pageCount: 1, pct }),
-  );
+  let canvas = await imageBlobToCanvas(blob);
 
   onProgress({ stage: "layout" });
   const cv = await cvWarmup;
   let shapes: DetectedShape[] = [];
   let shapesUnavailable = false;
   if (cv) {
+    canvas = deskewCanvas(canvas);
     shapes = await detectShapes(canvas);
   } else {
     shapesUnavailable = true;
   }
 
   onProgress({ stage: "fields" });
-  const fields = await inferFieldsFromPage(mergeLinesIntoRows(ocr.lines), shapes, canvas.width, canvas.height, 0, canvas);
+  
+  let lines: OcrLine[];
+  try {
+    const sarvam = await runSarvamDigitize(blob, "image", onProgress);
+    lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
+  } catch (error) {
+    console.warn("Sarvam API failed, falling back to local Tesseract OCR.", error);
+    const ocrResult = await recognizeCanvas(canvas, (pct) => onProgress({ stage: "ocr", pct }));
+    lines = ocrResult.lines;
+  }
+
+  const fields = await inferFieldsFromPage(mergeLinesIntoRows(lines), shapes, canvas.width, canvas.height, 0, canvas);
 
   onProgress({ stage: "ordering" });
   return {
@@ -239,7 +381,7 @@ interface WordGroup {
  * Empty checkbox squares OCR into junk tokens ("O", "[]", "LJ", "1"...).
  * Drop them when reading option text so they don't break the grouping.
  */
-const CHECKBOX_ARTIFACT = /^[^a-zA-Z0-9]{1,3}$|^[oO0dDcCuUjJlLiI]$|^[\[\](){}|]{1,2}[a-zA-Z]?$/;
+const CHECKBOX_ARTIFACT = /^[^a-zA-Z0-9]{1,3}$|^[oO0dDcCuUjJlLiI1]$|^[\[\](){}|]{1,2}[a-zA-Z]?$|^\{\}$|^\(\)$/i;
 
 function isCheckboxArtifact(word: Word): boolean {
   return CHECKBOX_ARTIFACT.test(word.text.trim());
@@ -249,7 +391,7 @@ function isCheckboxArtifact(word: Word): boolean {
  * Split words into visually separated groups. A gap much wider than the
  * line's own character width means "next column/option starts here".
  */
-function groupWordsByGap(words: Word[], pageW: number): WordGroup[] {
+function groupWordsByGap(words: Word[], pageW: number, checkboxes: DetectedShape[] = []): WordGroup[] {
   const usable = words.filter(
     (w) => !isUnderscoreWord(w) && !isCheckboxArtifact(w) && w.text.trim(),
   );
@@ -263,7 +405,14 @@ function groupWordsByGap(words: Word[], pageW: number): WordGroup[] {
   const groups: WordGroup[] = [];
   let current: Word[] = [];
   for (const word of usable) {
-    if (current.length > 0 && word.bbox.x0 - current[current.length - 1].bbox.x1 > gapThreshold) {
+    const prev = current[current.length - 1];
+    let splitByCheckbox = false;
+    if (prev) {
+      splitByCheckbox = checkboxes.some(
+        (cb) => cb.x > prev.bbox.x1 && cb.x < word.bbox.x1 && Math.abs(cb.y - word.bbox.y0) < Math.max(word.bbox.y1 - word.bbox.y0, 20) * 1.5
+      );
+    }
+    if (current.length > 0 && (word.bbox.x0 - prev.bbox.x1 > gapThreshold || splitByCheckbox)) {
       groups.push(makeGroup(current));
       current = [];
     }
@@ -290,6 +439,67 @@ function groupsLookLikeOptions(groups: WordGroup[]): boolean {
   );
 }
 
+const OPTION_MARKER = /[☐☑☒□○◯◉●\u2610-\u2612\uFE0E\uFE0F]/g;
+
+/** Sarvam preserves checkbox/radio glyphs in text blocks; use them as the
+ * source of truth for option labels instead of guessing from nearby boxes. */
+function markedOptions(text: string): string[] {
+  const values: string[] = [];
+  const marker = new RegExp(OPTION_MARKER.source, "g");
+  while (marker.exec(text)) {
+    const next = text.slice(marker.lastIndex).search(OPTION_MARKER);
+    const end = next < 0 ? text.length : marker.lastIndex + next;
+    const value = cleanLabelText(text.slice(marker.lastIndex, end))
+      .replace(/\b(encircle|tick|choose|select)\b.*$/i, "")
+      .trim();
+    if (value.length >= 2) values.push(value);
+  }
+  return values;
+}
+
+function markedOptionsNear(lines: OcrLine[], line: OcrLine): string[] {
+  const values = markedOptions(line.text);
+  for (const candidate of lines) {
+    if (candidate === line || candidate.bbox.x0 < line.bbox.x1 - 4) continue;
+    if (!overlapY(candidate.bbox.y0, candidate.bbox.y1, line.bbox.y0 - 8, line.bbox.y1 + 8)) continue;
+    values.push(...markedOptions(candidate.text));
+  }
+  return [...new Set(values)];
+}
+
+function choiceGroups(values: string[], line: OcrLine): WordGroup[] {
+  const width = (line.bbox.x1 - line.bbox.x0) / values.length;
+  return values.map((text, index) => {
+    const x0 = line.bbox.x0 + width * index;
+    const x1 = x0 + width;
+    return {
+      text,
+      x0,
+      x1,
+      words: [{ text, confidence: line.confidence, bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 } }],
+    };
+  });
+}
+
+/**
+ * A row of many adjacent squares is a comb (one character per cell), not a
+ * multiple-choice control. Known identity fields are combs even when their
+ * cells are grouped with larger visual gaps (for example Aadhaar 4-4-4).
+ */
+function isCombRow(row: DetectedShape[], label: string): boolean {
+  const normalized = normalizeLabel(label);
+  const count = row.length;
+  
+  if (/aadhaar|aadhar/i.test(normalized) && count >= 10 && count <= 15) return true;
+  if (/pan\b/i.test(normalized) && count >= 8 && count <= 12) return true;
+  if (/pin\b|pincode/i.test(normalized) && count >= 4 && count <= 8) return true;
+
+  return (
+    count >= 7 ||
+    /\b(full name|name of applicant|mobile|date of birth)\b/.test(normalized)
+  );
+}
+
 export async function inferFieldsFromPage(
   lines: OcrLine[],
   shapes: DetectedShape[],
@@ -300,6 +510,21 @@ export async function inferFieldsFromPage(
 ): Promise<FormField[]> {
   const fields: FormField[] = [];
   const usedShapes = new Set<DetectedShape>();
+
+  // Strip handwriting out of lines before layout parsing
+  const writeAreas = shapes.filter(s => s.kind === "box" || s.kind === "line");
+  for (const line of lines) {
+    line.words = line.words.filter(w => {
+      return !writeAreas.some(area => {
+        if (area.kind === "box") {
+          return w.bbox.x0 >= area.x - 5 && w.bbox.x1 <= area.x + area.w + 5 && w.bbox.y0 >= area.y - 10 && w.bbox.y1 <= area.y + area.h + 10;
+        } else {
+          return w.bbox.x1 > area.x && w.bbox.x0 < area.x + area.w && Math.abs(w.bbox.y1 - area.y) < Math.max(area.h * 2, 25);
+        }
+      });
+    });
+  }
+  lines = lines.filter(l => l.words.length > 0);
 
   // Letter counters ("D", "O", "Q"...) look like little squares to the shape
   // detector. A real checkbox is empty, so its center never falls inside an
@@ -352,7 +577,7 @@ export async function inferFieldsFromPage(
     const optionBboxes = groups.map((g) => tickBoxFor(g, lineTop, lineBottom));
     fields.push({
       id: newId(),
-      label: dict?.label ?? cleanLabelText(label),
+      label: cleanLabelText(label),
       type: "choice",
       options,
       optionBboxes,
@@ -392,11 +617,37 @@ export async function inferFieldsFromPage(
     const dict = labelLine ? matchLabel(labelText) : null;
     if (isNonFillableLabel(labelText)) continue;
 
+    if (isCombRow(row, labelText)) {
+      const x0 = Math.min(...row.map((box) => box.x));
+      const x1 = Math.max(...row.map((box) => box.x + box.w));
+      fields.push({
+        id: newId(),
+        label: cleanLabelText(labelText),
+        type: "comb",
+        combLength: row.length,
+        page: pageIndex,
+        bbox: toFraction(x0, rowTop, x1 - x0, rowBottom - rowTop, pageW, pageH),
+        order: fields.length,
+        confidence: Math.round(labelLine?.confidence ?? 70),
+        source: "ocr",
+        profileKey: dict?.profileKey,
+        sensitive: dict?.sensitive,
+        value: "",
+        status: "pending",
+      });
+      row.forEach((box) => usedShapes.add(box));
+      takenBands.push({ y0: rowTop, y1: rowBottom });
+      continue;
+    }
+
+    const explicitOptions = labelLine ? markedOptionsNear(lines, labelLine) : [];
+    const resolvedOptions = explicitOptions.length === row.length ? explicitOptions : options;
+
     fields.push({
       id: newId(),
-      label: dict?.label ?? cleanLabelText(labelText),
+      label: cleanLabelText(labelText),
       type: "choice",
-      options,
+      options: resolvedOptions,
       optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
       page: pageIndex,
       bbox: toFraction(row[0].x, row[0].y, row[0].w, row[0].h, pageW, pageH),
@@ -422,10 +673,23 @@ export async function inferFieldsFromPage(
     const lineHeight = Math.max(line.bbox.y1 - line.bbox.y0, 10);
     if (inTakenBand(line.bbox.y0, line.bbox.y1)) continue;
 
+    // Radio/checkbox labels can be read directly from Sarvam's preserved
+    // glyphs, including a neighbouring short block such as "○ Other".
+    const explicitOptions = markedOptionsNear(lines, line);
+    if (explicitOptions.length >= 2) {
+      const markerAt = raw.search(OPTION_MARKER);
+      const labelText = cleanLabelText(markerAt >= 0 ? raw.slice(0, markerAt) : raw);
+      const dict = matchLabel(labelText);
+      if (labelText && !isNonFillableLabel(labelText)) {
+        pushChoice(labelText, dict, choiceGroups(explicitOptions, line), line.bbox.y0, line.bbox.y1, line.confidence);
+        continue;
+      }
+    }
+
     // "(tick one)" style headers: the next line holds the options.
     if (/\b(tick|choose|select)\b.*\b(one|any)\b|\(tick/i.test(raw)) {
       const headerLabel = raw
-        .replace(/^\s*\d+[.)]\s*/, "")
+        
         .replace(/\((tick|choose|select)[^)]*\)/gi, "")
         .replace(/\b(tick|choose|select)\s+(one|any)\b/gi, "")
         .trim();
@@ -440,7 +704,7 @@ export async function inferFieldsFromPage(
 
     // Options line under a pending header.
     if (pendingHeader && line.bbox.y0 - pendingHeader.y1 < pendingHeader.lineHeight * 4) {
-      const groups = groupWordsByGap(line.words, pageW);
+      const groups = groupWordsByGap(line.words, pageW, checkboxes);
       if (groupsLookLikeOptions(groups)) {
         pushChoice(pendingHeader.label, pendingHeader.dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
         pendingHeader = null;
@@ -452,7 +716,7 @@ export async function inferFieldsFromPage(
     }
 
     // Several "Label:" tokens on one line -> one field per segment.
-    const segments = splitLineSegments(line);
+    const segments = splitLineSegments(line, pageW, checkboxes);
     if (segments.length > 1) {
       for (const segment of segments) {
         if (!segment.labelText || segment.labelText.length < 2) continue;
@@ -462,9 +726,23 @@ export async function inferFieldsFromPage(
         if (fields.some((f) => labelsEqual(f.label, segment.labelText) || (dict && f.label === dict.label))) continue;
         fields.push({
           id: newId(),
-          label: dict?.label ?? cleanLabelText(segment.labelText),
+          label: cleanLabelText(segment.labelText),
           type: dict?.type ?? "text",
           options: dict?.type === "choice" ? dict.options : undefined,
+          optionBboxes: (() => {
+            if (dict?.type === "choice" && dict.options) {
+              const foundBboxes: BBox[] = [];
+              for (const opt of dict.options) {
+                const normOpt = opt.toLowerCase();
+                const word = line.words.find(w => w.text.toLowerCase() === normOpt || w.text.toLowerCase().includes(normOpt));
+                if (word) {
+                  foundBboxes.push(toFraction(word.bbox.x0, word.bbox.y0, word.bbox.x1 - word.bbox.x0, Math.max(lineHeight * 1.2, 14), pageW, pageH));
+                }
+              }
+              if (foundBboxes.length > 0) return foundBboxes;
+            }
+            return undefined;
+          })(),
           page: pageIndex,
           bbox: toFraction(
             segment.answerX0,
@@ -492,7 +770,7 @@ export async function inferFieldsFromPage(
 
     const colonIdx = (() => {
       for (let i = 0; i < words.length; i++) {
-        if (/:$/.test(words[i].text.trim()) && !isUnderscoreWord(words[i])) return i;
+        if ((/:$/.test(words[i].text.trim()) || /\?$/.test(words[i].text.trim())) && !isUnderscoreWord(words[i])) return i;
       }
       return -1;
     })();
@@ -514,8 +792,8 @@ export async function inferFieldsFromPage(
     // Options printed right on the line after the colon -> choice field.
     if (colonIdx >= 0) {
       const postWords = words.slice(colonIdx + 1);
-      const groups = groupWordsByGap(postWords, pageW);
-      if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 3 || checkboxes.length > 0)) {
+      const groups = groupWordsByGap(postWords, pageW, checkboxes);
+      if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 2 || checkboxes.length > 0)) {
         pushChoice(labelPart, dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
         continue;
       }
@@ -524,35 +802,61 @@ export async function inferFieldsFromPage(
     // A writable shape counts as evidence: on the same row after the label,
     // or directly below — but "below" only for real label candidates, so
     // stray box edges (photo frames etc.) can't adopt random short lines.
+    
     const isLabelCandidate = Boolean(dict) || endsWithColon || hasUnderscores;
-    const shape = writables.find((s) => {
+    // Pass 1: Try to find a shape exactly on the same row.
+    let shape = writables.find((s) => {
       if (usedShapes.has(s)) return false;
-      const sameRow =
-        overlapY(s.y, s.y + Math.max(s.h, 4), line.bbox.y0 - lineHeight * 0.3, line.bbox.y1 + lineHeight * 0.6) &&
-        s.x >= labelEndX - 12 &&
-        s.x <= line.bbox.x1 + pageW * 0.35;
-      const below =
-        (isLabelCandidate || labelWords.length <= 3) &&
-        s.y > line.bbox.y1 &&
-        s.y < line.bbox.y1 + lineHeight * 1.8 &&
-        s.x < labelEndX + pageW * 0.05 &&
-        s.x + s.w > line.bbox.x0;
-      return sameRow || below;
+      return (isLabelCandidate || labelWords.length <= 3) &&
+             overlapY(s.y, s.y + Math.max(s.h, 4), line.bbox.y0 - lineHeight * 0.3, line.bbox.y1 + lineHeight * 0.6) &&
+             s.x >= labelEndX - 12 &&
+             s.x <= line.bbox.x1 + pageW * 0.15; // Tightened from 0.35
     });
 
+    // Pass 2: Fall back to below ONLY if this label is a strong candidate and no other label is on the same row.
+    if (!shape) {
+      shape = writables.find((s) => {
+        if (usedShapes.has(s)) return false;
+        return (isLabelCandidate || labelWords.length <= 3) &&
+               s.y > line.bbox.y1 &&
+               s.y < line.bbox.y1 + lineHeight * 1.8 &&
+               s.x < labelEndX + pageW * 0.05 &&
+               s.x + s.w > line.bbox.x0;
+      });
+    }
+
     if (!dict && !endsWithColon && !hasUnderscores && !shape) continue;
+
     if (!dict && labelWords.length > 8) continue;
     if (fields.some((f) => labelsEqual(f.label, labelPart) || (dict && f.label === dict.label))) continue;
 
     let bbox: BBox;
+    
     if (shape) {
       usedShapes.add(shape);
+      
+      let mergedH = shape.h;
+      if (shape.kind === "line") {
+        // Look for consecutive lines below it with similar x and w
+        let currentY = shape.y;
+        for (const other of writables) {
+          if (usedShapes.has(other) || other.kind !== "line") continue;
+          if (other.w > pageW * 0.2 && other.x < pageW * 0.4) {
+            if (other.y > currentY && other.y - currentY < lineHeight * 2.5) {
+              usedShapes.add(other);
+              mergedH = (other.y - shape.y) + other.h;
+              currentY = other.y;
+            }
+          }
+        }
+      }
+
       // For an underline, the write area sits on top of it.
       bbox = toFraction(
         shape.x,
         shape.kind === "line" ? shape.y - lineHeight * 1.1 : shape.y,
         shape.w,
-        shape.kind === "line" ? lineHeight * 1.15 : Math.max(shape.h, lineHeight * 1.2),
+        shape.kind === "line" ? mergedH + lineHeight * 1.1 : mergedH,
         pageW,
         pageH,
       );
@@ -573,9 +877,23 @@ export async function inferFieldsFromPage(
 
     fields.push({
       id: newId(),
-      label: dict?.label ?? labelPart,
+      label: labelPart,
       type: dict?.type ?? "text",
       options: dict?.type === "choice" ? dict.options : undefined,
+      optionBboxes: (() => {
+        if (dict?.type === "choice" && dict.options) {
+          const foundBboxes: BBox[] = [];
+          for (const opt of dict.options) {
+            const normOpt = opt.toLowerCase();
+            const word = line.words.find(w => w.text.toLowerCase() === normOpt || w.text.toLowerCase().includes(normOpt));
+            if (word) {
+              foundBboxes.push(toFraction(word.bbox.x0, word.bbox.y0, word.bbox.x1 - word.bbox.x0, Math.max(lineHeight * 1.2, 14), pageW, pageH));
+            }
+          }
+          if (foundBboxes.length === dict.options.length) return foundBboxes;
+        }
+        return undefined;
+      })(),
       page: pageIndex,
       bbox,
       order: fields.length,
@@ -588,7 +906,7 @@ export async function inferFieldsFromPage(
     });
   }
 
-  // --- Post-processing: Snapping & Crop Refinement ---
+  // --- Post-processing: snap inferred answers to detected writable shapes ---
   const medianLineHeight = (() => {
     const heights = lines.map((l) => l.bbox.y1 - l.bbox.y0).filter((h) => h > 0);
     if (heights.length === 0) return 14;
@@ -601,70 +919,10 @@ export async function inferFieldsFromPage(
       if (field.type !== "checkbox" && field.bbox) {
         field.bbox = snapToNearestShape(field.bbox, shapes, pageW, pageH, medianLineHeight);
       }
-
-      if (field.confidence < 85 && field.source === "ocr" && !field.profileKey && field.bbox) {
-        const labelBBox = {
-          x0: Math.max(0, (field.bbox.x - 0.28) * pageW),
-          y0: field.bbox.y * pageH - 2,
-          x1: field.bbox.x * pageW - 4,
-          y1: (field.bbox.y + field.bbox.h) * pageH + 2,
-        };
-        const refinedLabel = await refineLabelWithCrop(canvas, labelBBox, field.label);
-        if (refinedLabel !== field.label) {
-          field.label = refinedLabel;
-          const dict = matchLabel(refinedLabel);
-          if (dict) {
-            field.label = dict.label;
-            field.profileKey = dict.profileKey;
-            field.sensitive = dict.sensitive;
-            field.type = dict.type;
-            if (dict.type === "choice") {
-              field.options = dict.options;
-            }
-          }
-        }
-      }
     }
   }
 
   return fields.slice(0, 50);
-}
-
-async function refineLabelWithCrop(
-  canvas: HTMLCanvasElement,
-  bbox: { x0: number; y0: number; x1: number; y1: number },
-  currentText: string,
-): Promise<string> {
-  const cropW = bbox.x1 - bbox.x0;
-  const cropH = bbox.y1 - bbox.y0;
-  if (cropW <= 10 || cropH <= 5) return currentText;
-
-  const pad = 4;
-  const x = Math.max(0, bbox.x0 - pad);
-  const y = Math.max(0, bbox.y0 - pad);
-  const w = Math.min(canvas.width - x, cropW + pad * 2);
-  const h = Math.min(canvas.height - y, cropH + pad * 2);
-
-  const crop = document.createElement("canvas");
-  crop.width = w;
-  crop.height = h;
-  const ctx = crop.getContext("2d");
-  if (!ctx) return currentText;
-
-  ctx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-
-  try {
-    const ocr = await recognizeCanvas(crop, undefined, { psm: 7 });
-    const refined = ocr.lines[0]?.text.trim() || "";
-    const cleaned = cleanLabelText(refined);
-    if (cleaned.length >= 2 && cleaned.length <= currentText.length * 1.5) {
-      console.log(`[swaram] Label refined from "${currentText}" to "${cleaned}"`);
-      return cleaned;
-    }
-  } catch (e) {
-    console.warn("[swaram] Crop OCR refinement failed:", e);
-  }
-  return currentText;
 }
 
 function snapToNearestShape(
@@ -717,42 +975,33 @@ interface LineSegment {
  * line holds several fields side by side. Underscore runs are treated as
  * answer space, not label text.
  */
-function splitLineSegments(line: OcrLine): LineSegment[] {
-  const words = line.words;
-  const colonIdx = words
-    .map((w, i) => (/:$/.test(w.text.trim()) && !isUnderscoreWord(w) ? i : -1))
-    .filter((i) => i >= 0);
-  if (colonIdx.length < 2) return [];
+function splitLineSegments(line: OcrLine, pageW: number, checkboxes: DetectedShape[] = []): LineSegment[] {
+  const groups = groupWordsByGap(line.words, pageW, checkboxes);
+  if (groups.length < 2) return [];
+
+  const hasColon = line.words.some(w => /:$/.test(w.text));
+  const hasDictMatch = groups.some(g => {
+    const dict = matchLabel(g.text);
+    return dict && dict.type !== "choice";
+  });
+  if (!hasColon && !hasDictMatch) return [];
 
   const segments: LineSegment[] = [];
-  let start = 0;
-  for (let k = 0; k < colonIdx.length; k++) {
-    const end = colonIdx[k];
-    const labelWords = words.slice(start, end + 1).filter((w) => !isUnderscoreWord(w));
-    const labelText = labelWords
-      .map((w) => w.text)
-      .join(" ")
-      .replace(/:$/, "")
-      .trim();
-    const nextLabelStart = k + 1 < colonIdx.length ? findSegmentStart(words, end + 1, colonIdx[k + 1]) : -1;
-    const answerX0 = words[end].bbox.x1 + 6;
-    const answerX1 = nextLabelStart >= 0 ? words[nextLabelStart].bbox.x0 - 8 : line.bbox.x1 + 40;
-    const confidence =
-      labelWords.length > 0
-        ? labelWords.reduce((sum, w) => sum + w.confidence, 0) / labelWords.length
-        : line.confidence;
-    segments.push({ labelText, confidence, answerX0, answerX1 });
-    start = nextLabelStart >= 0 ? nextLabelStart : end + 1;
+  for (let k = 0; k < groups.length; k++) {
+    const group = groups[k];
+    const answerX0 = group.x1 + 6;
+    const answerX1 = k + 1 < groups.length ? groups[k+1].x0 - 8 : line.bbox.x1 + 40;
+    const confidence = group.words.length > 0 
+      ? group.words.reduce((sum, w) => sum + w.confidence, 0) / group.words.length
+      : line.confidence;
+    segments.push({
+      labelText: group.text,
+      confidence,
+      answerX0,
+      answerX1
+    });
   }
   return segments;
-}
-
-/** First non-underscore word between two colon words — the next label's start. */
-function findSegmentStart(words: OcrLine["words"], from: number, colonAt: number): number {
-  for (let i = from; i <= colonAt; i++) {
-    if (!/^[_\-.]+$/.test(words[i].text.trim())) return i;
-  }
-  return colonAt;
 }
 
 function cleanLabelText(text: string): string {

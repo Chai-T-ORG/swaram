@@ -26,13 +26,15 @@ export type StepState = "pending" | "active" | "done";
 
 export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
   { key: "reading", label: "Opening your form" },
-  { key: "ocr", label: "Reading text content" },
-  { key: "layout", label: "Detecting layout grid" },
+  { key: "ocr", label: "Reading your form with AI vision" },
+  { key: "layout", label: "Understanding the layout" },
   { key: "fields", label: "Identifying input fields" },
   { key: "ordering", label: "Preparing voice checklist" },
 ];
 
 const STAGE_ORDER: (AnalysisStage | "done")[] = ["reading", "ocr", "layout", "fields", "ordering", "done"];
+
+const activeProcesses = new Set<string>();
 
 export function useProcessing() {
   const { formId } = useParams<{ formId: string }>();
@@ -88,9 +90,20 @@ export function useProcessing() {
   );
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    run();
+    if (activeProcesses.has(formId)) {
+      // Form is already being processed in another instance (Strict Mode).
+      const interval = setInterval(async () => {
+        const form = await getForm(formId);
+        if (form && form.status !== "processing") {
+          clearInterval(interval);
+          run(); // Fast-path to 'done' state
+        }
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+    
+    activeProcesses.add(formId);
+    run().finally(() => activeProcesses.delete(formId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -120,9 +133,13 @@ export function useProcessing() {
 
       const result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
-        if (progress.stage === "ocr" && progress.page && progress.pageCount) {
-          const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
-          setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
+        if (progress.stage === "ocr") {
+          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
+          if (progress.page && progress.pageCount) {
+            setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
+          } else {
+            setDetail(pct ? `processing securely with AI vision — ${pct}` : "sending to AI vision");
+          }
         } else {
           setDetail("");
         }

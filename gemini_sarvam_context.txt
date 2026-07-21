@@ -1,0 +1,3224 @@
+# SWARAM Context
+
+## File: lib/analysis/analyzeForm.ts
+`
+/**
+ * Form analysis pipeline. Everything runs in the browser:
+ *
+ *   PDF -> AcroForm?  -> yes: read fields via pdf-lib (no OCR)
+ *                     -> no:  Sarvam Document Intelligence -> render pages (pdf.js)
+ *                             -> shapes (opencv.js, best-effort)
+ *                             -> keyword dictionary matching
+ *                             -> column clustering + reading order
+ *   Image -> same OCR path on the photo.
+ */
+import type { BBox, FormField, PageDim } from "../types";
+import { newId } from "../types";
+import { detectAcroform, extractAcroformFields } from "../pdf/acroformDetector";
+import { loadPdfDocument, renderPageToCanvas, imageBlobToCanvas } from "../pdf/pdfReader";
+import type { OcrLine } from "../ocr/tesseractEngine";
+import { detectShapes, loadOpenCv, type DetectedShape } from "../vision/shapeDetector";
+import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
+import { orderFields } from "../vision/fieldClusterer";
+import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
+
+export type AnalysisStage =
+  | "reading"      // opening the file
+  | "ocr"          // reading text
+  | "layout"       // detecting shapes/layout
+  | "fields"       // identifying fields
+  | "ordering";    // preparing questions
+
+export interface AnalysisProgress {
+  stage: AnalysisStage;
+  page?: number;
+  pageCount?: number;
+  /** 0..1 within the current stage. */
+  pct?: number;
+}
+
+export interface AnalysisResult {
+  isAcroForm: boolean;
+  fields: FormField[];
+  pageDims: PageDim[];
+  pageCount: number;
+  /** True when OpenCV failed to load and OCR-only heuristics were used. */
+  shapesUnavailable: boolean;
+}
+
+const MAX_PAGES = 10;
+const UNDERSCORE_RUN = /_{3,}|\.{6,}/;
+
+export async function analyzeForm(
+  blob: Blob,
+  sourceType: "pdf" | "image",
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  onProgress({ stage: "reading" });
+
+  if (sourceType === "pdf") {
+    const bytes = await blob.arrayBuffer();
+    const detection = await detectAcroform(bytes);
+    if (detection.isAcroForm) {
+      const { fields, pageDims, pageCount } = await extractAcroformFields(bytes);
+      onProgress({ stage: "ordering", pct: 1 });
+      return { isAcroForm: true, fields, pageDims, pageCount, shapesUnavailable: false };
+    }
+    return analyzeScannedPdf(blob, bytes, onProgress);
+  }
+
+  return analyzeImage(blob, onProgress);
+}
+
+async function analyzeScannedPdf(
+  blob: Blob,
+  bytes: ArrayBuffer,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  // Start warming OpenCV while pdf.js renders.
+  const cvWarmup = loadOpenCv();
+  const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
+
+  const pdf = await loadPdfDocument(bytes);
+  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+  const pageDims: PageDim[] = [];
+  const allFields: FormField[] = [];
+  let shapesUnavailable = false;
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
+    pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
+
+    onProgress({ stage: "layout", page: pageIndex + 1, pageCount });
+    const cv = await cvWarmup;
+    let shapes: DetectedShape[] = [];
+    if (cv) {
+      shapes = await detectShapes(rendered.canvas);
+    } else {
+      shapesUnavailable = true;
+    }
+    onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
+    const lines = sarvamPageToLines(sarvam.pages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+    allFields.push(
+      ...await inferFieldsFromPage(
+        mergeLinesIntoRows(lines),
+        shapes,
+        rendered.canvas.width,
+        rendered.canvas.height,
+        pageIndex,
+        rendered.canvas,
+      ),
+    );
+
+    rendered.canvas.width = 0; // release bitmap memory
+  }
+  await pdf.cleanup();
+
+  onProgress({ stage: "ordering" });
+  return {
+    isAcroForm: false,
+    fields: orderFields(allFields),
+    pageDims,
+    pageCount,
+    shapesUnavailable,
+  };
+}
+
+async function analyzeImage(
+  blob: Blob,
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<AnalysisResult> {
+  const cvWarmup = loadOpenCv();
+  const canvas = await imageBlobToCanvas(blob);
+  const sarvam = await runSarvamDigitize(blob, "image", onProgress);
+
+  onProgress({ stage: "layout" });
+  const cv = await cvWarmup;
+  let shapes: DetectedShape[] = [];
+  let shapesUnavailable = false;
+  if (cv) {
+    shapes = await detectShapes(canvas);
+  } else {
+    shapesUnavailable = true;
+  }
+
+  onProgress({ stage: "fields" });
+  const lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
+  const fields = await inferFieldsFromPage(mergeLinesIntoRows(lines), shapes, canvas.width, canvas.height, 0, canvas);
+
+  onProgress({ stage: "ordering" });
+  return {
+    isAcroForm: false,
+    fields: orderFields(fields),
+    pageDims: [{ width: canvas.width, height: canvas.height }],
+    pageCount: 1,
+    shapesUnavailable,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Field inference: OCR lines + optional shapes -> normalized fields   */
+/* ------------------------------------------------------------------ */
+
+function toFraction(x: number, y: number, w: number, h: number, pw: number, ph: number): BBox {
+  return {
+    x: Math.max(0, Math.min(1, x / pw)),
+    y: Math.max(0, Math.min(1, y / ph)),
+    w: Math.max(0.01, Math.min(1, w / pw)),
+    h: Math.max(0.008, Math.min(1, h / ph)),
+  };
+}
+
+function overlapY(aTop: number, aBottom: number, bTop: number, bBottom: number): boolean {
+  return aTop < bBottom && bTop < aBottom;
+}
+
+type Word = OcrLine["words"][number];
+
+/**
+ * Tesseract often splits one visual row into several "lines" when the text
+ * is widely spaced ("Label:   [] Opt1   [] Opt2", or two-column layouts).
+ * Merge lines that share a baseline back into single rows so the segment
+ * and option-gap logic can see the whole picture.
+ */
+export function mergeLinesIntoRows(lines: OcrLine[]): OcrLine[] {
+  const sorted = [...lines]
+    .filter((l) => l.text.trim())
+    .sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
+  const rows: OcrLine[] = [];
+
+  for (const line of sorted) {
+    const h = Math.max(line.bbox.y1 - line.bbox.y0, 8);
+    const target = rows.find((row) => {
+      const rh = Math.max(row.bbox.y1 - row.bbox.y0, 8);
+      const overlap = Math.min(row.bbox.y1, line.bbox.y1) - Math.max(row.bbox.y0, line.bbox.y0);
+      return overlap > Math.min(h, rh) * 0.55;
+    });
+    if (!target) {
+      rows.push({
+        text: line.text,
+        confidence: line.confidence,
+        bbox: { ...line.bbox },
+        words: [...line.words],
+      });
+      continue;
+    }
+    target.words.push(...line.words);
+    target.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    target.text = target.words.map((w) => w.text).join(" ");
+    target.bbox = {
+      x0: Math.min(target.bbox.x0, line.bbox.x0),
+      y0: Math.min(target.bbox.y0, line.bbox.y0),
+      x1: Math.max(target.bbox.x1, line.bbox.x1),
+      y1: Math.max(target.bbox.y1, line.bbox.y1),
+    };
+    const words = target.words;
+    target.confidence =
+      words.length > 0 ? words.reduce((sum, w) => sum + w.confidence, 0) / words.length : target.confidence;
+  }
+
+  return rows;
+}
+
+const UNDERSCORE_WORD = /^[_\-.—]{2,}:?$/;
+
+function isUnderscoreWord(word: Word): boolean {
+  return UNDERSCORE_WORD.test(word.text.trim()) || /_{3,}/.test(word.text);
+}
+
+interface WordGroup {
+  words: Word[];
+  text: string;
+  x0: number;
+  x1: number;
+}
+
+/**
+ * Empty checkbox squares OCR into junk tokens ("O", "[]", "LJ", "1"...).
+ * Drop them when reading option text so they don't break the grouping.
+ */
+const CHECKBOX_ARTIFACT = /^[^a-zA-Z0-9]{1,3}$|^[oO0dDcCuUjJlLiI]$|^[\[\](){}|]{1,2}[a-zA-Z]?$/;
+
+function isCheckboxArtifact(word: Word): boolean {
+  return CHECKBOX_ARTIFACT.test(word.text.trim());
+}
+
+/**
+ * Split words into visually separated groups. A gap much wider than the
+ * line's own character width means "next column/option starts here".
+ */
+function groupWordsByGap(words: Word[], pageW: number): WordGroup[] {
+  const usable = words.filter(
+    (w) => !isUnderscoreWord(w) && !isCheckboxArtifact(w) && w.text.trim(),
+  );
+  if (usable.length === 0) return [];
+  const widths = usable
+    .map((w) => (w.bbox.x1 - w.bbox.x0) / Math.max(w.text.length, 1))
+    .sort((a, b) => a - b);
+  const charW = widths[Math.floor(widths.length / 2)] || pageW * 0.008;
+  const gapThreshold = Math.max(charW * 3.2, pageW * 0.028);
+
+  const groups: WordGroup[] = [];
+  let current: Word[] = [];
+  for (const word of usable) {
+    if (current.length > 0 && word.bbox.x0 - current[current.length - 1].bbox.x1 > gapThreshold) {
+      groups.push(makeGroup(current));
+      current = [];
+    }
+    current.push(word);
+  }
+  if (current.length > 0) groups.push(makeGroup(current));
+  return groups;
+}
+
+function makeGroup(words: Word[]): WordGroup {
+  return {
+    words,
+    text: words.map((w) => w.text).join(" ").trim(),
+    x0: Math.min(...words.map((w) => w.bbox.x0)),
+    x1: Math.max(...words.map((w) => w.bbox.x1)),
+  };
+}
+
+function groupsLookLikeOptions(groups: WordGroup[]): boolean {
+  return (
+    groups.length >= 2 &&
+    groups.length <= 6 &&
+    groups.every((g) => g.words.length <= 4 && g.text.length >= 2 && g.text.length <= 32)
+  );
+}
+
+const OPTION_MARKER = /[☐☑☒□○◯◉●]/g;
+
+/** Sarvam preserves checkbox/radio glyphs in text blocks; use them as the
+ * source of truth for option labels instead of guessing from nearby boxes. */
+function markedOptions(text: string): string[] {
+  const values: string[] = [];
+  const marker = new RegExp(OPTION_MARKER.source, "g");
+  while (marker.exec(text)) {
+    const next = text.slice(marker.lastIndex).search(OPTION_MARKER);
+    const end = next < 0 ? text.length : marker.lastIndex + next;
+    const value = cleanLabelText(text.slice(marker.lastIndex, end))
+      .replace(/\b(encircle|tick|choose|select)\b.*$/i, "")
+      .trim();
+    if (value.length >= 2) values.push(value);
+  }
+  return values;
+}
+
+function markedOptionsNear(lines: OcrLine[], line: OcrLine): string[] {
+  const values = markedOptions(line.text);
+  for (const candidate of lines) {
+    if (candidate === line || candidate.bbox.x0 < line.bbox.x1 - 4) continue;
+    if (!overlapY(candidate.bbox.y0, candidate.bbox.y1, line.bbox.y0 - 8, line.bbox.y1 + 8)) continue;
+    values.push(...markedOptions(candidate.text));
+  }
+  return [...new Set(values)];
+}
+
+function choiceGroups(values: string[], line: OcrLine): WordGroup[] {
+  const width = (line.bbox.x1 - line.bbox.x0) / values.length;
+  return values.map((text, index) => {
+    const x0 = line.bbox.x0 + width * index;
+    const x1 = x0 + width;
+    return {
+      text,
+      x0,
+      x1,
+      words: [{ text, confidence: line.confidence, bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 } }],
+    };
+  });
+}
+
+/**
+ * A row of many adjacent squares is a comb (one character per cell), not a
+ * multiple-choice control. Known identity fields are combs even when their
+ * cells are grouped with larger visual gaps (for example Aadhaar 4-4-4).
+ */
+function isCombRow(row: DetectedShape[], label: string): boolean {
+  const normalized = normalizeLabel(label);
+  return (
+    row.length >= 7 ||
+    /\b(full name|name of applicant|aadhaar|aadhar|pan|mobile|pin code|date of birth)\b/.test(normalized)
+  );
+}
+
+function isNumberedQuestion(text: string): boolean {
+  return /^\s*\d+(?:\.\d+)+\s+/.test(text);
+}
+
+export async function inferFieldsFromPage(
+  lines: OcrLine[],
+  shapes: DetectedShape[],
+  pageW: number,
+  pageH: number,
+  pageIndex: number,
+  canvas?: HTMLCanvasElement,
+): Promise<FormField[]> {
+  const fields: FormField[] = [];
+  const usedShapes = new Set<DetectedShape>();
+
+  // Letter counters ("D", "O", "Q"...) look like little squares to the shape
+  // detector. A real checkbox is empty, so its center never falls inside an
+  // OCR'd word — use that to drop the impostors.
+  const realWords = lines
+    .flatMap((l) => l.words)
+    .filter((w) => !isUnderscoreWord(w) && !isCheckboxArtifact(w) && w.text.trim().length >= 2);
+  const insideAWord = (s: DetectedShape) => {
+    const cx = s.x + s.w / 2;
+    const cy = s.y + s.h / 2;
+    return realWords.some(
+      (w) => cx >= w.bbox.x0 && cx <= w.bbox.x1 && cy >= w.bbox.y0 && cy <= w.bbox.y1,
+    );
+  };
+
+  // Administrative fields in the top-right of a form (registration number,
+  // date received) are not applicant questions. Ignore their cell geometry.
+  const inOfficeOnlyArea = (s: DetectedShape) => s.x > pageW * 0.72 && s.y < pageH * 0.3;
+  const checkboxes = shapes.filter((s) => s.kind === "checkbox" && !insideAWord(s) && !inOfficeOnlyArea(s));
+  const writables = shapes.filter((s) => s.kind === "line" || s.kind === "box");
+  /** Vertical bands already consumed by a choice row (avoid duplicates). */
+  const takenBands: { y0: number; y1: number }[] = [];
+
+  const inTakenBand = (y0: number, y1: number) =>
+    takenBands.some((band) => overlapY(y0, y1, band.y0, band.y1));
+
+  /** Tick target for an option: a real checkbox shape if one sits just left, else a synthesized square. */
+  function tickBoxFor(group: WordGroup, lineTop: number, lineBottom: number): BBox {
+    const shape = checkboxes.find(
+      (box) =>
+        !usedShapes.has(box) &&
+        overlapY(box.y, box.y + box.h, lineTop - 4, lineBottom + 4) &&
+        box.x + box.w <= group.x0 + 4 &&
+        group.x0 - (box.x + box.w) < pageW * 0.06,
+    );
+    if (shape) {
+      usedShapes.add(shape);
+      return toFraction(shape.x, shape.y, shape.w, shape.h, pageW, pageH);
+    }
+    const size = Math.max((lineBottom - lineTop) * 0.75, pageW * 0.012);
+    return toFraction(Math.max(group.x0 - size - 6, 0), lineTop, size, size, pageW, pageH);
+  }
+
+  function pushChoice(
+    label: string,
+    dict: ReturnType<typeof matchLabel>,
+    groups: WordGroup[],
+    lineTop: number,
+    lineBottom: number,
+    confidence: number,
+  ) {
+    const options = groups.map((g) => cleanLabelText(g.text));
+    const optionBboxes = groups.map((g) => tickBoxFor(g, lineTop, lineBottom));
+    fields.push({
+      id: newId(),
+      label: dict?.label ?? cleanLabelText(label),
+      type: "choice",
+      options,
+      optionBboxes,
+      page: pageIndex,
+      bbox: optionBboxes[0],
+      order: fields.length,
+      confidence: Math.round(confidence),
+      source: "ocr",
+      profileKey: dict?.profileKey,
+      sensitive: dict?.sensitive,
+      value: "",
+      status: "pending",
+    });
+    takenBands.push({ y0: lineTop, y1: lineBottom });
+  }
+
+  /* --- Pass A: rows of detected checkbox squares -> choice fields --- */
+  const rows: DetectedShape[][] = [];
+  for (const box of [...checkboxes].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const row = rows.find((r) => Math.abs(r[0].y - box.y) < box.h * 1.5);
+    if (row) row.push(box);
+    else rows.push([box]);
+  }
+
+  for (const row of rows) {
+    if (row.length < 2) continue; // single boxes are handled by the text pass
+    row.sort((a, b) => a.x - b.x);
+    const rowTop = Math.min(...row.map((b) => b.y));
+    const rowBottom = Math.max(...row.map((b) => b.y + b.h));
+
+    const options = row.map((box, i) => {
+      const nextX = i + 1 < row.length ? row[i + 1].x : pageW;
+      return wordsNear(lines, box, pageW, nextX) || `Option ${i + 1}`;
+    });
+    const labelLine = findLabelLineForRow(lines, rowTop, rowBottom, options);
+    const labelText = labelLine ? labelLine.text.split(":")[0] : options.join(" or ");
+    const dict = labelLine ? matchLabel(labelText) : null;
+    if (isNonFillableLabel(labelText)) continue;
+
+    if (isCombRow(row, labelText)) {
+      const x0 = Math.min(...row.map((box) => box.x));
+      const x1 = Math.max(...row.map((box) => box.x + box.w));
+      fields.push({
+        id: newId(),
+        label: dict?.label ?? cleanLabelText(labelText),
+        // Keep real dates as dates in the conversation and typed UI, while
+        // combLength still tells the PDF writer to place one character/cell.
+        type: dict?.type === "date" ? "date" : "comb",
+        combLength: row.length,
+        page: pageIndex,
+        bbox: toFraction(x0, rowTop, x1 - x0, rowBottom - rowTop, pageW, pageH),
+        order: fields.length,
+        confidence: Math.round(labelLine?.confidence ?? 70),
+        source: "ocr",
+        profileKey: dict?.profileKey,
+        sensitive: dict?.sensitive,
+        value: "",
+        status: "pending",
+      });
+      row.forEach((box) => usedShapes.add(box));
+      takenBands.push({ y0: rowTop, y1: rowBottom });
+      continue;
+    }
+
+    const explicitOptions = labelLine ? markedOptionsNear(lines, labelLine) : [];
+    const resolvedOptions = explicitOptions.length === row.length ? explicitOptions : options;
+
+    fields.push({
+      id: newId(),
+      label: dict?.label ?? cleanLabelText(labelText),
+      type: "choice",
+      options: resolvedOptions,
+      optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
+      page: pageIndex,
+      bbox: toFraction(row[0].x, row[0].y, row[0].w, row[0].h, pageW, pageH),
+      order: fields.length,
+      confidence: Math.round(labelLine?.confidence ?? 70),
+      source: "ocr",
+      profileKey: dict?.profileKey,
+      sensitive: dict?.sensitive,
+      value: "",
+      status: "pending",
+    });
+    row.forEach((b) => usedShapes.add(b));
+    takenBands.push({ y0: rowTop, y1: rowBottom });
+  }
+
+  /* --- Pass B: text lines -> text/date/choice fields --- */
+  let pendingHeader: { label: string; dict: ReturnType<typeof matchLabel>; y1: number; lineHeight: number } | null =
+    null;
+
+  for (const line of lines) {
+    const raw = line.text.trim();
+    if (!raw || raw.length < 2) continue;
+    const lineHeight = Math.max(line.bbox.y1 - line.bbox.y0, 10);
+    if (inTakenBand(line.bbox.y0, line.bbox.y1)) continue;
+
+    // Radio/checkbox labels can be read directly from Sarvam's preserved
+    // glyphs, including a neighbouring short block such as "○ Other".
+    const explicitOptions = markedOptionsNear(lines, line);
+    if (explicitOptions.length >= 2) {
+      const markerAt = raw.search(OPTION_MARKER);
+      const labelText = cleanLabelText(markerAt >= 0 ? raw.slice(0, markerAt) : raw);
+      const dict = matchLabel(labelText);
+      if (labelText && !isNonFillableLabel(labelText)) {
+        pushChoice(labelText, dict, choiceGroups(explicitOptions, line), line.bbox.y0, line.bbox.y1, line.confidence);
+        continue;
+      }
+    }
+
+    // "(tick one)" style headers: the next line holds the options.
+    if (/\b(tick|choose|select)\b.*\b(one|any)\b|\(tick/i.test(raw)) {
+      const headerLabel = raw
+        .replace(/^\s*\d+[.)]\s*/, "")
+        .replace(/\((tick|choose|select)[^)]*\)/gi, "")
+        .replace(/\b(tick|choose|select)\s+(one|any)\b/gi, "")
+        .trim();
+      pendingHeader = {
+        label: headerLabel || raw,
+        dict: matchLabel(headerLabel),
+        y1: line.bbox.y1,
+        lineHeight,
+      };
+      continue;
+    }
+
+    // Options line under a pending header.
+    if (pendingHeader && line.bbox.y0 - pendingHeader.y1 < pendingHeader.lineHeight * 4) {
+      const groups = groupWordsByGap(line.words, pageW);
+      if (groupsLookLikeOptions(groups)) {
+        pushChoice(pendingHeader.label, pendingHeader.dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
+        pendingHeader = null;
+        continue;
+      }
+    }
+    if (pendingHeader && line.bbox.y0 - pendingHeader.y1 >= pendingHeader.lineHeight * 4) {
+      pendingHeader = null;
+    }
+
+    // Several "Label:" tokens on one line -> one field per segment.
+    const segments = splitLineSegments(line);
+    if (segments.length > 1) {
+      for (const segment of segments) {
+        if (!segment.labelText || segment.labelText.length < 2) continue;
+        if (isNonFillableLabel(segment.labelText)) continue;
+        const dict = matchLabel(segment.labelText);
+        if (!dict && segment.labelText.split(/\s+/).length > 6) continue;
+        if (fields.some((f) => labelsEqual(f.label, segment.labelText) || (dict && f.label === dict.label))) continue;
+        fields.push({
+          id: newId(),
+          label: dict?.label ?? cleanLabelText(segment.labelText),
+          type: dict?.type ?? "text",
+          options: dict?.type === "choice" ? dict.options : undefined,
+          page: pageIndex,
+          bbox: toFraction(
+            segment.answerX0,
+            line.bbox.y0,
+            Math.max(segment.answerX1 - segment.answerX0, pageW * 0.08),
+            Math.max(lineHeight * 1.2, 14),
+            pageW,
+            pageH,
+          ),
+          order: fields.length,
+          confidence: Math.round(segment.confidence),
+          source: "ocr",
+          profileKey: dict?.profileKey,
+          sensitive: dict?.sensitive,
+          value: "",
+          status: "pending",
+        });
+      }
+      continue;
+    }
+
+    // --- Single-label line. Work from word geometry, not raw text. ---
+    const words = line.words.filter((w) => w.text.trim());
+    if (words.length === 0) continue;
+
+    const colonIdx = (() => {
+      for (let i = 0; i < words.length; i++) {
+        if (/:$/.test(words[i].text.trim()) && !isUnderscoreWord(words[i])) return i;
+      }
+      return -1;
+    })();
+
+    const labelWords = (colonIdx >= 0 ? words.slice(0, colonIdx + 1) : words).filter(
+      (w) => !isUnderscoreWord(w),
+    );
+    if (labelWords.length === 0) continue;
+    const labelPart = cleanLabelText(labelWords.map((w) => w.text).join(" "));
+    if (!labelPart || labelPart.length < 2) continue;
+    if (isNonFillableLabel(labelPart)) continue;
+
+    const labelEndX = Math.max(...labelWords.map((w) => w.bbox.x1));
+    const underscoreWords = words.filter(isUnderscoreWord);
+    const hasUnderscores = underscoreWords.length > 0 || UNDERSCORE_RUN.test(raw);
+    const endsWithColon = colonIdx >= 0;
+    const dict = matchLabel(labelPart);
+
+    // Options printed right on the line after the colon -> choice field.
+    if (colonIdx >= 0) {
+      const postWords = words.slice(colonIdx + 1);
+      const groups = groupWordsByGap(postWords, pageW);
+      if (groupsLookLikeOptions(groups) && (dict?.type === "choice" || groups.length >= 3 || checkboxes.length > 0)) {
+        pushChoice(labelPart, dict, groups, line.bbox.y0, line.bbox.y1, line.confidence);
+        continue;
+      }
+    }
+
+    // A writable shape counts as evidence: on the same row after the label,
+    // or directly below — but "below" only for real label candidates, so
+    // stray box edges (photo frames etc.) can't adopt random short lines.
+    const isLabelCandidate = Boolean(dict) || endsWithColon || hasUnderscores;
+    const shape = writables.find((s) => {
+      if (usedShapes.has(s)) return false;
+      const sameRow =
+        overlapY(s.y, s.y + Math.max(s.h, 4), line.bbox.y0 - lineHeight * 0.3, line.bbox.y1 + lineHeight * 0.6) &&
+        s.x >= labelEndX - 12 &&
+        s.x <= line.bbox.x1 + pageW * 0.35;
+      const below =
+        (isLabelCandidate || labelWords.length <= 3) &&
+        s.y > line.bbox.y1 &&
+        s.y < line.bbox.y1 + lineHeight * 1.8 &&
+        s.x < labelEndX + pageW * 0.05 &&
+        s.x + s.w > line.bbox.x0;
+      return sameRow || below;
+    });
+
+    // Sarvam retains instructions as ordinary paragraph blocks. A free-form
+    // sentence is only a field when it has a dictionary match, a label marker,
+    // or a numbered form-question prefix; geometry alone is not enough.
+    if (!dict && !endsWithColon && !hasUnderscores && !isNumberedQuestion(raw)) continue;
+    if (!dict && labelWords.length > 8) continue;
+    if (fields.some((f) => labelsEqual(f.label, labelPart) || (dict && f.label === dict.label))) continue;
+
+    let bbox: BBox;
+    if (shape) {
+      usedShapes.add(shape);
+      // For an underline, the write area sits on top of it.
+      bbox = toFraction(
+        shape.x,
+        shape.kind === "line" ? shape.y - lineHeight * 1.1 : shape.y,
+        shape.w,
+        shape.kind === "line" ? lineHeight * 1.15 : Math.max(shape.h, lineHeight * 1.2),
+        pageW,
+        pageH,
+      );
+    } else if (underscoreWords.length > 0) {
+      // Blank run inside the OCR line: write exactly over it.
+      const startX = Math.max(labelEndX + 6, Math.min(...underscoreWords.map((w) => w.bbox.x0)));
+      const endX = Math.max(...underscoreWords.map((w) => w.bbox.x1));
+      bbox = toFraction(startX, line.bbox.y0, Math.max(endX - startX, pageW * 0.08), Math.max(lineHeight * 1.2, 14), pageW, pageH);
+    } else {
+      // No visible blank: from the end of the label to the right margin.
+      const startX = Math.min(labelEndX + 8, pageW * 0.9);
+      const width = Math.max(pageW * 0.94 - startX, pageW * 0.15);
+      bbox = toFraction(startX, line.bbox.y0, width, Math.max(lineHeight * 1.2, 14), pageW, pageH);
+    }
+
+    const labelConfidence =
+      labelWords.reduce((sum, w) => sum + w.confidence, 0) / labelWords.length;
+
+    fields.push({
+      id: newId(),
+      label: dict?.label ?? labelPart,
+      type: dict?.type ?? "text",
+      options: dict?.type === "choice" ? dict.options : undefined,
+      page: pageIndex,
+      bbox,
+      order: fields.length,
+      confidence: Math.round(labelConfidence),
+      source: "ocr",
+      profileKey: dict?.profileKey,
+      sensitive: dict?.sensitive,
+      value: "",
+      status: "pending",
+    });
+  }
+
+  // --- Post-processing: snap inferred answers to detected writable shapes ---
+  const medianLineHeight = (() => {
+    const heights = lines.map((l) => l.bbox.y1 - l.bbox.y0).filter((h) => h > 0);
+    if (heights.length === 0) return 14;
+    heights.sort((a, b) => a - b);
+    return heights[Math.floor(heights.length / 2)];
+  })();
+
+  if (canvas) {
+    for (const field of fields) {
+      if (field.type !== "checkbox" && field.bbox) {
+        field.bbox = snapToNearestShape(field.bbox, shapes, pageW, pageH, medianLineHeight);
+      }
+    }
+  }
+
+  return fields.slice(0, 50);
+}
+
+function snapToNearestShape(
+  bbox: BBox,
+  shapes: DetectedShape[],
+  pageW: number,
+  pageH: number,
+  lineHeight: number,
+): BBox {
+  const bx = bbox.x * pageW;
+  const by = bbox.y * pageH;
+  const bw = bbox.w * pageW;
+  const bh = bbox.h * pageH;
+
+  const tolerance = lineHeight * 1.5;
+  const bestShape = shapes.find((s) => {
+    if (s.kind !== "line" && s.kind !== "box") return false;
+    const sameRow = Math.abs(s.y - (by + bh)) < tolerance || Math.abs(s.y - by) < tolerance;
+    const horizontalOverlap = s.x < bx + bw && s.x + s.w > bx;
+    return sameRow && horizontalOverlap;
+  });
+
+  if (bestShape) {
+    return toFraction(
+      bestShape.x,
+      bestShape.kind === "line" ? bestShape.y - lineHeight * 1.1 : bestShape.y,
+      bestShape.w,
+      bestShape.kind === "line" ? lineHeight * 1.15 : Math.max(bestShape.h, lineHeight * 1.2),
+      pageW,
+      pageH,
+    );
+  }
+  return bbox;
+}
+
+function labelsEqual(a: string, b: string): boolean {
+  return normalizeLabel(a) === normalizeLabel(b);
+}
+
+interface LineSegment {
+  labelText: string;
+  confidence: number;
+  /** Answer write-area, canvas pixels. */
+  answerX0: number;
+  answerX1: number;
+}
+
+/**
+ * Split a line at words ending with ":" — two or more of them means the
+ * line holds several fields side by side. Underscore runs are treated as
+ * answer space, not label text.
+ */
+function splitLineSegments(line: OcrLine): LineSegment[] {
+  const words = line.words;
+  const colonIdx = words
+    .map((w, i) => (/:$/.test(w.text.trim()) && !isUnderscoreWord(w) ? i : -1))
+    .filter((i) => i >= 0);
+  if (colonIdx.length < 2) return [];
+
+  const segments: LineSegment[] = [];
+  let start = 0;
+  for (let k = 0; k < colonIdx.length; k++) {
+    const end = colonIdx[k];
+    const labelWords = words.slice(start, end + 1).filter((w) => !isUnderscoreWord(w));
+    const labelText = labelWords
+      .map((w) => w.text)
+      .join(" ")
+      .replace(/:$/, "")
+      .trim();
+    const nextLabelStart = k + 1 < colonIdx.length ? findSegmentStart(words, end + 1, colonIdx[k + 1]) : -1;
+    const answerX0 = words[end].bbox.x1 + 6;
+    const answerX1 = nextLabelStart >= 0 ? words[nextLabelStart].bbox.x0 - 8 : line.bbox.x1 + 40;
+    const confidence =
+      labelWords.length > 0
+        ? labelWords.reduce((sum, w) => sum + w.confidence, 0) / labelWords.length
+        : line.confidence;
+    segments.push({ labelText, confidence, answerX0, answerX1 });
+    start = nextLabelStart >= 0 ? nextLabelStart : end + 1;
+  }
+  return segments;
+}
+
+/** First non-underscore word between two colon words — the next label's start. */
+function findSegmentStart(words: OcrLine["words"], from: number, colonAt: number): number {
+  for (let i = from; i <= colonAt; i++) {
+    if (!/^[_\-.]+$/.test(words[i].text.trim())) return i;
+  }
+  return colonAt;
+}
+
+function cleanLabelText(text: string): string {
+  return text
+    .replace(UNDERSCORE_RUN, " ")
+    .replace(/[|®©™[\]]/g, "")
+    .replace(/^\s*\d+[.)]\s*/, "")
+    .replace(/\s+/g, " ")
+    .replace(/[:*]+\s*$/, "")
+    .trim();
+}
+
+/** Text immediately to the right of a checkbox (its option label). */
+function wordsNear(lines: OcrLine[], box: DetectedShape, pageW: number, stopAtX = Infinity): string {
+  const maxDistance = Math.min(box.w * 6, pageW * 0.18);
+  const picked: string[] = [];
+  for (const line of lines) {
+    if (!overlapY(line.bbox.y0, line.bbox.y1, box.y - box.h * 0.5, box.y + box.h * 1.5)) continue;
+    for (const word of line.words) {
+      if (
+        word.bbox.x0 >= box.x + box.w &&
+        word.bbox.x0 <= Math.min(box.x + box.w + maxDistance, stopAtX - 4)
+      ) {
+        picked.push(word.text);
+        if (picked.join(" ").length > 28) break;
+      }
+    }
+    if (picked.length) break;
+  }
+  return cleanLabelText(picked.join(" "));
+}
+
+function findLabelLineForRow(
+  lines: OcrLine[],
+  rowTop: number,
+  rowBottom: number,
+  options: string[],
+): OcrLine | null {
+  const optionSet = new Set(options.map(normalizeLabel));
+  let best: OcrLine | null = null;
+  let bestDistance = Infinity;
+  for (const line of lines) {
+    const text = normalizeLabel(line.text);
+    if (!text || optionSet.has(text)) continue;
+    const height = Math.max(line.bbox.y1 - line.bbox.y0, 10);
+    const distance = rowTop - line.bbox.y1;
+    if (distance > height * 3.5 || line.bbox.y0 > rowBottom) continue;
+    const d = Math.abs(distance);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = line;
+    }
+  }
+  return best;
+}
+
+`
+
+## File: lib/analysis/sarvamApi.ts
+`
+import { PDFDocument } from "pdf-lib";
+import type { OcrLine, OcrWord } from "../ocr/tesseractEngine";
+import type { AnalysisProgress } from "./analyzeForm";
+
+const POLL_INTERVAL_MS = 2_500;
+const POLL_TIMEOUT_MS = 90_000;
+
+export interface SarvamResult {
+  pages: Record<string, unknown>;
+}
+
+type Coordinates = { x1: number; y1: number; x2: number; y2: number };
+type SarvamBlock = {
+  text?: string;
+  confidence?: number;
+  reading_order?: number;
+  layout_tag?: string;
+  coordinates?: Coordinates;
+};
+
+/** Convert a camera JPEG/PNG to a one-page PDF, the format Sarvam accepts. */
+async function imageToPdf(image: Blob): Promise<File> {
+  const pdf = await PDFDocument.create();
+  const bytes = await image.arrayBuffer();
+  const embedded = image.type === "image/png"
+    ? await pdf.embedPng(bytes)
+    : await pdf.embedJpg(bytes);
+  const page = pdf.addPage([embedded.width, embedded.height]);
+  page.drawImage(embedded, { x: 0, y: 0, width: embedded.width, height: embedded.height });
+  const output = await pdf.save();
+  const outputBuffer = new ArrayBuffer(output.byteLength);
+  new Uint8Array(outputBuffer).set(output);
+  return new File([outputBuffer], "camera-scan.pdf", { type: "application/pdf" });
+}
+
+export async function createSarvamUpload(blob: Blob, sourceType: "pdf" | "image"): Promise<File> {
+  if (sourceType === "image") return imageToPdf(blob);
+  return new File([blob], "form.pdf", { type: "application/pdf" });
+}
+
+export async function runSarvamDigitize(
+  blob: Blob,
+  sourceType: "pdf" | "image",
+  onProgress: (progress: AnalysisProgress) => void,
+): Promise<SarvamResult> {
+  onProgress({ stage: "ocr", pct: 0 });
+  const form = new FormData();
+  form.append("file", await createSarvamUpload(blob, sourceType));
+  const start = await fetch("/api/sarvam/job", { method: "POST", body: form });
+  if (!start.ok) throw new Error("Sarvam could not start document analysis");
+  const { jobId } = (await start.json()) as { jobId?: string };
+  if (!jobId) throw new Error("Sarvam did not return a job identifier");
+
+  const startedAt = Date.now();
+  let progress = 0.08;
+  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    progress = Math.min(0.92, progress + 0.06);
+    onProgress({ stage: "ocr", pct: progress });
+    const response = await fetch(`/api/sarvam/status?job_id=${encodeURIComponent(jobId)}`);
+    if (!response.ok) throw new Error("Sarvam status check failed");
+    const result = (await response.json()) as { status?: string; pages?: Record<string, unknown>; error?: string };
+    if (result.status === "Completed" && result.pages) {
+      onProgress({ stage: "ocr", pct: 1 });
+      return { pages: result.pages };
+    }
+    if (result.status === "Failed" || result.error) throw new Error(result.error || "Sarvam could not analyze this document");
+  }
+  throw new Error("Sarvam analysis timed out. Please try again.");
+}
+
+function isBlock(value: unknown): value is SarvamBlock {
+  return Boolean(value && typeof value === "object" && "text" in value && "coordinates" in value);
+}
+
+function findBlocks(value: unknown): SarvamBlock[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.blocks)) return record.blocks.filter(isBlock);
+  for (const candidate of Object.values(record)) {
+    const found = findBlocks(candidate);
+    if (found.length) return found;
+  }
+  return [];
+}
+
+function imageDimension(page: unknown, key: "image_width" | "image_height"): number | null {
+  if (!page || typeof page !== "object") return null;
+  const value = (page as Record<string, unknown>)[key];
+  return typeof value === "number" && value > 0 ? value : null;
+}
+
+/**
+ * Sarvam provides reliable coordinates for each text block. It does not expose
+ * per-word boxes in the page JSON, so words are proportionally placed only
+ * within their own real block rectangle; no coordinates are invented outside
+ * that rectangle.
+ */
+export function sarvamPageToLines(page: unknown, canvasWidth: number, canvasHeight: number): OcrLine[] {
+  const width = imageDimension(page, "image_width") ?? canvasWidth;
+  const height = imageDimension(page, "image_height") ?? canvasHeight;
+  const scaleX = canvasWidth / width;
+  const scaleY = canvasHeight / height;
+  const lines: OcrLine[] = [];
+
+  for (const block of findBlocks(page)
+    // Sarvam's image blocks describe the picture in prose (for example,
+    // "a row of empty boxes"). They are not OCR text and must never become
+    // a question; OpenCV supplies their geometry separately.
+    .filter((block) => block.layout_tag !== "image")
+    .sort((a, b) => (a.reading_order ?? 0) - (b.reading_order ?? 0))) {
+    const box = block.coordinates!;
+    const textLines = (block.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!textLines.length) continue;
+    const x0 = box.x1 * scaleX;
+    const x1 = box.x2 * scaleX;
+    const y0 = box.y1 * scaleY;
+    const y1 = box.y2 * scaleY;
+    const lineHeight = Math.max((y1 - y0) / textLines.length, 1);
+    const confidence = Math.round((block.confidence ?? 0.8) * ((block.confidence ?? 0.8) <= 1 ? 100 : 1));
+
+    textLines.forEach((text, index) => {
+      const parts = text.split(/\s+/).filter(Boolean);
+      const weights = parts.map((part) => Math.max(part.length, 1));
+      const total = weights.reduce((sum, item) => sum + item, 0) + Math.max(parts.length - 1, 0);
+      let cursor = x0;
+      const words: OcrWord[] = parts.map((part, wordIndex) => {
+        const wordWidth = ((x1 - x0) * weights[wordIndex]) / Math.max(total, 1);
+        const word = {
+          text: part,
+          confidence,
+          bbox: { x0: cursor, y0: y0 + index * lineHeight, x1: cursor + wordWidth, y1: y0 + (index + 1) * lineHeight },
+        };
+        cursor = word.bbox.x1 + (x1 - x0) / Math.max(total, 1);
+        return word;
+      });
+      if (words.length) {
+        lines.push({
+          text,
+          confidence,
+          bbox: { x0, y0: y0 + index * lineHeight, x1, y1: y0 + (index + 1) * lineHeight },
+          words,
+        });
+      }
+    });
+  }
+  return lines;
+}
+
+`
+
+## File: app/api/sarvam/job/route.ts
+`
+import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+const BASE_URL = "https://api.sarvam.ai/doc-digitization/job/v1";
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+
+function error(message: string, status: number, details?: string) {
+  return NextResponse.json({ error: message, ...(details ? { details } : {}) }, { status });
+}
+
+/**
+ * Starts a Sarvam Document Intelligence job. The browser sends a PDF for
+ * every source: original PDFs pass through and photos are wrapped as a
+ * one-page PDF by the client. Sarvam's upload API accepts PDFs or ZIPs only.
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const apiKey = process.env.SARWAM_DIGITALIZE_KEY;
+    if (!apiKey) return error("Sarvam Document Intelligence is not configured", 503);
+
+    const form = await request.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) return error("A PDF file is required", 400);
+    if (file.type !== "application/pdf" || !file.name.toLowerCase().endsWith(".pdf")) {
+      return error("Sarvam requires a PDF upload", 400);
+    }
+    if (file.size === 0 || file.size > MAX_UPLOAD_BYTES) {
+      return error("The PDF must be between 1 byte and 200 MB", 400);
+    }
+
+    const headers = {
+      "api-subscription-key": apiKey,
+      "Content-Type": "application/json",
+    };
+    const create = await fetch(BASE_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        job_parameters: {
+          // `language`, not `language_code`, is the Document Intelligence API parameter.
+          language: "en-IN",
+          output_format: "html",
+        },
+      }),
+    });
+    if (!create.ok) return error("Sarvam could not create an analysis job", 502, await create.text());
+    const created = (await create.json()) as { job_id?: string };
+    if (!created.job_id) return error("Sarvam returned no job identifier", 502);
+
+    const uploadLinks = await fetch(`${BASE_URL}/upload-files`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ job_id: created.job_id, files: [file.name] }),
+    });
+    if (!uploadLinks.ok) return error("Sarvam could not prepare the file upload", 502, await uploadLinks.text());
+    const links = (await uploadLinks.json()) as {
+      upload_urls?: Record<string, { file_url?: string } | string>;
+    };
+    const upload = links.upload_urls?.[file.name];
+    const uploadUrl = typeof upload === "string" ? upload : upload?.file_url;
+    if (!uploadUrl) return error("Sarvam returned no upload URL", 502);
+
+    const put = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/pdf", "x-ms-blob-type": "BlockBlob" },
+      body: file,
+    });
+    if (!put.ok) return error("Sarvam could not receive the PDF", 502, await put.text());
+
+    const start = await fetch(`${BASE_URL}/${created.job_id}/start`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    if (!start.ok) return error("Sarvam could not start analysis", 502, await start.text());
+
+    return NextResponse.json({ jobId: created.job_id });
+  } catch (cause) {
+    console.error("[sarvam] failed to start digitization job", cause);
+    return error("Unable to start document analysis", 500);
+  }
+}
+
+`
+
+## File: app/api/sarvam/status/route.ts
+`
+import AdmZip from "adm-zip";
+import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+const BASE_URL = "https://api.sarvam.ai/doc-digitization/job/v1";
+
+type PageResult = Record<string, unknown>;
+
+function pageNumberFromName(name: string): number | null {
+  const match = name.match(/page[_-]?(\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+/** Polls a job and returns raw page JSON only after Sarvam has completed it. */
+export async function GET(request: NextRequest) {
+  try {
+    const jobId = request.nextUrl.searchParams.get("job_id");
+    const apiKey = process.env.SARWAM_DIGITALIZE_KEY;
+    if (!jobId) return NextResponse.json({ error: "Missing job_id" }, { status: 400 });
+    if (!apiKey) return NextResponse.json({ error: "Sarvam Document Intelligence is not configured" }, { status: 503 });
+
+    const headers = { "api-subscription-key": apiKey, "Content-Type": "application/json" };
+    const statusResponse = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/status`, { headers });
+    if (!statusResponse.ok) {
+      return NextResponse.json({ error: "Sarvam status request failed" }, { status: 502 });
+    }
+    const status = (await statusResponse.json()) as { job_state?: string; error_message?: string };
+    if (status.job_state !== "Completed") {
+      return NextResponse.json({ status: status.job_state ?? "Unknown", error: status.error_message || undefined });
+    }
+
+    const downloads = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/download-files`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    if (!downloads.ok) return NextResponse.json({ error: "Sarvam result request failed" }, { status: 502 });
+    const downloadData = (await downloads.json()) as {
+      download_urls?: Record<string, { file_url?: string } | string>;
+    };
+    const first = Object.values(downloadData.download_urls ?? {})[0];
+    const url = typeof first === "string" ? first : first?.file_url;
+    if (!url) return NextResponse.json({ error: "Sarvam returned no result file" }, { status: 502 });
+
+    const archiveResponse = await fetch(url);
+    if (!archiveResponse.ok) return NextResponse.json({ error: "Could not download Sarvam result" }, { status: 502 });
+    const archive = new AdmZip(Buffer.from(await archiveResponse.arrayBuffer()));
+    const pages: Record<string, PageResult> = {};
+    for (const entry of archive.getEntries()) {
+      if (entry.isDirectory || !entry.entryName.endsWith(".json")) continue;
+      const pageNumber = pageNumberFromName(entry.entryName);
+      if (!pageNumber) continue;
+      try {
+        pages[String(pageNumber)] = JSON.parse(entry.getData().toString("utf8")) as PageResult;
+      } catch {
+        // A malformed auxiliary JSON file must not prevent usable pages from returning.
+      }
+    }
+    return NextResponse.json({ status: "Completed", pages });
+  } catch (cause) {
+    console.error("[sarvam] failed to read digitization result", cause);
+    return NextResponse.json({ error: "Unable to retrieve document analysis" }, { status: 500 });
+  }
+}
+
+`
+
+## File: components/screens/useProcessing.ts
+`
+"use client";
+
+/**
+ * Processing screen logic — runs the analysis pipeline exactly once
+ * (startedRef guard), reports stage progress, and speaks the ready summary.
+ *
+ * The literal status strings "fields detected", "could not find any fillable
+ * fields" and "Something went wrong" are e2e anchors — both platform bodies
+ * must render them.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { intentRegex } from "@/lib/voice/intlCommands";
+import { getFile, getForm, saveForm } from "@/lib/storage/localHistoryStore";
+import { analyzeForm, type AnalysisStage } from "@/lib/analysis/analyzeForm";
+import { enhanceFieldsWithLlm } from "@/lib/analysis/enhanceFields";
+import { isLlmAvailable } from "@/lib/voice/llm";
+import { speak } from "@/lib/voice/textToSpeech";
+import type { FormRecord } from "@/lib/types";
+
+import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdfReader";
+
+export type StepState = "pending" | "active" | "done";
+
+export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
+  { key: "reading", label: "Opening your form" },
+  { key: "ocr", label: "Reading text with Sarvam AI" },
+  { key: "layout", label: "Detecting layout grid" },
+  { key: "fields", label: "Identifying input fields" },
+  { key: "ordering", label: "Preparing voice checklist" },
+];
+
+const STAGE_ORDER: (AnalysisStage | "done")[] = ["reading", "ocr", "layout", "fields", "ordering", "done"];
+
+export function useProcessing() {
+  const { formId } = useParams<{ formId: string }>();
+  const router = useRouter();
+  const startedRef = useRef(false);
+
+  const [record, setRecord] = useState<FormRecord | null>(null);
+  const [stage, setStage] = useState<AnalysisStage | "done" | "failed">("reading");
+  const [detail, setDetail] = useState("");
+  const [status, setStatus] = useState("Analyzing your form. This usually takes 20 to 40 seconds.");
+  const [unclearCount, setUnclearCount] = useState(0);
+  const [shapesNote, setShapesNote] = useState(false);
+
+  const done = stage === "done";
+  const failed = stage === "failed";
+  const fieldCount = record?.fields.length ?? 0;
+
+  useVoicePage(
+    {
+      title: "Processing form",
+      description: done
+        ? `Analysis finished. ${fieldCount} fields found. Say start filling to begin.`
+        : "I am analyzing your form. This takes under a minute.",
+      commands: done
+        ? [
+            // English fast lane + the multilingual "start" keywords (hi/ml/fr).
+            [
+              new RegExp(`start( filling)?|begin|let'?s go|${intentRegex("start").source}`, "iu"),
+              () => router.push(`/fill/${formId}`),
+              "start filling",
+            ],
+            [/preview|review fields/, () => router.push(`/preview/${formId}`), "preview fields"],
+          ]
+        : [],
+      // Adaptive router: any phrasing / language for "begin filling" resolves
+      // here even if the fast lane above misses (e.g. "പൂരിപ്പിക്കൽ ആരംഭിക്കുക").
+      actions: done
+        ? [
+            {
+              id: "start_filling",
+              description: "Begin filling this form by voice, question by question.",
+              run: () => router.push(`/fill/${formId}`),
+            },
+            {
+              id: "preview_fields",
+              description: "Preview or review the detected form fields before filling.",
+              run: () => router.push(`/preview/${formId}`),
+            },
+          ]
+        : [],
+    },
+    [done, fieldCount],
+  );
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function run() {
+    try {
+      const form = await getForm(formId);
+      if (!form) {
+        setStage("failed");
+        setStatus("I could not find this form. Please go back and upload it again.");
+        return;
+      }
+      setRecord(form);
+
+      if (form.status !== "processing" && form.fields.length > 0) {
+        setStage("done");
+        setUnclearCount(form.fields.filter((f) => f.confidence < 60 && f.source === "ocr").length);
+        setStatus(`Form is ready. I found ${form.fields.length} fields in this form.`);
+        return;
+      }
+
+      const blob = await getFile(formId, "original");
+      if (!blob) {
+        setStage("failed");
+        setStatus("The original file is missing. Please upload the form again.");
+        return;
+      }
+
+      const result = await analyzeForm(blob, form.sourceType, (progress) => {
+        setStage(progress.stage);
+        if (progress.stage === "ocr") {
+          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
+          if (progress.page && progress.pageCount) {
+            setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
+          } else {
+            setDetail(pct ? `processing securely with Sarvam AI — ${pct}` : "sending to Sarvam AI");
+          }
+        } else {
+          setDetail("");
+        }
+      });
+
+      // AI pass: refine the OCR'd fields (cleaner labels, correct types,
+      // natural questions). Best-effort — falls back to OCR if the LLM is off.
+      let fields = result.fields;
+      if (fields.length > 0 && isLlmAvailable()) {
+        setStage("fields");
+        setDetail("understanding the form with AI");
+        speak("Reading through your form to understand each field.");
+        try {
+          fields = await enhanceFieldsWithLlm(fields, form.name);
+        } catch {
+          fields = result.fields;
+        }
+      }
+
+      const updated: FormRecord = {
+        ...form,
+        status: "ready",
+        isAcroForm: result.isAcroForm,
+        pageCount: result.pageCount,
+        pageDims: result.pageDims,
+        fields,
+      };
+      await saveForm(updated);
+      setRecord(updated);
+      setShapesNote(result.shapesUnavailable);
+      const unclear = fields.filter((f) => f.confidence < 60 && f.source === "ocr").length;
+      setUnclearCount(unclear);
+      setStage("done");
+
+      if (fields.length === 0) {
+        const message =
+          "I could not find any fillable fields in this form. Try scanning again with better lighting, or upload a clearer copy.";
+        setStatus(message);
+        speak(message);
+        return;
+      }
+
+      // Richer, uninterrupted summary: how many fields, a taste of what they
+      // are, and how many will be auto-filled from the saved profile.
+      const sectionKind = result.isAcroForm ? "a digital form with built-in fields" : "a scanned form";
+      const preview = fields.slice(0, 4).map((f) => f.label).join(", ");
+      const autofillable = fields.filter((f) => f.profileKey && !f.sensitive).length;
+      const summary =
+        `Your form is ready. It's ${sectionKind} with ${fields.length} field${fields.length === 1 ? "" : "s"}, ` +
+        `including ${preview}${fields.length > 4 ? ", and more" : ""}. ` +
+        (autofillable > 0
+          ? `I can auto-fill up to ${autofillable} of them from your saved profile. `
+          : "") +
+        (unclear > 0
+          ? `${unclear} field${unclear === 1 ? " was" : "s were"} unclear, so I'll spell ${unclear === 1 ? "it" : "them"} out and ask you. `
+          : "") +
+        `Say "start filling", or press the button when you're ready.`;
+      setStatus("Form is ready. " + fields.length + " fields found.");
+      speak(summary);
+    } catch {
+      setStage("failed");
+      const message = "Something went wrong while analyzing the form. Please try again.";
+      setStatus(message);
+      speak(message);
+    }
+  }
+
+  function stepState(key: AnalysisStage | "done"): StepState {
+    if (stage === "failed") return "pending";
+    const current = STAGE_ORDER.indexOf(stage);
+    const mine = STAGE_ORDER.indexOf(key);
+    if (mine < current) return "done";
+    if (mine === current) return "active";
+    return "pending";
+  }
+
+  const autofillable = record?.fields.filter((f) => f.profileKey && !f.sensitive).length ?? 0;
+
+  const stageIdx = STAGE_ORDER.indexOf(stage as AnalysisStage | "done");
+  const progressRatio =
+    stageIdx >= 0 ? Math.min(1, Math.max(0, (stageIdx + 1) / STAGE_ORDER.length)) : 0;
+
+  const typeBreakdown = record
+    ? (() => {
+        const counts: Record<string, number> = {};
+        for (const f of record.fields) {
+          counts[f.type] = (counts[f.type] || 0) + 1;
+        }
+        return Object.entries(counts)
+          .map(([type, count]) => `${count} ${type}`)
+          .join(" · ");
+      })()
+    : "";
+
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  const recordId = record?.id;
+  const recordSourceType = record?.sourceType;
+
+  useEffect(() => {
+    let active = true;
+    let createdUrl: string | null = null;
+
+    if (!recordId || !recordSourceType) return;
+
+    if (recordSourceType === "image") {
+      getFile(formId, "original").then((blob) => {
+        if (!active || !blob) return;
+        createdUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(createdUrl);
+      });
+    } else if (recordSourceType === "pdf") {
+      getFile(formId, "original").then(async (blob) => {
+        if (!active || !blob) return;
+        try {
+          const buffer = await blob.arrayBuffer();
+          if (!active) return;
+          const pdf = await loadPdfDocument(buffer);
+          if (!active) return;
+          try {
+            const rendered = await renderPageToCanvas(pdf, 1, 600);
+            if (!active) return;
+            rendered.canvas.toBlob((b) => {
+              if (!active || !b) return;
+              createdUrl = URL.createObjectURL(b);
+              setThumbnailUrl(createdUrl);
+            }, "image/png");
+          } finally {
+            (pdf as { destroy?: () => void }).destroy?.();
+          }
+        } catch (err) {
+          console.error("Failed to render PDF thumbnail:", err);
+        }
+      });
+    }
+
+    return () => {
+      active = false;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [formId, recordId, recordSourceType]);
+
+  return {
+    formId,
+    record,
+    stage,
+    detail,
+    status,
+    unclearCount,
+    shapesNote,
+    done,
+    failed,
+    fieldCount,
+    autofillable,
+    progressRatio,
+    typeBreakdown,
+    thumbnailUrl,
+    stepState,
+    goFill: () => router.push(`/fill/${formId}`),
+    goReview: () => router.push(`/preview/${formId}`),
+  };
+}
+
+export type ProcessingScreen = ReturnType<typeof useProcessing>;
+
+`
+
+## File: components/screens/useFillSession.ts
+`
+"use client";
+
+/**
+ * The fill-loop session — THE core of Swaram, moved verbatim from the old
+ * fill page. The phase machine (loading | start | notice | asking | listening
+ * | confirming | typing | paused | done), the generation guards, the
+ * transcript listener with its exact [phase] dependency, spell mode, the
+ * smart-lane LLM correction, and all command paths are unchanged; only the
+ * presentation around them is new.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
+import { isLlmAvailable, assist, correctTranscript } from "@/lib/voice/llm";
+import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
+import type { FormField, FormRecord } from "@/lib/types";
+import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
+import { getVoiceSettings } from "@/lib/voice/voiceSettings";
+import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit } from "@/lib/voice/transcriptFormat";
+import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { setSttFieldHint } from "@/lib/voice/groqSTT";
+import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
+import { transliterateForSpeech } from "@/lib/voice/transliterate";
+import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
+import {
+  isSttSupported,
+  acknowledgeCloudNotice,
+  addTranscriptListener,
+  removeTranscriptListener,
+} from "@/lib/voice/speechToText";
+
+const UNCLEAR_THRESHOLD = 0.6;
+
+export type FillPhase =
+  | "loading"
+  | "start"
+  | "notice"
+  | "asking"
+  | "listening"
+  | "confirming"
+  | "typing"
+  | "paused"
+  | "done";
+
+export type FillTone = "info" | "success" | "warning" | "error";
+
+export function useFillSession() {
+  const { formId } = useParams<{ formId: string }>();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const voice = useVoice();
+  useVoicePage({
+    title: "Voice session",
+    hint: "Answer the questions as I read them. Say skip, repeat, or stop anytime.",
+    description:
+      "Form filling stage. Answer the questions as I read them. Say skip to skip, repeat to repeat, or go back to correct a field.",
+    exclusive: true,
+  });
+
+  const [record, setRecord] = useState<FormRecord | null>(null);
+  const [phase, setPhase] = useState<FillPhase>("loading");
+  const [status, setStatus] = useState("Loading your form session…");
+  const [tone, setTone] = useState<FillTone>("info");
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [heard, setHeard] = useState("");
+  const [confirmValue, setConfirmValue] = useState("");
+  const [typedValue, setTypedValue] = useState("");
+  const [showFieldsList, setShowFieldsList] = useState(false);
+
+  // References to keep async callbacks aligned with the active session state
+  const recordRef = useRef<FormRecord | null>(null);
+  const posRef = useRef(0);
+  const queueRef = useRef<FormField[]>([]);
+  const generationRef = useRef(0);
+  const onlySkippedRef = useRef(searchParams.get("only") === "skipped");
+  const retriesRef = useRef(0);
+  const noSpeechRef = useRef(0);
+  const unclearTriedRef = useRef(false);
+  const pendingConfirmRef = useRef<string | null>(null);
+  const listenKindRef = useRef<"answer" | "confirm">("answer");
+  /** When true, the next answer utterance is dictated letters (spell mode). */
+  const spellInputRef = useRef(false);
+  /** True while the value awaiting confirmation came from spelling — a "no"
+   * then re-enters spell-repair instead of asking the question over. */
+  const spelledPendingRef = useRef(false);
+
+  const isContinuousListening = voice?.sttState === "listening";
+  const messages = voice?.messages ?? [];
+
+  const currentField = record?.fields.find((f) => f.id === currentId) ?? null;
+  const queueLength = queueRef.current.length;
+  const questionNumber = record
+    ? record.fields.length - queueLength + Math.min(posRef.current + 1, queueLength)
+    : 1;
+
+  // Track active components
+  useEffect(() => {
+    load();
+    return () => {
+      cancelSpeech();
+      setSttFieldHint("");
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formId]);
+
+  // Hook transcript listeners to handle incoming voice inputs. Commands work
+  // in EVERY phase — not just while actively listening for an answer — so
+  // "start", "resume", and "use voice" all respond by voice.
+  useEffect(() => {
+    function onTranscript(text: string, confidence: number) {
+      const clean = text.toLowerCase().trim();
+
+      if (phase === "start" || phase === "notice") {
+        if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.start)) {
+          handleStart();
+        }
+        return;
+      }
+      if (phase === "paused") {
+        if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.resume)) {
+          resume();
+        }
+        return;
+      }
+      if (phase === "typing") {
+        if (/use voice|voice instead|resume voice|listen/.test(clean)) {
+          resume();
+        }
+        return;
+      }
+      if (phase === "listening" || phase === "confirming") {
+        handleSpeechInput(text, confidence);
+      }
+    }
+    addTranscriptListener(onTranscript);
+    return () => removeTranscriptListener(onTranscript);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // Synchronize state values
+  function syncRecord() {
+    if (recordRef.current) {
+      setRecord({ ...recordRef.current });
+      saveForm(recordRef.current);
+    }
+  }
+
+  // Cancel running tasks on state updates
+  function beginRun(): number {
+    generationRef.current += 1;
+    cancelSpeech();
+    return generationRef.current;
+  }
+
+  function alive(id: number): boolean {
+    return id === generationRef.current;
+  }
+
+  function fieldAt(pos: number): FormField | null {
+    return queueRef.current[pos] ?? null;
+  }
+
+  async function load() {
+    const form = await getForm(formId);
+    if (!form || form.fields.length === 0) {
+      setPhase("start");
+      setTone("error");
+      setStatus("I could not load this form. Please go back and try again.");
+      return;
+    }
+    recordRef.current = form;
+    setRecord(form);
+    setPhase("start");
+    const pendingCount = form.fields.filter((f) => f.status === "pending").length;
+    const message = onlySkippedRef.current
+      ? "Let's answer the fields you skipped. Press Start when you're ready."
+      : `${form.fields.length} fields, ${pendingCount} to answer. Press Start — I'll ask one question at a time.`;
+    setStatus(message);
+    speak(message + " You can also press the space bar.");
+  }
+
+  async function handleStart() {
+    unlockAudioPlayback();
+    await startFilling();
+  }
+
+  async function startFilling() {
+    const rec = recordRef.current;
+    if (!rec) return;
+
+    rec.status = "filling";
+    syncRecord();
+
+    const pending = rec.fields.filter(
+      (f) =>
+        f.status === "pending" ||
+        (onlySkippedRef.current && (f.status === "skipped" || f.status === "unclear"))
+    );
+
+    if (pending.length === 0) {
+      finish(beginRun());
+      return;
+    }
+
+    queueRef.current = pending;
+    posRef.current = 0;
+    const id = beginRun();
+
+    const announcement = onlySkippedRef.current ? "Starting skipped questions. " : "Starting voice fill. ";
+    setStatus(announcement + `${queueRef.current.length} question${queueRef.current.length === 1 ? "" : "s"} to go.`);
+    await speak(announcement + `${queueRef.current.length} question${queueRef.current.length === 1 ? "" : "s"}. Say help anytime.`);
+    if (!alive(id)) return;
+
+    // In continuous mode, make sure the mic is live. In push-to-talk mode the
+    // user holds space / taps to answer each question, so we must NOT auto-start
+    // recording here (it would capture silence before they speak).
+    if (voice && voice.micMode === "continuous" && voice.sttState === "off") {
+      voice.wakeMic();
+    }
+    askField(posRef.current, id);
+  }
+
+  function isUnclear(field: FormField): boolean {
+    return field.source === "ocr" && field.confidence < UNCLEAR_THRESHOLD;
+  }
+
+  function questionFor(field: FormField): string {
+    if (isUnclear(field)) {
+      return (
+        `I'm not sure about this field. The label looks like: ${spellOut(field.label)}. ` +
+        `Tell me what to fill here, or say skip.`
+      );
+    }
+    // Prefer the AI-refined natural question + hint when available.
+    const base = field.question?.trim() || defaultQuestionFor(field);
+    if (field.type === "choice" && field.options?.length) {
+      return `${base} Options: ${field.options.join(", ")}.`;
+    }
+    return field.help ? `${base} ${field.help}` : base;
+  }
+
+  function defaultQuestionFor(field: FormField): string {
+    switch (field.type) {
+      case "date":
+        return `What is your ${field.label}? For example: 25 May 2002.`;
+      case "comb":
+        return `What is your ${field.label}? This is one character per box, so you can say let me spell.`;
+      case "checkbox":
+        return `${field.label} — yes or no?`;
+      default:
+        if (field.profileKey === "address" || /address/i.test(field.label)) {
+          return `What is your ${field.label}? Say it naturally — you can say comma to separate parts.`;
+        }
+        return `What is your ${field.label}?`;
+    }
+  }
+
+  async function askField(pos: number, id: number) {
+    let field = fieldAt(pos);
+
+    // Automatically skip signatures and unmet dependencies
+    while (field) {
+      let skip = false;
+      if (field.type === "signature") {
+        skip = true;
+      } else if (field.dependsOn) {
+        const target = recordRef.current?.fields.find((f) => f.profileKey === field!.dependsOn!.fieldKey);
+        if (target && target.value.trim().toLowerCase() !== field.dependsOn.expectedValue.toLowerCase()) {
+          skip = true;
+        }
+      }
+
+      if (skip) {
+        field.status = "skipped";
+        pos++;
+        field = fieldAt(pos);
+      } else {
+        break;
+      }
+    }
+
+    if (!field) {
+      finish(id);
+      return;
+    }
+    posRef.current = pos;
+    setCurrentId(field.id);
+    setHeard("");
+    setConfirmValue("");
+    setTypedValue(field.value ?? "");
+    retriesRef.current = 0;
+    noSpeechRef.current = 0;
+    unclearTriedRef.current = false;
+    // A stale value from the previous field must never seed a spell-repair.
+    pendingConfirmRef.current = null;
+    spelledPendingRef.current = false;
+    // Tell the STT router what kind of clip is coming: name-field audio runs
+    // the server's multi-engine ensemble with this label + the user's known
+    // names as biasing context.
+    setSttFieldHint(
+      smartLane(field).kind === "name" ? "name" : "",
+      { label: field.label, names: knownNames() },
+    );
+    setPhase("asking");
+    setTone("info");
+    setStatus(questionFor(field));
+
+    if (!isSttSupported()) {
+      setPhase("typing");
+      return;
+    }
+
+    await speak(questionFor(field));
+    if (!alive(id)) return;
+
+    listenKindRef.current = "answer";
+    setPhase("listening");
+
+    // Warm the next question's cloud audio so advancing feels instant.
+    const next = fieldAt(pos + 1);
+    if (next) prefetchTTS(questionFor(next), getVoiceSettings().sttLang);
+  }
+
+  async function handleSpeechInput(transcript: string, confidence: number) {
+    const id = beginRun();
+    const clean = transcript.toLowerCase().trim();
+    const cmd = parseFillCommand(clean);
+
+    // Commands work in both answer and confirm modes.
+    if (cmd === "help") {
+      await speak(
+        "Just say your answer. You can also say: repeat, skip, go back, let me spell, type instead, or pause. " +
+          "While confirming, you can say things like: change K to C, or: the third letter is E.",
+      );
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+    if (cmd === "repeat") { handleCommand("repeat", posRef.current, id); return; }
+    if (cmd === "skip") { handleCommand("skip", posRef.current, id); return; }
+    if (cmd === "back") { handleCommand("back", posRef.current, id); return; }
+    if (cmd === "type") { spellInputRef.current = false; setPhase("typing"); return; }
+    if (cmd === "pause") {
+      setPhase("paused");
+      setStatus("Paused. Press Resume, or hold space and say resume.");
+      return;
+    }
+    if (cmd === "spell") { enterSpellMode(id); return; }
+
+    // Spell-by-letter input: the utterance IS the letters ("t w i n s h a").
+    if (spellInputRef.current && listenKindRef.current !== "confirm") {
+      spellInputRef.current = false;
+      const field = fieldAt(posRef.current);
+      const spelled = spellTokensToText(transcript);
+      if (!spelled) {
+        await speak("I couldn't make out the letters. Try again — letter by letter.");
+        if (alive(id)) { spellInputRef.current = true; setPhase("listening"); }
+        return;
+      }
+      // Repair, don't restart: when the user spells right after rejecting a
+      // heard value, splice the spelling into it — fixing only the wrong word
+      // ("Twinsha T Tilkan" + "t h i l a k a n" -> "Twinsha T Thilakan").
+      const prior = pendingConfirmRef.current;
+      const merged = prior && field?.type === "text" ? mergeSpelledCorrection(prior, spelled) : spelled;
+      const value = field && isNameField(field) ? titleCase(merged) : merged;
+      setSttFieldHint("");
+      spelledPendingRef.current = true;
+      pendingConfirmRef.current = value;
+      setConfirmValue(value);
+      setHeard(value);
+      listenKindRef.current = "confirm";
+      setPhase("confirming");
+      setStatus(`Spelled: “${value}”. Correct?`);
+      await speak(`I got: ${spellOut(value)}. Is that correct?`);
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    // Smart assist: let the user ask what to put or what a field means.
+    if (
+      listenKindRef.current !== "confirm" &&
+      /(what (do|should) i|what does this|what is this|explain|help me with|i (don'?t|do not) understand|meaning of|for example)/.test(clean)
+    ) {
+      const field = fieldAt(posRef.current);
+      if (isLlmAvailable() && field) {
+        await speak("One moment.");
+        const answer = await assist(transcript, {
+          fieldLabel: field.label,
+          formName: recordRef.current?.name,
+          lang: getVoiceSettings().sttLang,
+        });
+        if (!alive(id)) return;
+        if (answer) {
+          await speak(answer);
+          if (alive(id)) {
+            await speak(questionFor(field));
+            if (alive(id)) setPhase("listening");
+          }
+          return;
+        }
+      }
+      // No LLM — fall through and treat it as a normal answer attempt.
+    }
+
+    if (listenKindRef.current === "confirm") {
+      await handleConfirmationTranscript(transcript, confidence, id);
+    } else {
+      await handleAnswer(posRef.current, transcript, confidence, id);
+    }
+  }
+
+  function enterSpellMode(id: number) {
+    spellInputRef.current = true;
+    listenKindRef.current = "answer";
+    setSttFieldHint("spell", { label: fieldAt(posRef.current)?.label });
+    setTone("info");
+    const repairing = Boolean(pendingConfirmRef.current);
+    setStatus(
+      repairing
+        ? "Spell just the wrong word — or the whole answer. Say “space” between words."
+        : "Spell it letter by letter. Say “space” between words.",
+    );
+    speak(
+      repairing
+        ? "Go ahead — spell just the word I got wrong, letter by letter. Or spell the whole answer with space between words."
+        : "Go ahead — spell it letter by letter. Say space between words.",
+    ).then(() => {
+      if (alive(id)) setPhase("listening");
+    });
+  }
+
+  async function handleAnswer(pos: number, raw: string, confidence: number, id: number) {
+    const field = fieldAt(pos);
+    if (!field) return;
+
+    if (field.type === "checkbox") {
+      const yn = parseYesNo(raw);
+      if (yn === null) {
+        await speak("Please answer yes or no.");
+        if (alive(id)) setPhase("listening");
+        return;
+      }
+      commit(pos, yn ? "Yes" : "No", id, yn ? "Yes." : "No.");
+      return;
+    }
+
+    if (field.type === "choice" && field.options?.length) {
+      const option = matchOption(raw, field.options);
+      if (!option) {
+        retriesRef.current += 1;
+        if (retriesRef.current >= 3) {
+          await speak("Let's pick it from a list instead.");
+          if (alive(id)) setPhase("typing");
+          return;
+        }
+        await speak(`I heard ${raw}. The options are: ${field.options.join(", ")}. Say one.`);
+        if (alive(id)) setPhase("listening");
+        return;
+      }
+      commit(pos, option, id, `${option}.`);
+      return;
+    }
+
+    // Adaptive STT — "smart lane": for name/address/free-text fields, run the
+    // raw transcript through a fast field-aware LLM pass that fixes Indian names
+    // and addresses Whisper mangles ("Tejas KM" heard as "they just came").
+    // Number/ID/email fields skip this (the "fast lane") — the corrector never
+    // touches digits, and deterministic formatting + spell-back handles those.
+    const lane = smartLane(field);
+    let source = raw;
+    // A name the user already confirmed once beats any model: snap to it
+    // deterministically and skip the LLM round-trip entirely.
+    const snapped = lane.kind === "name" ? snapToKnownName(raw, field.profileKey) : null;
+    if (snapped) {
+      source = snapped;
+    } else if (lane.correct && isLlmAvailable()) {
+      const corrected = await correctTranscript(
+        raw,
+        { label: field.label, kind: lane.kind, help: field.help },
+        getVoiceSettings().sttLang,
+        lane.kind === "name" ? knownNames() : [],
+      );
+      if (!alive(id)) return;
+      if (corrected) source = corrected;
+    }
+
+    const value = formatAnswer(source, field);
+    if (!value) {
+      await speak("I didn't catch that. Could you repeat it?");
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    if (!needsConfirmation(field, isUnclear(field))) {
+      commit(pos, value, id, `${value}.`);
+      return;
+    }
+
+    pendingConfirmRef.current = value;
+    spelledPendingRef.current = false;
+    setConfirmValue(value);
+    setHeard(value);
+    listenKindRef.current = "confirm";
+    setSttFieldHint("");
+    setPhase("confirming");
+    setStatus(`I heard: “${value}”. Correct?`);
+    // For names, emails, and numbers, read it back character-by-character so
+    // the user can actually verify it — this is where mishearings hide.
+    const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
+    // In Hindi/Malayalam, speak the name in its phonetic native script so the
+    // voice pronounces it the Indian way; the spelled-back letters stay Latin
+    // because that's what lands on the printed form.
+    const spokenValue = isNameField(field)
+      ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
+      : value;
+    if (!alive(id)) return;
+    const readback = spellItBack
+      ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
+      : `I heard: ${spokenValue}. Correct?`;
+    await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""));
+    if (alive(id)) {
+      setPhase("listening");
+    }
+  }
+
+  async function handleConfirmationTranscript(transcript: string, confidence: number, id: number) {
+    const field = fieldAt(posRef.current);
+    if (!field) return;
+
+    const yn = parseYesNo(transcript);
+    if (yn === true) {
+      commit(posRef.current, pendingConfirmRef.current ?? "", id);
+      return;
+    }
+
+    if (yn === false) {
+      if (isUnclear(field) && unclearTriedRef.current) {
+        markUnclearAndMoveOn(posRef.current, id);
+        return;
+      }
+      unclearTriedRef.current = true;
+      retriesRef.current += 1;
+      if (retriesRef.current >= 3) {
+        await speak("No problem — let's type it instead.");
+        if (alive(id)) setPhase("typing");
+        return;
+      }
+      // A rejected SPELLED value goes straight back to spell-repair — the user
+      // was already spelling; making them start over is the old, broken flow.
+      if (spelledPendingRef.current && isTextLike(field)) {
+        enterSpellMode(id);
+        return;
+      }
+      setPhase("confirming");
+      const spellHint =
+        isTextLike(field)
+          ? " You can also say: let me spell, or: change a letter."
+          : "";
+      await speak("Okay, once more. " + questionFor(field) + spellHint);
+      if (alive(id)) {
+        listenKindRef.current = "answer";
+        setSttFieldHint(smartLane(field).kind === "name" ? "name" : "", {
+          label: field.label,
+          names: knownNames(),
+        });
+        setPhase("listening");
+      }
+      return;
+    }
+
+    // Not a yes and not a no — maybe a surgical edit: "change k to c",
+    // "the third letter is e", "replace tilkan with thilakan".
+    const pending = pendingConfirmRef.current;
+    if (pending && isTextLike(field)) {
+      const edited = applySpokenEdit(pending, transcript);
+      if (edited) {
+        const value = isNameField(field) ? titleCase(edited) : edited;
+        pendingConfirmRef.current = value;
+        setConfirmValue(value);
+        setHeard(value);
+        setPhase("confirming");
+        setStatus(`Changed to: “${value}”. Correct?`);
+        await speak(`Changed. Now I have: ${spellOut(value)}. Correct?`);
+        if (alive(id)) setPhase("listening");
+        return;
+      }
+    }
+
+    retriesRef.current += 1;
+    if (retriesRef.current >= 3) {
+      commit(posRef.current, pendingConfirmRef.current ?? "", id);
+      return;
+    }
+    await speak(`I heard ${transcript}. Please answer yes or no. Is ${pendingConfirmRef.current} correct?`);
+    if (alive(id)) setPhase("listening");
+  }
+
+  function commit(pos: number, val: string, id: number, speakPrefix = "") {
+    const rec = recordRef.current;
+    if (!rec) return;
+    const field = queueRef.current[pos];
+    if (field) {
+      field.value = val;
+      field.status = "answered";
+      syncRecord();
+
+      // A confirmed name is learned for good: future STT snaps to it, the LLM
+      // corrector sees it, and Azure's phrase list is biased toward it.
+      if (isNameField(field)) rememberName(field.profileKey, val);
+
+      if (voice) {
+        voice.addMessage("user", val);
+      }
+    }
+    setSttFieldHint("");
+    const nextPos = pos + 1;
+    const isLast = nextPos >= queueRef.current.length;
+    const speechText = isLast ? `${speakPrefix} All questions answered.` : `${speakPrefix} Got it.`;
+
+    speak(speechText).then(() => {
+      if (alive(id)) {
+        if (isLast) {
+          finish(id);
+        } else {
+          askField(nextPos, id);
+        }
+      }
+    });
+  }
+
+  function markUnclearAndMoveOn(pos: number, id: number) {
+    const field = queueRef.current[pos];
+    if (field) {
+      field.status = "unclear";
+      field.value = "";
+      syncRecord();
+    }
+    speak("No problem. Skipping this unclear field.").then(() => {
+      if (alive(id)) askField(pos + 1, id);
+    });
+  }
+
+  function jumpToField(index: number) {
+    const rec = recordRef.current;
+    if (!rec || index < 0 || index >= rec.fields.length) return;
+    queueRef.current = rec.fields;
+    const id = beginRun();
+    askField(index, id);
+  }
+
+  async function finish(id: number) {
+    const rec = recordRef.current;
+    if (!rec) return;
+    setSttFieldHint("");
+    setPhase("done");
+    setTone("success");
+    rec.status = "review";
+    syncRecord();
+    const msg = "Excellent! We have gone through all questions. Let's review the form now.";
+    setStatus(msg);
+    await speak(msg);
+  }
+
+  function handleCommand(cmd: "repeat" | "skip" | "back", pos: number, id: number) {
+    if (cmd === "repeat") {
+      askField(pos, id);
+    } else if (cmd === "skip") {
+      const field = queueRef.current[pos];
+      if (field) {
+        field.status = "skipped";
+        field.value = "";
+        syncRecord();
+      }
+      setTone("warning");
+      setStatus("Skipped.");
+      speak("Skipped.").then(() => {
+        if (alive(id)) askField(pos + 1, id);
+      });
+    } else if (cmd === "back") {
+      const nextPos = Math.max(pos - 1, 0);
+      askField(nextPos, id);
+    }
+  }
+
+  function doSkip() {
+    const id = beginRun();
+    handleCommand("skip", posRef.current, id);
+  }
+
+  function doBack() {
+    const id = beginRun();
+    handleCommand("back", posRef.current, id);
+  }
+
+  function doRepeat() {
+    const id = beginRun();
+    handleCommand("repeat", posRef.current, id);
+  }
+
+  function saveTyped() {
+    const id = beginRun();
+    const field = fieldAt(posRef.current);
+    if (!field) return;
+    const value = typedValue.trim();
+    if (!value) {
+      setTone("warning");
+      setStatus("Type an answer, or skip this field.");
+      return;
+    }
+    commit(posRef.current, value, id);
+  }
+
+  function resume() {
+    const id = beginRun();
+    askField(posRef.current, id);
+  }
+
+  function enterTyping() {
+    beginRun();
+    setPhase("typing");
+  }
+
+  function pause() {
+    beginRun();
+    setPhase("paused");
+    setStatus("Paused. Press Resume when you're ready.");
+  }
+
+  function agreeAndStart() {
+    acknowledgeCloudNotice();
+    startFilling();
+  }
+
+  // Visible Yes/No buttons drive the exact same code path the voice takes.
+  function confirmYes() {
+    void handleSpeechInput("yes", 1);
+  }
+
+  function confirmNo() {
+    void handleSpeechInput("no", 1);
+  }
+
+  return {
+    formId,
+    router,
+    voice,
+    record,
+    phase,
+    status,
+    tone,
+    currentField,
+    currentId,
+    questionNumber,
+    total: record?.fields.length || 0,
+    confirmValue,
+    /** True while the session is waiting on a yes/no for confirmValue. */
+    confirmMode: listenKindRef.current === "confirm",
+    typedValue,
+    setTypedValue,
+    heard,
+    messages,
+    isContinuousListening,
+    showFieldsList,
+    setShowFieldsList,
+    atFirst: posRef.current === 0,
+    handleStart,
+    startFilling,
+    agreeAndStart,
+    doRepeat,
+    doSkip,
+    doBack,
+    resume,
+    saveTyped,
+    jumpToField,
+    enterTyping,
+    pause,
+    confirmYes,
+    confirmNo,
+    sttSupported: isSttSupported(),
+  };
+}
+
+export type FillSession = ReturnType<typeof useFillSession>;
+
+export function typeLabel(type: FormField["type"]): string {
+  switch (type) {
+    case "text":
+      return "Text input";
+    case "date":
+      return "Date field";
+    case "choice":
+      return "Multiple choice";
+    case "checkbox":
+      return "Yes / no";
+    case "comb":
+      return "One character per box";
+    default:
+      return "Text input";
+  }
+}
+
+function isTextLike(field: FormField): boolean {
+  return field.type === "text" || field.type === "comb";
+}
+
+function parseYesNo(transcript: string): boolean | null {
+  const t = transcript.toLowerCase().trim();
+  if (/^(yes|yeah|yep|yup|correct|right|that's right|sure|ok|okay|haan|ha|confirm)\b/.test(t)) return true;
+  if (/^(no|nope|nah|wrong|incorrect|nahi|not correct|that's wrong)\b/.test(t)) return false;
+  // Hindi / Malayalam / French — the recognizer returns native script.
+  if (containsKeyword(transcript, INTL_KEYWORDS.no)) return false; // check "no" first: "വേണ്ട"/"non" are distinct
+  if (containsKeyword(transcript, INTL_KEYWORDS.yes)) return true;
+  return null;
+}
+
+function matchOption(transcript: string, options: string[]): string | null {
+  const heard = transcript.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  if (!heard) return null;
+  for (const option of options) {
+    if (option.toLowerCase() === heard) return option;
+  }
+  for (const option of options) {
+    const o = option.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+    if (heard.includes(o) || o.includes(heard)) return option;
+  }
+  const squashed = heard.replace(/\s+/g, "");
+  for (const option of options) {
+    const o = option.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (o === squashed) return option;
+  }
+  return null;
+}
+
+/**
+ * Adaptive-STT routing: should this field's answer go through the LLM corrector
+ * ("smart lane") or straight to deterministic formatting ("fast lane")? Names
+ * and free-text/addresses benefit from correction; anything digit-bearing (IDs,
+ * phone, pincode, amounts) or an email is left to deterministic formatting +
+ * spell-back, since the corrector must never touch digits.
+ */
+function smartLane(field: FormField): { correct: boolean; kind: string } {
+  const label = field.label.toLowerCase();
+  if (
+    /aadhaar|aadhar|adhar|\bpan\b|passport|voter|\buid\b|account|ifsc|pin\s?code|postal|\bpin\b|\botp\b|phone|mobile|contact|whatsapp|number|\bcode\b|amount|income|zip/.test(
+      label,
+    )
+  ) {
+    return { correct: false, kind: "number" };
+  }
+  if (/e-?mail/.test(label)) return { correct: false, kind: "email" };
+  if (isNameField(field) || /\bname\b/.test(label)) return { correct: true, kind: "name" };
+  if (/address|street|city|town|village|district|\bstate\b|landmark|\barea\b|place|locality|road|house|building/.test(label)) {
+    return { correct: true, kind: "address" };
+  }
+  // Generic text stays in the fast lane — deterministic formatting only, no LLM
+  // round-trip. Correction is spent only where Indian mishearings actually hide.
+  return { correct: false, kind: field.type };
+}
+
+`
+
+# Git Diff (main vs current)
+`diff
+diff --git a/app/api/sarvam/job/route.ts b/app/api/sarvam/job/route.ts
+new file mode 100644
+index 0000000..55c7942
+--- /dev/null
++++ b/app/api/sarvam/job/route.ts
+@@ -0,0 +1,83 @@
++import { NextRequest, NextResponse } from "next/server";
++
++export const runtime = "nodejs";
++
++const BASE_URL = "https://api.sarvam.ai/doc-digitization/job/v1";
++const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
++
++function error(message: string, status: number, details?: string) {
++  return NextResponse.json({ error: message, ...(details ? { details } : {}) }, { status });
++}
++
++/**
++ * Starts a Sarvam Document Intelligence job. The browser sends a PDF for
++ * every source: original PDFs pass through and photos are wrapped as a
++ * one-page PDF by the client. Sarvam's upload API accepts PDFs or ZIPs only.
++ */
++export async function POST(request: NextRequest) {
++  try {
++    const apiKey = process.env.SARWAM_DIGITALIZE_KEY;
++    if (!apiKey) return error("Sarvam Document Intelligence is not configured", 503);
++
++    const form = await request.formData();
++    const file = form.get("file");
++    if (!(file instanceof File)) return error("A PDF file is required", 400);
++    if (file.type !== "application/pdf" || !file.name.toLowerCase().endsWith(".pdf")) {
++      return error("Sarvam requires a PDF upload", 400);
++    }
++    if (file.size === 0 || file.size > MAX_UPLOAD_BYTES) {
++      return error("The PDF must be between 1 byte and 200 MB", 400);
++    }
++
++    const headers = {
++      "api-subscription-key": apiKey,
++      "Content-Type": "application/json",
++    };
++    const create = await fetch(BASE_URL, {
++      method: "POST",
++      headers,
++      body: JSON.stringify({
++        job_parameters: {
++          // `language`, not `language_code`, is the Document Intelligence API parameter.
++          language: "en-IN",
++          output_format: "html",
++        },
++      }),
++    });
++    if (!create.ok) return error("Sarvam could not create an analysis job", 502, await create.text());
++    const created = (await create.json()) as { job_id?: string };
++    if (!created.job_id) return error("Sarvam returned no job identifier", 502);
++
++    const uploadLinks = await fetch(`${BASE_URL}/upload-files`, {
++      method: "POST",
++      headers,
++      body: JSON.stringify({ job_id: created.job_id, files: [file.name] }),
++    });
++    if (!uploadLinks.ok) return error("Sarvam could not prepare the file upload", 502, await uploadLinks.text());
++    const links = (await uploadLinks.json()) as {
++      upload_urls?: Record<string, { file_url?: string } | string>;
++    };
++    const upload = links.upload_urls?.[file.name];
++    const uploadUrl = typeof upload === "string" ? upload : upload?.file_url;
++    if (!uploadUrl) return error("Sarvam returned no upload URL", 502);
++
++    const put = await fetch(uploadUrl, {
++      method: "PUT",
++      headers: { "Content-Type": "application/pdf", "x-ms-blob-type": "BlockBlob" },
++      body: file,
++    });
++    if (!put.ok) return error("Sarvam could not receive the PDF", 502, await put.text());
++
++    const start = await fetch(`${BASE_URL}/${created.job_id}/start`, {
++      method: "POST",
++      headers,
++      body: "{}",
++    });
++    if (!start.ok) return error("Sarvam could not start analysis", 502, await start.text());
++
++    return NextResponse.json({ jobId: created.job_id });
++  } catch (cause) {
++    console.error("[sarvam] failed to start digitization job", cause);
++    return error("Unable to start document analysis", 500);
++  }
++}
+diff --git a/app/api/sarvam/status/route.ts b/app/api/sarvam/status/route.ts
+new file mode 100644
+index 0000000..421a4c7
+--- /dev/null
++++ b/app/api/sarvam/status/route.ts
+@@ -0,0 +1,65 @@
++import AdmZip from "adm-zip";
++import { NextRequest, NextResponse } from "next/server";
++
++export const runtime = "nodejs";
++
++const BASE_URL = "https://api.sarvam.ai/doc-digitization/job/v1";
++
++type PageResult = Record<string, unknown>;
++
++function pageNumberFromName(name: string): number | null {
++  const match = name.match(/page[_-]?(\d+)/i);
++  return match ? Number(match[1]) : null;
++}
++
++/** Polls a job and returns raw page JSON only after Sarvam has completed it. */
++export async function GET(request: NextRequest) {
++  try {
++    const jobId = request.nextUrl.searchParams.get("job_id");
++    const apiKey = process.env.SARWAM_DIGITALIZE_KEY;
++    if (!jobId) return NextResponse.json({ error: "Missing job_id" }, { status: 400 });
++    if (!apiKey) return NextResponse.json({ error: "Sarvam Document Intelligence is not configured" }, { status: 503 });
++
++    const headers = { "api-subscription-key": apiKey, "Content-Type": "application/json" };
++    const statusResponse = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/status`, { headers });
++    if (!statusResponse.ok) {
++      return NextResponse.json({ error: "Sarvam status request failed" }, { status: 502 });
++    }
++    const status = (await statusResponse.json()) as { job_state?: string; error_message?: string };
++    if (status.job_state !== "Completed") {
++      return NextResponse.json({ status: status.job_state ?? "Unknown", error: status.error_message || undefined });
++    }
++
++    const downloads = await fetch(`${BASE_URL}/${encodeURIComponent(jobId)}/download-files`, {
++      method: "POST",
++      headers,
++      body: "{}",
++    });
++    if (!downloads.ok) return NextResponse.json({ error: "Sarvam result request failed" }, { status: 502 });
++    const downloadData = (await downloads.json()) as {
++      download_urls?: Record<string, { file_url?: string } | string>;
++    };
++    const first = Object.values(downloadData.download_urls ?? {})[0];
++    const url = typeof first === "string" ? first : first?.file_url;
++    if (!url) return NextResponse.json({ error: "Sarvam returned no result file" }, { status: 502 });
++
++    const archiveResponse = await fetch(url);
++    if (!archiveResponse.ok) return NextResponse.json({ error: "Could not download Sarvam result" }, { status: 502 });
++    const archive = new AdmZip(Buffer.from(await archiveResponse.arrayBuffer()));
++    const pages: Record<string, PageResult> = {};
++    for (const entry of archive.getEntries()) {
++      if (entry.isDirectory || !entry.entryName.endsWith(".json")) continue;
++      const pageNumber = pageNumberFromName(entry.entryName);
++      if (!pageNumber) continue;
++      try {
++        pages[String(pageNumber)] = JSON.parse(entry.getData().toString("utf8")) as PageResult;
++      } catch {
++        // A malformed auxiliary JSON file must not prevent usable pages from returning.
++      }
++    }
++    return NextResponse.json({ status: "Completed", pages });
++  } catch (cause) {
++    console.error("[sarvam] failed to read digitization result", cause);
++    return NextResponse.json({ error: "Unable to retrieve document analysis" }, { status: 500 });
++  }
++}
+diff --git a/components/desktop/PreviewDesktop.tsx b/components/desktop/PreviewDesktop.tsx
+index 3a5b214..1b722b7 100644
+--- a/components/desktop/PreviewDesktop.tsx
++++ b/components/desktop/PreviewDesktop.tsx
+@@ -108,7 +108,7 @@ export default function PreviewDesktop() {
+   }
+ 
+   const pageCount = pv.record.pageCount || 1;
+-  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox"];
++  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox", "comb"];
+ 
+   return (
+     <div className="w-full max-w-[1800px] mx-auto flex flex-col animate-fade-in pb-12">
+diff --git a/components/mobile/PreviewMobile.tsx b/components/mobile/PreviewMobile.tsx
+index b3b2408..fc02512 100644
+--- a/components/mobile/PreviewMobile.tsx
++++ b/components/mobile/PreviewMobile.tsx
+@@ -84,7 +84,7 @@ export default function PreviewMobile() {
+   }
+ 
+   const pageCount = pv.record.pageCount || 1;
+-  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox"];
++  const EDITABLE_TYPES: FieldType[] = ["text", "date", "choice", "checkbox", "comb"];
+   const pageFields = pv.sortedFields.filter(
+     (f) => f.page === pv.currentPage && f.bbox !== null,
+   );
+diff --git a/components/screens/useFillSession.ts b/components/screens/useFillSession.ts
+index 757f1e6..d49d6e8 100644
+--- a/components/screens/useFillSession.ts
++++ b/components/screens/useFillSession.ts
+@@ -244,6 +244,8 @@ export function useFillSession() {
+     switch (field.type) {
+       case "date":
+         return `What is your ${field.label}? For example: 25 May 2002.`;
++      case "comb":
++        return `What is your ${field.label}? This is one character per box, so you can say let me spell.`;
+       case "checkbox":
+         return `${field.label} — yes or no?`;
+       default:
+@@ -515,7 +517,7 @@ export function useFillSession() {
+     const readback = spellItBack
+       ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
+       : `I heard: ${spokenValue}. Correct?`;
+-    await speak(readback + (field.type === "text" ? " You can also say: let me spell." : ""));
++    await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""));
+     if (alive(id)) {
+       setPhase("listening");
+     }
+@@ -545,13 +547,13 @@ export function useFillSession() {
+       }
+       // A rejected SPELLED value goes straight back to spell-repair — the user
+       // was already spelling; making them start over is the old, broken flow.
+-      if (spelledPendingRef.current && field.type === "text") {
++      if (spelledPendingRef.current && isTextLike(field)) {
+         enterSpellMode(id);
+         return;
+       }
+       setPhase("confirming");
+       const spellHint =
+-        field.type === "text"
++        isTextLike(field)
+           ? " You can also say: let me spell, or: change a letter."
+           : "";
+       await speak("Okay, once more. " + questionFor(field) + spellHint);
+@@ -569,7 +571,7 @@ export function useFillSession() {
+     // Not a yes and not a no — maybe a surgical edit: "change k to c",
+     // "the third letter is e", "replace tilkan with thilakan".
+     const pending = pendingConfirmRef.current;
+-    if (pending && field.type === "text") {
++    if (pending && isTextLike(field)) {
+       const edited = applySpokenEdit(pending, transcript);
+       if (edited) {
+         const value = isNameField(field) ? titleCase(edited) : edited;
+@@ -790,11 +792,17 @@ export function typeLabel(type: FormField["type"]): string {
+       return "Multiple choice";
+     case "checkbox":
+       return "Yes / no";
++    case "comb":
++      return "One character per box";
+     default:
+       return "Text input";
+   }
+ }
+ 
++function isTextLike(field: FormField): boolean {
++  return field.type === "text" || field.type === "comb";
++}
++
+ function parseYesNo(transcript: string): boolean | null {
+   const t = transcript.toLowerCase().trim();
+   if (/^(yes|yeah|yep|yup|correct|right|that's right|sure|ok|okay|haan|ha|confirm)\b/.test(t)) return true;
+diff --git a/components/screens/useProcessing.ts b/components/screens/useProcessing.ts
+index a355edc..572e1c1 100644
+--- a/components/screens/useProcessing.ts
++++ b/components/screens/useProcessing.ts
+@@ -26,7 +26,7 @@ export type StepState = "pending" | "active" | "done";
+ 
+ export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
+   { key: "reading", label: "Opening your form" },
+-  { key: "ocr", label: "Reading text content" },
++  { key: "ocr", label: "Reading text with Sarvam AI" },
+   { key: "layout", label: "Detecting layout grid" },
+   { key: "fields", label: "Identifying input fields" },
+   { key: "ordering", label: "Preparing voice checklist" },
+@@ -120,9 +120,13 @@ export function useProcessing() {
+ 
+       const result = await analyzeForm(blob, form.sourceType, (progress) => {
+         setStage(progress.stage);
+-        if (progress.stage === "ocr" && progress.page && progress.pageCount) {
+-          const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
+-          setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
++        if (progress.stage === "ocr") {
++          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
++          if (progress.page && progress.pageCount) {
++            setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
++          } else {
++            setDetail(pct ? `processing securely with Sarvam AI — ${pct}` : "sending to Sarvam AI");
++          }
+         } else {
+           setDetail("");
+         }
+diff --git a/form-test/Original/Unfilled/Swaram Stress Test Form 1 Page.pdf b/form-test/Original/Unfilled/Swaram Stress Test Form 1 Page.pdf
+new file mode 100644
+index 0000000..291b61c
+--- /dev/null
++++ b/form-test/Original/Unfilled/Swaram Stress Test Form 1 Page.pdf	
+@@ -0,0 +1,46 @@
++EMBLEM                                  DIRECTORATE OF COLLEGIATE EDUCATION                                                                  Affix recent
++                                                                                                                                            passport size
++                              MERIT-CUM-MEANS SCHOLARSHIP                                                                                 PHOTOGRAPH
++                                                                                                                                           (3.5 x 4.5 cm)
++                                        COMPOSITE APPLICATION FORM                                                                          Do not staple
++
++                                                       Academic Year 2026 - 2027                                                  FOR OFFICE USE ONLY
++                                                                                                                                  Registration No.
++                                  Form No. SMS/2026/A Last date for submission: 31 August 2026
++                                                                                                                                  Date received: __ / __ / ____
++INSTRUCTIONS TO THE APPLICANT
++
++1. Fill the form in BLOCK LETTERS using black or blue ink. Write one letter per box where boxes are provided.
++2. Do not overwrite. Strike out and initial any correction. Forms bearing correction fluid will be rejected.
++3. Fields marked * are mandatory. Write 'NA' where a field does not apply. Do not leave any field blank.
++4. Enclose all documents listed in Section 4.2, self-attested, arranged in the order shown.
++
++SECTION 1 | PERSONAL DETAILS
++
++1.1 Full Name of Applicant *         exactly as printed on the SSLC certificate
++
++One letter per box. Leave one box blank between words. Do not use initials.
++
++1.2 Date of Birth *               /      /                                       1.3 Gender *                  Male               Female  Other
++
++                          DD         MM     YYYY                                                               encircle one only
++
++1.4 Father's / Guardian's Name *
++
++1.5 Mother's Name *
++
++1.6 Community / Category *                  General        OBC                   SC   ST                       EWS
++
++1.7 Aadhaar Number *
++1.8 PAN if issued
++1.9 Mobile Number *
++
++1.10 Email Address *
++1.11 Permanent Address *
++
++PIN Code                                    District                                                           State
++
++1.12 Is your address for correspondence the same as 1.11?                        Yes  No                       if No, complete Annexure A on page 3
++
++Form No. SMS/2026/A                                                                                                                                  Page 1 of 4
++
+diff --git a/lib/analysis/analyzeForm.ts b/lib/analysis/analyzeForm.ts
+index 2eb7404..5238621 100644
+--- a/lib/analysis/analyzeForm.ts
++++ b/lib/analysis/analyzeForm.ts
+@@ -2,7 +2,7 @@
+  * Form analysis pipeline. Everything runs in the browser:
+  *
+  *   PDF -> AcroForm?  -> yes: read fields via pdf-lib (no OCR)
+- *                     -> no:  render pages (pdf.js) -> OCR (tesseract.js)
++ *                     -> no:  Sarvam Document Intelligence -> render pages (pdf.js)
+  *                             -> shapes (opencv.js, best-effort)
+  *                             -> keyword dictionary matching
+  *                             -> column clustering + reading order
+@@ -12,10 +12,11 @@ import type { BBox, FormField, PageDim } from "../types";
+ import { newId } from "../types";
+ import { detectAcroform, extractAcroformFields } from "../pdf/acroformDetector";
+ import { loadPdfDocument, renderPageToCanvas, imageBlobToCanvas } from "../pdf/pdfReader";
+-import { recognizeCanvas, type OcrLine } from "../ocr/tesseractEngine";
+-import { detectShapes, loadOpenCv, preprocessForOcr, type DetectedShape } from "../vision/shapeDetector";
++import type { OcrLine } from "../ocr/tesseractEngine";
++import { detectShapes, loadOpenCv, type DetectedShape } from "../vision/shapeDetector";
+ import { matchLabel, normalizeLabel, isNonFillableLabel } from "../matching/keywordDictionary";
+ import { orderFields } from "../vision/fieldClusterer";
++import { runSarvamDigitize, sarvamPageToLines } from "./sarvamApi";
+ 
+ export type AnalysisStage =
+   | "reading"      // opening the file
+@@ -59,18 +60,20 @@ export async function analyzeForm(
+       onProgress({ stage: "ordering", pct: 1 });
+       return { isAcroForm: true, fields, pageDims, pageCount, shapesUnavailable: false };
+     }
+-    return analyzeScannedPdf(bytes, onProgress);
++    return analyzeScannedPdf(blob, bytes, onProgress);
+   }
+ 
+   return analyzeImage(blob, onProgress);
+ }
+ 
+ async function analyzeScannedPdf(
++  blob: Blob,
+   bytes: ArrayBuffer,
+   onProgress: (progress: AnalysisProgress) => void,
+ ): Promise<AnalysisResult> {
+   // Start warming OpenCV while pdf.js renders.
+   const cvWarmup = loadOpenCv();
++  const sarvam = await runSarvamDigitize(blob, "pdf", onProgress);
+ 
+   const pdf = await loadPdfDocument(bytes);
+   const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+@@ -82,11 +85,6 @@ async function analyzeScannedPdf(
+     const rendered = await renderPageToCanvas(pdf, pageIndex + 1);
+     pageDims.push({ width: rendered.pageWidthPts, height: rendered.pageHeightPts });
+ 
+-    onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct: 0 });
+-    const ocr = await recognizeCanvas(rendered.canvas, (pct) =>
+-      onProgress({ stage: "ocr", page: pageIndex + 1, pageCount, pct }),
+-    );
+-
+     onProgress({ stage: "layout", page: pageIndex + 1, pageCount });
+     const cv = await cvWarmup;
+     let shapes: DetectedShape[] = [];
+@@ -96,9 +94,10 @@ async function analyzeScannedPdf(
+       shapesUnavailable = true;
+     }
+     onProgress({ stage: "fields", page: pageIndex + 1, pageCount });
++    const lines = sarvamPageToLines(sarvam.pages[String(pageIndex + 1)], rendered.canvas.width, rendered.canvas.height);
+     allFields.push(
+       ...await inferFieldsFromPage(
+-        mergeLinesIntoRows(ocr.lines),
++        mergeLinesIntoRows(lines),
+         shapes,
+         rendered.canvas.width,
+         rendered.canvas.height,
+@@ -127,13 +126,7 @@ async function analyzeImage(
+ ): Promise<AnalysisResult> {
+   const cvWarmup = loadOpenCv();
+   const canvas = await imageBlobToCanvas(blob);
+-
+-  onProgress({ stage: "ocr", page: 1, pageCount: 1, pct: 0 });
+-  // Photos benefit from lighting normalization before OCR (no-op without OpenCV).
+-  const ocrCanvas = await preprocessForOcr(canvas);
+-  const ocr = await recognizeCanvas(ocrCanvas, (pct) =>
+-    onProgress({ stage: "ocr", page: 1, pageCount: 1, pct }),
+-  );
++  const sarvam = await runSarvamDigitize(blob, "image", onProgress);
+ 
+   onProgress({ stage: "layout" });
+   const cv = await cvWarmup;
+@@ -146,7 +139,8 @@ async function analyzeImage(
+   }
+ 
+   onProgress({ stage: "fields" });
+-  const fields = await inferFieldsFromPage(mergeLinesIntoRows(ocr.lines), shapes, canvas.width, canvas.height, 0, canvas);
++  const lines = sarvamPageToLines(sarvam.pages["1"], canvas.width, canvas.height);
++  const fields = await inferFieldsFromPage(mergeLinesIntoRows(lines), shapes, canvas.width, canvas.height, 0, canvas);
+ 
+   onProgress({ stage: "ordering" });
+   return {
+@@ -290,6 +284,65 @@ function groupsLookLikeOptions(groups: WordGroup[]): boolean {
+   );
+ }
+ 
++const OPTION_MARKER = /[☐☑☒□○◯◉●]/g;
++
++/** Sarvam preserves checkbox/radio glyphs in text blocks; use them as the
++ * source of truth for option labels instead of guessing from nearby boxes. */
++function markedOptions(text: string): string[] {
++  const values: string[] = [];
++  const marker = new RegExp(OPTION_MARKER.source, "g");
++  while (marker.exec(text)) {
++    const next = text.slice(marker.lastIndex).search(OPTION_MARKER);
++    const end = next < 0 ? text.length : marker.lastIndex + next;
++    const value = cleanLabelText(text.slice(marker.lastIndex, end))
++      .replace(/\b(encircle|tick|choose|select)\b.*$/i, "")
++      .trim();
++    if (value.length >= 2) values.push(value);
++  }
++  return values;
++}
++
++function markedOptionsNear(lines: OcrLine[], line: OcrLine): string[] {
++  const values = markedOptions(line.text);
++  for (const candidate of lines) {
++    if (candidate === line || candidate.bbox.x0 < line.bbox.x1 - 4) continue;
++    if (!overlapY(candidate.bbox.y0, candidate.bbox.y1, line.bbox.y0 - 8, line.bbox.y1 + 8)) continue;
++    values.push(...markedOptions(candidate.text));
++  }
++  return [...new Set(values)];
++}
++
++function choiceGroups(values: string[], line: OcrLine): WordGroup[] {
++  const width = (line.bbox.x1 - line.bbox.x0) / values.length;
++  return values.map((text, index) => {
++    const x0 = line.bbox.x0 + width * index;
++    const x1 = x0 + width;
++    return {
++      text,
++      x0,
++      x1,
++      words: [{ text, confidence: line.confidence, bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 } }],
++    };
++  });
++}
++
++/**
++ * A row of many adjacent squares is a comb (one character per cell), not a
++ * multiple-choice control. Known identity fields are combs even when their
++ * cells are grouped with larger visual gaps (for example Aadhaar 4-4-4).
++ */
++function isCombRow(row: DetectedShape[], label: string): boolean {
++  const normalized = normalizeLabel(label);
++  return (
++    row.length >= 7 ||
++    /\b(full name|name of applicant|aadhaar|aadhar|pan|mobile|pin code|date of birth)\b/.test(normalized)
++  );
++}
++
++function isNumberedQuestion(text: string): boolean {
++  return /^\s*\d+(?:\.\d+)+\s+/.test(text);
++}
++
+ export async function inferFieldsFromPage(
+   lines: OcrLine[],
+   shapes: DetectedShape[],
+@@ -315,7 +368,10 @@ export async function inferFieldsFromPage(
+     );
+   };
+ 
+-  const checkboxes = shapes.filter((s) => s.kind === "checkbox" && !insideAWord(s));
++  // Administrative fields in the top-right of a form (registration number,
++  // date received) are not applicant questions. Ignore their cell geometry.
++  const inOfficeOnlyArea = (s: DetectedShape) => s.x > pageW * 0.72 && s.y < pageH * 0.3;
++  const checkboxes = shapes.filter((s) => s.kind === "checkbox" && !insideAWord(s) && !inOfficeOnlyArea(s));
+   const writables = shapes.filter((s) => s.kind === "line" || s.kind === "box");
+   /** Vertical bands already consumed by a choice row (avoid duplicates). */
+   const takenBands: { y0: number; y1: number }[] = [];
+@@ -392,11 +448,39 @@ export async function inferFieldsFromPage(
+     const dict = labelLine ? matchLabel(labelText) : null;
+     if (isNonFillableLabel(labelText)) continue;
+ 
++    if (isCombRow(row, labelText)) {
++      const x0 = Math.min(...row.map((box) => box.x));
++      const x1 = Math.max(...row.map((box) => box.x + box.w));
++      fields.push({
++        id: newId(),
++        label: dict?.label ?? cleanLabelText(labelText),
++        // Keep real dates as dates in the conversation and typed UI, while
++        // combLength still tells the PDF writer to place one character/cell.
++        type: dict?.type === "date" ? "date" : "comb",
++        combLength: row.length,
++        page: pageIndex,
++        bbox: toFraction(x0, rowTop, x1 - x0, rowBottom - rowTop, pageW, pageH),
++        order: fields.length,
++        confidence: Math.round(labelLine?.confidence ?? 70),
++        source: "ocr",
++        profileKey: dict?.profileKey,
++        sensitive: dict?.sensitive,
++        value: "",
++        status: "pending",
++      });
++      row.forEach((box) => usedShapes.add(box));
++      takenBands.push({ y0: rowTop, y1: rowBottom });
++      continue;
++    }
++
++    const explicitOptions = labelLine ? markedOptionsNear(lines, labelLine) : [];
++    const resolvedOptions = explicitOptions.length === row.length ? explicitOptions : options;
++
+     fields.push({
+       id: newId(),
+       label: dict?.label ?? cleanLabelText(labelText),
+       type: "choice",
+-      options,
++      options: resolvedOptions,
+       optionBboxes: row.map((box) => toFraction(box.x, box.y, box.w, box.h, pageW, pageH)),
+       page: pageIndex,
+       bbox: toFraction(row[0].x, row[0].y, row[0].w, row[0].h, pageW, pageH),
+@@ -422,6 +506,19 @@ export async function inferFieldsFromPage(
+     const lineHeight = Math.max(line.bbox.y1 - line.bbox.y0, 10);
+     if (inTakenBand(line.bbox.y0, line.bbox.y1)) continue;
+ 
++    // Radio/checkbox labels can be read directly from Sarvam's preserved
++    // glyphs, including a neighbouring short block such as "○ Other".
++    const explicitOptions = markedOptionsNear(lines, line);
++    if (explicitOptions.length >= 2) {
++      const markerAt = raw.search(OPTION_MARKER);
++      const labelText = cleanLabelText(markerAt >= 0 ? raw.slice(0, markerAt) : raw);
++      const dict = matchLabel(labelText);
++      if (labelText && !isNonFillableLabel(labelText)) {
++        pushChoice(labelText, dict, choiceGroups(explicitOptions, line), line.bbox.y0, line.bbox.y1, line.confidence);
++        continue;
++      }
++    }
++
+     // "(tick one)" style headers: the next line holds the options.
+     if (/\b(tick|choose|select)\b.*\b(one|any)\b|\(tick/i.test(raw)) {
+       const headerLabel = raw
+@@ -540,7 +637,10 @@ export async function inferFieldsFromPage(
+       return sameRow || below;
+     });
+ 
+-    if (!dict && !endsWithColon && !hasUnderscores && !shape) continue;
++    // Sarvam retains instructions as ordinary paragraph blocks. A free-form
++    // sentence is only a field when it has a dictionary match, a label marker,
++    // or a numbered form-question prefix; geometry alone is not enough.
++    if (!dict && !endsWithColon && !hasUnderscores && !isNumberedQuestion(raw)) continue;
+     if (!dict && labelWords.length > 8) continue;
+     if (fields.some((f) => labelsEqual(f.label, labelPart) || (dict && f.label === dict.label))) continue;
+ 
+@@ -588,7 +688,7 @@ export async function inferFieldsFromPage(
+     });
+   }
+ 
+-  // --- Post-processing: Snapping & Crop Refinement ---
++  // --- Post-processing: snap inferred answers to detected writable shapes ---
+   const medianLineHeight = (() => {
+     const heights = lines.map((l) => l.bbox.y1 - l.bbox.y0).filter((h) => h > 0);
+     if (heights.length === 0) return 14;
+@@ -601,72 +701,12 @@ export async function inferFieldsFromPage(
+       if (field.type !== "checkbox" && field.bbox) {
+         field.bbox = snapToNearestShape(field.bbox, shapes, pageW, pageH, medianLineHeight);
+       }
+-
+-      if (field.confidence < 85 && field.source === "ocr" && !field.profileKey && field.bbox) {
+-        const labelBBox = {
+-          x0: Math.max(0, (field.bbox.x - 0.28) * pageW),
+-          y0: field.bbox.y * pageH - 2,
+-          x1: field.bbox.x * pageW - 4,
+-          y1: (field.bbox.y + field.bbox.h) * pageH + 2,
+-        };
+-        const refinedLabel = await refineLabelWithCrop(canvas, labelBBox, field.label);
+-        if (refinedLabel !== field.label) {
+-          field.label = refinedLabel;
+-          const dict = matchLabel(refinedLabel);
+-          if (dict) {
+-            field.label = dict.label;
+-            field.profileKey = dict.profileKey;
+-            field.sensitive = dict.sensitive;
+-            field.type = dict.type;
+-            if (dict.type === "choice") {
+-              field.options = dict.options;
+-            }
+-          }
+-        }
+-      }
+     }
+   }
+ 
+   return fields.slice(0, 50);
+ }
+ 
+-async function refineLabelWithCrop(
+-  canvas: HTMLCanvasElement,
+-  bbox: { x0: number; y0: number; x1: number; y1: number },
+-  currentText: string,
+-): Promise<string> {
+-  const cropW = bbox.x1 - bbox.x0;
+-  const cropH = bbox.y1 - bbox.y0;
+-  if (cropW <= 10 || cropH <= 5) return currentText;
+-
+-  const pad = 4;
+-  const x = Math.max(0, bbox.x0 - pad);
+-  const y = Math.max(0, bbox.y0 - pad);
+-  const w = Math.min(canvas.width - x, cropW + pad * 2);
+-  const h = Math.min(canvas.height - y, cropH + pad * 2);
+-
+-  const crop = document.createElement("canvas");
+-  crop.width = w;
+-  crop.height = h;
+-  const ctx = crop.getContext("2d");
+-  if (!ctx) return currentText;
+-
+-  ctx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+-
+-  try {
+-    const ocr = await recognizeCanvas(crop, undefined, { psm: 7 });
+-    const refined = ocr.lines[0]?.text.trim() || "";
+-    const cleaned = cleanLabelText(refined);
+-    if (cleaned.length >= 2 && cleaned.length <= currentText.length * 1.5) {
+-      console.log(`[swaram] Label refined from "${currentText}" to "${cleaned}"`);
+-      return cleaned;
+-    }
+-  } catch (e) {
+-    console.warn("[swaram] Crop OCR refinement failed:", e);
+-  }
+-  return currentText;
+-}
+-
+ function snapToNearestShape(
+   bbox: BBox,
+   shapes: DetectedShape[],
+diff --git a/lib/analysis/sarvamApi.ts b/lib/analysis/sarvamApi.ts
+new file mode 100644
+index 0000000..9a0ccc9
+--- /dev/null
++++ b/lib/analysis/sarvamApi.ts
+@@ -0,0 +1,148 @@
++import { PDFDocument } from "pdf-lib";
++import type { OcrLine, OcrWord } from "../ocr/tesseractEngine";
++import type { AnalysisProgress } from "./analyzeForm";
++
++const POLL_INTERVAL_MS = 2_500;
++const POLL_TIMEOUT_MS = 90_000;
++
++export interface SarvamResult {
++  pages: Record<string, unknown>;
++}
++
++type Coordinates = { x1: number; y1: number; x2: number; y2: number };
++type SarvamBlock = {
++  text?: string;
++  confidence?: number;
++  reading_order?: number;
++  layout_tag?: string;
++  coordinates?: Coordinates;
++};
++
++/** Convert a camera JPEG/PNG to a one-page PDF, the format Sarvam accepts. */
++async function imageToPdf(image: Blob): Promise<File> {
++  const pdf = await PDFDocument.create();
++  const bytes = await image.arrayBuffer();
++  const embedded = image.type === "image/png"
++    ? await pdf.embedPng(bytes)
++    : await pdf.embedJpg(bytes);
++  const page = pdf.addPage([embedded.width, embedded.height]);
++  page.drawImage(embedded, { x: 0, y: 0, width: embedded.width, height: embedded.height });
++  const output = await pdf.save();
++  const outputBuffer = new ArrayBuffer(output.byteLength);
++  new Uint8Array(outputBuffer).set(output);
++  return new File([outputBuffer], "camera-scan.pdf", { type: "application/pdf" });
++}
++
++export async function createSarvamUpload(blob: Blob, sourceType: "pdf" | "image"): Promise<File> {
++  if (sourceType === "image") return imageToPdf(blob);
++  return new File([blob], "form.pdf", { type: "application/pdf" });
++}
++
++export async function runSarvamDigitize(
++  blob: Blob,
++  sourceType: "pdf" | "image",
++  onProgress: (progress: AnalysisProgress) => void,
++): Promise<SarvamResult> {
++  onProgress({ stage: "ocr", pct: 0 });
++  const form = new FormData();
++  form.append("file", await createSarvamUpload(blob, sourceType));
++  const start = await fetch("/api/sarvam/job", { method: "POST", body: form });
++  if (!start.ok) throw new Error("Sarvam could not start document analysis");
++  const { jobId } = (await start.json()) as { jobId?: string };
++  if (!jobId) throw new Error("Sarvam did not return a job identifier");
++
++  const startedAt = Date.now();
++  let progress = 0.08;
++  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
++    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
++    progress = Math.min(0.92, progress + 0.06);
++    onProgress({ stage: "ocr", pct: progress });
++    const response = await fetch(`/api/sarvam/status?job_id=${encodeURIComponent(jobId)}`);
++    if (!response.ok) throw new Error("Sarvam status check failed");
++    const result = (await response.json()) as { status?: string; pages?: Record<string, unknown>; error?: string };
++    if (result.status === "Completed" && result.pages) {
++      onProgress({ stage: "ocr", pct: 1 });
++      return { pages: result.pages };
++    }
++    if (result.status === "Failed" || result.error) throw new Error(result.error || "Sarvam could not analyze this document");
++  }
++  throw new Error("Sarvam analysis timed out. Please try again.");
++}
++
++function isBlock(value: unknown): value is SarvamBlock {
++  return Boolean(value && typeof value === "object" && "text" in value && "coordinates" in value);
++}
++
++function findBlocks(value: unknown): SarvamBlock[] {
++  if (!value || typeof value !== "object") return [];
++  const record = value as Record<string, unknown>;
++  if (Array.isArray(record.blocks)) return record.blocks.filter(isBlock);
++  for (const candidate of Object.values(record)) {
++    const found = findBlocks(candidate);
++    if (found.length) return found;
++  }
++  return [];
++}
++
++function imageDimension(page: unknown, key: "image_width" | "image_height"): number | null {
++  if (!page || typeof page !== "object") return null;
++  const value = (page as Record<string, unknown>)[key];
++  return typeof value === "number" && value > 0 ? value : null;
++}
++
++/**
++ * Sarvam provides reliable coordinates for each text block. It does not expose
++ * per-word boxes in the page JSON, so words are proportionally placed only
++ * within their own real block rectangle; no coordinates are invented outside
++ * that rectangle.
++ */
++export function sarvamPageToLines(page: unknown, canvasWidth: number, canvasHeight: number): OcrLine[] {
++  const width = imageDimension(page, "image_width") ?? canvasWidth;
++  const height = imageDimension(page, "image_height") ?? canvasHeight;
++  const scaleX = canvasWidth / width;
++  const scaleY = canvasHeight / height;
++  const lines: OcrLine[] = [];
++
++  for (const block of findBlocks(page)
++    // Sarvam's image blocks describe the picture in prose (for example,
++    // "a row of empty boxes"). They are not OCR text and must never become
++    // a question; OpenCV supplies their geometry separately.
++    .filter((block) => block.layout_tag !== "image")
++    .sort((a, b) => (a.reading_order ?? 0) - (b.reading_order ?? 0))) {
++    const box = block.coordinates!;
++    const textLines = (block.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
++    if (!textLines.length) continue;
++    const x0 = box.x1 * scaleX;
++    const x1 = box.x2 * scaleX;
++    const y0 = box.y1 * scaleY;
++    const y1 = box.y2 * scaleY;
++    const lineHeight = Math.max((y1 - y0) / textLines.length, 1);
++    const confidence = Math.round((block.confidence ?? 0.8) * ((block.confidence ?? 0.8) <= 1 ? 100 : 1));
++
++    textLines.forEach((text, index) => {
++      const parts = text.split(/\s+/).filter(Boolean);
++      const weights = parts.map((part) => Math.max(part.length, 1));
++      const total = weights.reduce((sum, item) => sum + item, 0) + Math.max(parts.length - 1, 0);
++      let cursor = x0;
++      const words: OcrWord[] = parts.map((part, wordIndex) => {
++        const wordWidth = ((x1 - x0) * weights[wordIndex]) / Math.max(total, 1);
++        const word = {
++          text: part,
++          confidence,
++          bbox: { x0: cursor, y0: y0 + index * lineHeight, x1: cursor + wordWidth, y1: y0 + (index + 1) * lineHeight },
++        };
++        cursor = word.bbox.x1 + (x1 - x0) / Math.max(total, 1);
++        return word;
++      });
++      if (words.length) {
++        lines.push({
++          text,
++          confidence,
++          bbox: { x0, y0: y0 + index * lineHeight, x1, y1: y0 + (index + 1) * lineHeight },
++          words,
++        });
++      }
++    });
++  }
++  return lines;
++}
+diff --git a/lib/matching/keywordDictionary.ts b/lib/matching/keywordDictionary.ts
+index f6438a7..44e1445 100644
+--- a/lib/matching/keywordDictionary.ts
++++ b/lib/matching/keywordDictionary.ts
+@@ -49,8 +49,15 @@ const NON_FILLABLE = [
+   /^photo$/,
+   /\bfor office use\b/,
+   /\boffice use only\b/,
++  /\bregistration no\b/,
++  /\bdate received\b/,
+   /\bdeclaration\b/,
+   /\binstructions?\b/,
++  /\bone letter per box\b/,
++  /\bleave .*blank\b/,
++  /\bdo not use initials\b/,
++  /\bdo not staple\b/,
++  /\blast date for submission\b/,
+   /\bthumb impression\b/,
+   /\bseal\b/,
+   /\battested?\b/,
+diff --git a/lib/pdf/pdfWriter.ts b/lib/pdf/pdfWriter.ts
+index 21506ca..22d1c25 100644
+--- a/lib/pdf/pdfWriter.ts
++++ b/lib/pdf/pdfWriter.ts
+@@ -124,7 +124,7 @@ function drawAnswer(
+ 
+   const text = field.value.trim();
+ 
+-  if (field.type === "comb" && field.combLength) {
++  if (field.combLength) {
+     // Strip spaces that might have been typed, e.g., for Aadhaar "1234 5678" -> "12345678"
+     const chars = text.replace(/\s+/g, "").split("");
+     const cellW = boxW / field.combLength;
+diff --git a/package-lock.json b/package-lock.json
+index 6c911cf..5d3a428 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -13,6 +13,7 @@
+         "@supertone/supertone": "^0.2.3",
+         "@supertone/supertonic": "file:./lib/voice/supertonic",
+         "@techstark/opencv-js": "^5.0.0-release.1",
++        "adm-zip": "^0.6.0",
+         "class-variance-authority": "^0.7.1",
+         "clsx": "^2.1.1",
+         "framer-motion": "^12.42.2",
+@@ -3601,6 +3602,15 @@
+         "acorn": "^6.0.0 || ^7.0.0 || ^8.0.0"
+       }
+     },
++    "node_modules/adm-zip": {
++      "version": "0.6.0",
++      "resolved": "https://registry.npmjs.org/adm-zip/-/adm-zip-0.6.0.tgz",
++      "integrity": "sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=14.0"
++      }
++    },
+     "node_modules/agent-base": {
+       "version": "6.0.2",
+       "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
+diff --git a/package.json b/package.json
+index 75a4996..15c1ec1 100644
+--- a/package.json
++++ b/package.json
+@@ -14,6 +14,7 @@
+     "@supertone/supertone": "^0.2.3",
+     "@supertone/supertonic": "file:./lib/voice/supertonic",
+     "@techstark/opencv-js": "^5.0.0-release.1",
++    "adm-zip": "^0.6.0",
+     "class-variance-authority": "^0.7.1",
+     "clsx": "^2.1.1",
+     "framer-motion": "^12.42.2",
+
+`
