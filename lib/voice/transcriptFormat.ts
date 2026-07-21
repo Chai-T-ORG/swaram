@@ -23,7 +23,9 @@ const DIGIT_WORDS: Record<string, string> = {
 
 /** "double five" -> "55", "triple nine" -> "999", digit words -> digits. */
 export function wordsToDigits(raw: string): string {
-  const tokens = raw.toLowerCase().replace(/[-,]/g, " ").split(/\s+/);
+  // Engines punctuate numbers ("7736184696.") — strip everything that isn't
+  // a letter, digit, or space before tokenizing, or the digits are lost.
+  const tokens = raw.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/);
   let out = "";
   let repeat = 1;
   for (const token of tokens) {
@@ -200,13 +202,82 @@ export function editDistance(a: string, b: string): number {
 }
 
 /**
+ * The user spelled a WHOLE multi-word value but the recognizer dropped the
+ * word separators ("twinshatthilakan"). Re-insert the spaces by aligning the
+ * spelled letters against the previously-heard value's letters and projecting
+ * its space positions through the alignment. Returns null when the strings
+ * are too different to be the same value.
+ */
+function projectSpaces(base: string, spelled: string): string | null {
+  const baseLetters = base.toLowerCase().replace(/\s+/g, "");
+  const s = spelled.toLowerCase();
+  if (!baseLetters || !s) return null;
+  if (Math.abs(baseLetters.length - s.length) > Math.max(2, Math.round(baseLetters.length * 0.4))) return null;
+  // Letter indices in `base` that have a space AFTER them.
+  const spaceAfter = new Set<number>();
+  let li = 0;
+  for (const ch of base) {
+    if (/\s/.test(ch)) spaceAfter.add(li);
+    else li += 1;
+  }
+  if (spaceAfter.size === 0) return null;
+
+  const n = baseLetters.length;
+  const m = s.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = 0; i <= n; i++) dp[i][0] = i;
+  for (let j = 0; j <= m; j++) dp[0][j] = j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (baseLetters[i - 1] === s[j - 1] ? 0 : 1),
+      );
+    }
+  }
+  // Backtrace: where does each base-letter boundary land in the spelled
+  // string? Record only the FIRST visit per row (the largest j), so inserted
+  // letters attach to the word on their LEFT — "twinshA|t", not "twinsh|At".
+  const map = new Array<number>(n + 1).fill(-1);
+  map[n] = m;
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    if (map[i] === -1) map[i] = j;
+    if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + (baseLetters[i - 1] === s[j - 1] ? 0 : 1)) {
+      i -= 1; j -= 1;
+    } else if (i > 0 && dp[i][j] === dp[i - 1][j] + 1) {
+      i -= 1;
+    } else {
+      j -= 1;
+    }
+  }
+  map[0] = 0;
+  for (let k = 1; k <= n; k++) if (map[k] === -1) map[k] = map[k - 1];
+
+  const cuts = [...spaceAfter].map((k) => map[k]).sort((a, b) => a - b);
+  let out = "";
+  let prev = 0;
+  for (const c of cuts) {
+    if (c <= prev || c >= m) continue;
+    out += s.slice(prev, c) + " ";
+    prev = c;
+  }
+  out += s.slice(prev);
+  return out.trim();
+}
+
+/**
  * Merge a spelled correction into a previously-heard value, so the user can
  * fix just the wrong word instead of re-spelling everything:
  *
  *   heard "Twinsha T Tilkan", spelled "thilakan" -> "Twinsha T Thilakan"
  *
  * A spelled string containing a space is a full re-spell and replaces the
- * whole value. Otherwise the closest word of `heard` (by edit distance) is
+ * whole value. A single-word spelling as long as the whole value is a full
+ * re-spell whose separators were lost — spaces are re-projected from the
+ * heard value. Otherwise the closest word of `heard` (by edit distance) is
  * replaced — but only when it's actually similar; a completely different
  * spelling also replaces the whole value.
  */
@@ -218,6 +289,13 @@ export function mergeSpelledCorrection(heard: string, spelled: string): string {
   if (/\s/.test(fix)) return fix; // multi-word spelling = full re-spell
   const words = base.split(/\s+/);
   if (words.length < 2) return fix;
+
+  // A "single word" as long as the entire value = a full re-spell with the
+  // separators eaten by the recognizer. Recover the spaces by alignment.
+  if (fix.length >= Math.round(base.replace(/\s+/g, "").length * 0.66)) {
+    const projected = projectSpaces(base, fix);
+    if (projected) return projected;
+  }
 
   let bestIdx = -1;
   let bestDist = Infinity;
@@ -369,15 +447,33 @@ const MONTHS: Record<string, number> = {
   jan: 1, feb: 2, mar: 3, apr: 4, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
 };
 
+/** Spoken ordinal day words ("twenty fifth") -> day numbers. */
+const ORDINAL_DAYS: Record<string, number> = {
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7,
+  eighth: 8, ninth: 9, tenth: 10, eleventh: 11, twelfth: 12, thirteenth: 13,
+  fourteenth: 14, fifteenth: 15, sixteenth: 16, seventeenth: 17, eighteenth: 18,
+  nineteenth: 19, twentieth: 20, thirtieth: 30,
+};
+// Numeric keys too: the transcript normalizer may already have turned
+// "twenty fifth" into "20 fifth" before this runs.
+const ORDINAL_TENS: Record<string, number> = { twenty: 20, thirty: 30, "20": 20, "30": 30 };
+
 /** Spoken date -> DD/MM/YYYY (day-first, Indian convention). */
 export function formatDate(raw: string): string {
-  const cleaned = raw
+  let cleaned = raw
     .toLowerCase()
     .replace(/(\d+)(st|nd|rd|th)\b/g, "$1")
     .replace(/\bof\b/g, " ")
-    .replace(/,/g, " ")
+    .replace(/[.,]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+  // "twenty fifth" -> 25, "thirtieth" -> 30 — STT often leaves ordinal words
+  // that the number-word normalizer doesn't touch.
+  cleaned = cleaned.replace(
+    /\b(?:(twenty|thirty|20|30)[\s-])?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth)\b/g,
+    (_m, tens, ord) => String((tens ? ORDINAL_TENS[tens] : 0) + ORDINAL_DAYS[ord]),
+  );
 
   // Numeric: 25/5/2002, 25-05-02, "25 5 2002"
   const numeric = cleaned.match(/^(\d{1,2})[\s/.-](\d{1,2})[\s/.-](\d{2,4})$/);
@@ -424,6 +520,20 @@ const NAME_KEYS = new Set([
   "city", "state", "nationality", "religion", "place", "blood_group",
 ]);
 
+/** Fields whose value is an alphanumeric code (roll no, registration no…). */
+export const ID_FIELD_RE = /roll|registration|application|enrol|admission|licen[cs]e|reference|token no/;
+
+/** "ab 12 c 3456." -> "AB12C3456" — codes are written tight and uppercase. */
+export function formatIdCode(raw: string): string {
+  const cleaned = raw
+    .toUpperCase()
+    .replace(/\b(?:DASH|HYPHEN|MINUS)\b/g, "-")
+    .replace(/\bSLASH\b/g, "/")
+    .replace(/[.,:;'"”“]+/g, "")
+    .replace(/\s+/g, "");
+  return cleaned || raw.trim();
+}
+
 /** Format a raw transcript for a specific field. */
 export function formatAnswer(raw: string, field: Pick<FormField, "type" | "profileKey" | "sensitive" | "label">): string {
   const trimmed = raw.trim();
@@ -437,8 +547,17 @@ export function formatAnswer(raw: string, field: Pick<FormField, "type" | "profi
   if (key === "phone" || /(mobile|phone|contact|whatsapp)/.test(label)) return formatPhone(trimmed);
   if (field.sensitive && /(aadhaar|aadhar|adhar|uid)/.test(label)) return formatAadhaar(trimmed);
   if (key === "pincode" || /pin\s?code|postal/.test(label)) return formatPincode(trimmed);
+  if (ID_FIELD_RE.test(label)) return formatIdCode(trimmed);
   if (key === "address" || /address/.test(label)) return formatAddress(trimmed);
-  if (NAME_KEYS.has(key) || /\bname\b/.test(label)) return titleCase(spokenPunctuation(trimmed));
+  if (NAME_KEYS.has(key) || /\bname\b/.test(label)) {
+    // Engines punctuate initials differently ("K.M.", "K. M", "K M") — the
+    // printed form wants bare spaced letters: "Tejas K M".
+    const deDotted = spokenPunctuation(trimmed)
+      .replace(/\b(\p{L})\.(?=\s|\p{L}|$)/gu, "$1 ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return titleCase(deDotted);
+  }
   if (key === "annual_income" || /income/.test(label)) {
     const digits = wordsToDigits(trimmed);
     return digits.length >= 4 ? Number(digits).toLocaleString("en-IN") : sentenceCase(trimmed);

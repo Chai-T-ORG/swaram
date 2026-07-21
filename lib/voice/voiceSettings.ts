@@ -18,11 +18,15 @@ export type TtsProvider = "system" | "cloud" | "local" | "google";
  * "azure-stream" — cloud Azure Speech, real-time streaming SDK: partial results,
  *                  auto language detection, phrase-list biasing. Falls back to
  *                  the Azure REST path on any failure. (Opt-in / beta.)
+ * "sarvam-stream" — cloud Sarvam Saaras v3 over WebSocket: server-side neural
+ *                  VAD endpointing, ~150 ms finals after speech ends. Needs the
+ *                  local relay (scripts/sarvam-ws-relay.mjs); falls back to the
+ *                  clip-based Sarvam path on any failure. (Opt-in / beta.)
  * "whisper"      — on-device Whisper (private, offline, heavier)
  * "native"       — the browser's built-in recognition (instant, no download)
  * "auto"         — groq if configured & online, else whisper if ready, else native
  */
-export type SttProvider = "groq" | "sarvam" | "azure" | "azure-stream" | "whisper" | "native" | "auto";
+export type SttProvider = "groq" | "sarvam" | "azure" | "azure-stream" | "sarvam-stream" | "whisper" | "native" | "auto";
 /**
  * "ptt"        — push-to-talk: capture only while the user holds space / taps
  *                the mic. Reliable in noisy/crowded rooms; nothing is recorded
@@ -137,5 +141,5 @@ export function migrateVoiceSettings(): void {
 }
 
 function isValidSttProvider(provider: any): provider is SttProvider {
-  return ["groq", "sarvam", "azure", "azure-stream", "whisper", "native", "auto"].includes(provider);
+  return ["groq", "sarvam", "azure", "azure-stream", "sarvam-stream", "whisper", "native", "auto"].includes(provider);
 }

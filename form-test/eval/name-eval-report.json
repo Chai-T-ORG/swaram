@@ -1,0 +1,104 @@
+{
+  "at": "2026-07-20T07:06:59.208Z",
+  "n": 30,
+  "coldHit": 14,
+  "warmHit": 29,
+  "misses": [
+    {
+      "name": "Rajider Singh",
+      "cold": "Raji Thar Singh",
+      "warm": "Rajider Singh",
+      "warmOk": true
+    },
+    {
+      "name": "Pooja Maindai",
+      "cold": "Pooja Mendi",
+      "warm": "Pooja Maindai",
+      "warmOk": true
+    },
+    {
+      "name": "Mairi Jeems",
+      "cold": "Mary James",
+      "warm": "Mary James",
+      "warmOk": false
+    },
+    {
+      "name": "Varsha Bagalia",
+      "cold": "Varsha Baglia",
+      "warm": "Varsha Bagalia",
+      "warmOk": true
+    },
+    {
+      "name": "Zile Singh",
+      "cold": "Zail Singh",
+      "warm": "Zile Singh",
+      "warmOk": true
+    },
+    {
+      "name": "Permeshwar Parsad",
+      "cold": "Parameshwar Prasad",
+      "warm": "Permeshwar Parsad",
+      "warmOk": true
+    },
+    {
+      "name": "Sujeet Kumar Jha",
+      "cold": "Sujit Kumar Jhaan",
+      "warm": "Sujeet Kumar Jha",
+      "warmOk": true
+    },
+    {
+      "name": "Rimmi Kaur",
+      "cold": "Rimmi Kaul",
+      "warm": "Rimmi Kaur",
+      "warmOk": true
+    },
+    {
+      "name": "Masuma Khatun Manju",
+      "cold": "Masuma Khatoon Manju",
+      "warm": "Masuma Khatun Manju",
+      "warmOk": true
+    },
+    {
+      "name": "Moh Javed",
+      "cold": "Mohan Javed",
+      "warm": "Moh Javed",
+      "warmOk": true
+    },
+    {
+      "name": "Meenat Khan",
+      "cold": "Meenath Khan",
+      "warm": "Meenat Khan",
+      "warmOk": true
+    },
+    {
+      "name": "Rawana",
+      "cold": "Raavan",
+      "warm": "Rawana",
+      "warmOk": true
+    },
+    {
+      "name": "Dharmender",
+      "cold": "dharmendra",
+      "warm": "Dharmender",
+      "warmOk": true
+    },
+    {
+      "name": "Maryana",
+      "cold": "Mariana",
+      "warm": "Maryana",
+      "warmOk": true
+    },
+    {
+      "name": "Mahvish",
+      "cold": "Mehvish",
+      "warm": "Mahvish",
+      "warmOk": true
+    },
+    {
+      "name": "Satyender",
+      "cold": "Satyendra",
+      "warm": "Satyender",
+      "warmOk": true
+    }
+  ]
+}

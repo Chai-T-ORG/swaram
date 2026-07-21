@@ -1,0 +1,502 @@
+================================================================================
+SWARAM — COMPLETE CODEBASE & VOICE-STACK DOSSIER
+================================================================================
+Generated: 19 July 2026, from branch `onboarding-animations` (repo: swaram)
+Purpose:  Input document for deep research into making Swaram's speech-to-text
+          (and secondarily text-to-speech) world-class — comparable to the
+          ChatGPT voice experience — using the APIs the project already pays
+          for (Sarvam AI, Groq, Azure Speech), plus any additional services
+          worth adopting.
+
+--------------------------------------------------------------------------------
+1. WHAT SWARAM IS
+--------------------------------------------------------------------------------
+Swaram is a voice-first, accessibility-focused Progressive Web App that helps
+blind and low-vision users in India fill out paper and PDF forms entirely by
+voice. The user uploads a PDF or photographs a paper form; the app detects the
+fillable fields (AcroForm extraction or OCR + computer vision), then conducts a
+spoken question-and-answer session ("What is your full name?" … "I heard:
+Twinsha T Thilakan. That's T, W, I, N, S, H, A … Correct?"), and finally writes
+the answers back into the original PDF, visually unchanged.
+
+Core product truths that shape every technical decision:
+- The user often CANNOT see the screen. Speech is the primary UI; errors that a
+  sighted user would catch visually are catastrophic here. STT accuracy on
+  Indian proper nouns (names, towns) is THE quality bottleneck.
+- Target locale: India. Languages currently wired: en-IN (default), hi-IN,
+  ml-IN, fr-FR. Indian English accents, Hindi/Malayalam in native script.
+- Devices: low-end Android phones and iOS Safari must work. This forbids
+  WebGPU-only paths and drives the "cloud MP3 through an <audio> element" TTS
+  design.
+- Privacy: forms and profiles stay on-device (IndexedDB/localStorage). Audio
+  transits the app's own Next.js API routes to STT vendors but is never stored.
+  High-sensitivity IDs (Aadhaar, PAN, passport, voter ID) are never persisted
+  to any profile and never auto-filled.
+- Cost: the user personally pays for the Sarvam API key. Per-clip billing
+  discipline is engineered in (single-engine everyday path, ensemble only on
+  hinted clips, aggressive caching).
+
+--------------------------------------------------------------------------------
+2. TECH STACK
+--------------------------------------------------------------------------------
+- Next.js 16.2.10 (App Router, API routes with runtime "nodejs"), React 19.2.4,
+  TypeScript 5, Tailwind CSS 4. PWA (manifest + service worker sw.js).
+- Voice/AI deps: microsoft-cognitiveservices-speech-sdk 1.50 (Azure streaming),
+  kokoro-js 1.2.1 (Kokoro-82M ONNX TTS, client + server), onnxruntime-web,
+  @huggingface/transformers (Whisper on-device via Web Worker), tesseract.js 5
+  (OCR, self-hosted WASM), @techstark/opencv-js (shape detection), pdfjs-dist,
+  pdf-lib, fuse.js (fuzzy label matching), @supabase/supabase-js (opt-in
+  profile backup only). framer-motion, ogl (visuals).
+- Server-held env keys (all set in .env.local today):
+    GROQ_API_KEY          — Groq Whisper STT + Llama LLM (chat/fusion)
+    AZURE_SPEECH_KEY      — Azure Speech STT + TTS
+    AZURE_SPEECH_REGION   — default "centralindia"
+    SARVAM_API_KEY        — Sarvam Saaras STT, Bulbul TTS, transliteration
+    KOKORO_TTS            — server Kokoro toggle ("off" disables server TTS model)
+    GEMINI_API_KEY        — NOT set; the Gemini ensemble arm is dormant.
+- Model defaults (overridable by env):
+    GROQ_STT_MODEL        = whisper-large-v3-turbo
+    GROQ_LLM_MODEL        = llama-3.3-70b-versatile   (intent routing, fusion)
+    GROQ_LLM_FAST_MODEL   = llama-3.1-8b-instant      (fast transcript cleanup)
+    GROQ_FUSION_MODEL     = (defaults to GROQ_LLM_MODEL)
+    GEMINI_STT_MODEL      = gemini-2.0-flash          (dormant)
+    SARVAM STT model      = saaras:v3 (Saarika v2.5 is deprecated)
+    SARVAM TTS model      = bulbul:v3, speaker "priya" (SARVAM_TTS_SPEAKER)
+
+--------------------------------------------------------------------------------
+3. REPOSITORY LAYOUT (routes and modules)
+--------------------------------------------------------------------------------
+app/
+  page.tsx                       Home
+  upload/  scan/  history/  profile/  design-system/
+  processing/[formId]/  fill/[formId]/  review/[formId]/
+  preview/[formId]/  complete/[formId]/
+  api/transcribe/route.ts        STT proxy + multi-engine ensemble (see §6)
+  api/tts/route.ts               TTS engine chain + caches (see §8)
+  api/chat/route.ts              Groq LLM proxy (intents, correction, fusion-adjacent)
+  api/transliterate/route.ts     Sarvam transliteration proxy (name pronunciation)
+  api/speech/token/route.ts      Azure STS token broker (10-min tokens for the SDK)
+
+components/
+  voice/VoiceProvider.tsx        Headless voice engine: context, transcript routing,
+                                 global commands, PTT wiring, model warm-loading
+  voice/VoiceControl.tsx, ConsentDialog.tsx
+  screens/useFillSession.ts      THE fill-loop dialogue state machine (see §7)
+  screens/use*.ts                Logic hooks per screen (upload, scan, processing,
+                                 review, preview, complete, history, profile)
+  mobile/* and desktop/*         Two full presentation trees; DeviceProvider picks.
+
+lib/voice/                       (the entire voice stack — detailed in §5–§9)
+  micManager.ts vadCapture.ts wavEncode.ts pushToTalk.ts earcons.ts
+  speechToText.ts groqSTT.ts azureStreamSTT.ts whisperSTT.ts whisperWorker.ts
+  textToSpeech.ts kokoroServer.ts voiceSettings.ts modelManager.ts
+  transcriptNormalizer.ts transcriptFormat.ts fillCommands.ts intlCommands.ts
+  actionRegistry.ts llm.ts nameDictionary.ts transliterate.ts
+
+lib/analysis/ lib/matching/ lib/ocr/ lib/pdf/ lib/vision/   Form ingestion (see §4)
+lib/storage/                    IndexedDB history, localStorage profile, Supabase opt-in
+scripts/e2e.mjs, scan-sim.mjs, smoke.test.ts                Test harnesses
+form-test/                      A stress-test form + parsed/filled JSON fixtures
+
+--------------------------------------------------------------------------------
+4. FORM INGESTION PIPELINE (context; not the research focus)
+--------------------------------------------------------------------------------
+Everything runs in the browser:
+  PDF -> AcroForm? -> yes: extract fields via pdf-lib directly (no OCR)
+                   -> no:  render pages via pdf.js (~1800 px wide) ->
+                           tesseract.js OCR (self-hosted; eng, eng+hin, eng+mal
+                           by UI language) ->
+                           opencv.js shape detection (blank lines, boxes,
+                           checkboxes; best-effort, 13 MB WASM lazy-loaded) ->
+                           keyword-dictionary label matching (Indian form
+                           vocabulary; sensitive IDs flagged) ->
+                           column clustering + reading order.
+  Image (camera scan) -> same OCR path, with OpenCV corner detection +
+                         perspective warp at capture time.
+After analysis, enhanceFields.ts sends the whole field list to the Groq LLM
+once to fix garbled labels, correct field types, write a natural spoken
+question and a format hint per field, and drop non-fillable junk. Geometry is
+always preserved. Fields carry: label, type (text/date/choice/checkbox/comb/
+table/signature), options, bbox (fractional), profileKey, sensitive flag,
+question, help, value, status (pending/answered/autofilled/skipped/unclear).
+Write-back: pdf-lib fills AcroForm fields directly, or draws text into bboxes
+for scanned forms/photos. Storage: IndexedDB ("swaram" DB, forms + files
+stores). Profile auto-fill uses Fuse.js fuzzy matching; forbidden keys
+(aadhaar/pan/passport/voter/…) can never be persisted.
+
+--------------------------------------------------------------------------------
+5. AUDIO CAPTURE LAYER (client)
+--------------------------------------------------------------------------------
+5.1 micManager.ts — singleton getUserMedia. One shared MediaStream for
+    everything (VAD capture, Azure SDK push stream, visualizer). Constraints:
+    echoCancellation, noiseSuppression, autoGainControl all true; sampleRate
+    16000 requested (browsers may ignore). Permission state tracked via the
+    Permissions API + a cookie hint; primeMicIfGranted() reopens silently on
+    reload.
+
+5.2 vadCapture.ts — shared energy-based Voice Activity Detection used by the
+    cloud STT path. ScriptProcessorNode (deprecated API, chosen for universal
+    support), FRAME_SIZE 2048 samples, capture at the hardware's native rate
+    (no client resample for Groq; the vendor resamples properly server-side).
+    Tuning constants:
+      SPEECH_THRESHOLD   0.012 RMS energy
+      MIN_SPEECH_MS      150   (min speech to count as an utterance)
+      SILENCE_FLUSH_MS   500   (end-of-utterance after this much silence)
+      MAX_UTTERANCE_MS   14000 (hard cap)
+      PRE_ROLL_MS        300   (rolling pre-speech buffer, so soft onsets like
+                                the "T" in "Tejas" aren't clipped — clipped
+                                onsets caused Whisper hallucinations such as
+                                "Tejas KM" -> "They just came")
+    Emits one Float32Array per utterance.
+
+5.3 pushToTalk.ts — the DEFAULT interaction mode (micMode "ptt"). Desktop:
+    hold Space or hold the mic panel; touch devices: tap-to-start/tap-to-stop
+    (implemented in VoiceProvider with pointer-event heuristics). Captures via
+    MediaRecorder (webm/opus on Chrome, mp4 on Safari); clips < 300 ms held or
+    < 1500 bytes are discarded as accidental taps. For Azure providers the
+    blob is decoded and re-encoded to 16 kHz mono WAV in the browser
+    (wavEncode.blobToWav16k). With provider "azure-stream", PTT instead runs
+    the streaming recognizer for the duration of the press (live results).
+    Continuous mode (opt-in) uses vadCapture hands-free with a 60 s idle
+    auto-pause for the native engine only.
+
+5.4 wavEncode.ts — linear resampler to 16 kHz mono 16-bit WAV (Azure REST and
+    Sarvam want 16 kHz; hinted/ensemble clips are always sent 16 kHz).
+
+5.5 earcons.ts — WebAudio-generated start/stop/recognized chimes (no assets).
+
+--------------------------------------------------------------------------------
+6. SPEECH-TO-TEXT — ENGINES AND ROUTING
+--------------------------------------------------------------------------------
+6.1 Client-side engine router (lib/voice/speechToText.ts)
+    Provider setting (voiceSettings.sttProvider): "groq" (default) | "sarvam" |
+    "azure" | "azure-stream" | "whisper" | "native" | "auto".
+    Selection/fallback chain at start-listening time:
+      azure-stream  -> Azure Speech SDK streaming (see 6.3); any failure
+                       permanently degrades to the cloud VAD path this session.
+      groq/sarvam/azure/auto -> shared VAD capture posting WAV to
+                       /api/transcribe (see 6.2). First fatal failure (or 3
+                       consecutive) falls back to on-device Whisper if loaded,
+                       else the browser's native Web Speech API.
+      whisper       -> on-device Whisper (see 6.4).
+      native        -> browser SpeechRecognition (continuous, interim results,
+                       maxAlternatives 4; auto-restart on end; Safari/iOS
+                       quirks handled).
+    All engines fan transcripts into one listener pipeline after
+    normalizeTranscript() (see §7.1). Confidence is synthesized: consensus
+    0.99, fusion 0.85, single cloud engine 0.97, Whisper 0.95, native = the
+    engine's own score.
+
+6.2 Server proxy + ensemble (app/api/transcribe/route.ts) — THE CORE
+    POST body: raw audio bytes. Headers:
+      x-language        BCP-47 (default en-IN)
+      x-stt-provider    user's engine choice
+      x-stt-hint        "" | "spell" | "name"   (set per-field by the fill loop)
+      x-field-label     current field label, ≤80 chars (URL-encoded)
+      x-known-names     user's confirmed names, ≤240 chars
+      x-groq-key        optional client-supplied key (demo path)
+    Clips < 1500 bytes return "" immediately. Per-engine fetch timeout 6000 ms.
+
+    EVERYDAY PATH (unhinted clips — one engine, one bill):
+      1. Sarvam Saaras v3 when: key present AND language is in the Saaras set
+         (all 22 scheduled Indian languages + en-IN; en-US/en-GB are mapped to
+         en-IN; fr-FR excluded) AND clip ≤ ~30 s (REST cap) AND (provider ==
+         "sarvam" OR the language is Indic non-English and provider isn't
+         azure). I.e. Indic-language clips are AUTO-PROMOTED to Sarvam.
+         Mode: "verbatim" for spell hints (keeps "T W I N S H A" as letters),
+         "transcribe" otherwise.
+      2. Azure REST (short-audio endpoint, format=simple) when explicitly
+         selected. 16 kHz mono WAV only.
+      3. Groq Whisper large-v3-turbo — the default and the universal fallback.
+         Sent with temperature 0, language = primary subtag, and a contextual
+         prompt: generic form-filling prompt, or a spell/name prompt when
+         hinted (the OpenAI-style "prompt biasing" mechanism).
+
+    ACCURACY PATH (x-stt-hint = "name" or "spell" — the clips that decide
+    whether the printed form is right):
+      Every configured engine transcribes the SAME clip IN PARALLEL:
+        - Sarvam Saaras v3 (verbatim for spell)
+        - Groq Whisper (hint-specific prompt incl. field label + known names)
+        - Azure REST format=detailed -> top-2 N-best hypotheses
+        - Gemini audio-native pass (generateContent with inline WAV + an
+          instruction embedding the field label and known names) — DORMANT,
+          activates when GEMINI_API_KEY is set.
+      Hypotheses are deduped case/punctuation-insensitively:
+        - 0 hypotheses -> ""              (provider "ensemble")
+        - 1 unique     -> done, no LLM    (provider "consensus", conf 0.99)
+        - >1           -> LLM FUSION: Groq llama-3.3-70b reconstructs the
+          intended text from the numbered hypotheses ("generative error
+          correction"), with strict rules: never invent words absent from all
+          hypotheses, never alter digits, proper-case names, snap to a known
+          name when a hypothesis is a close mishearing of one. Rambling
+          replies (longer than 2× the longest hypothesis + 24) are discarded
+          and the first hypothesis is returned instead.
+          (provider "fusion", conf 0.85; alternatives array returned)
+      Rationale (measured): engines fail on DIFFERENT parts of a name — Saaras
+      heard "Twinsha … Tilkan", Whisper "… Tilkan Bhattu", each correct where
+      the other was wrong. Verified end-to-end: a name clip + the personal
+      dictionary produces the exact "Twinsha T Thilakan" in ~1.6 s.
+
+6.3 Azure streaming (lib/voice/azureStreamSTT.ts, opt-in "azure-stream")
+    Real-time recognition via the Speech SDK over a short-lived STS token from
+    /api/speech/token (10-min tokens, server-cached, refreshed every 8 min).
+    Audio is pushed from the SHARED mic stream (the SDK never opens its own
+    mic), downsampled to 16 kHz PCM. Endpointing knobs:
+      Speech_SegmentationSilenceTimeoutMs        500
+      SpeechServiceConnection_InitialSilenceTimeoutMs  8000
+    PhraseListGrammar biasing with up to 180 entries: English command words +
+    the Hindi/Malayalam/French keyword lexicon + the user's confirmed names.
+    Emits interim (recognizing) and final (recognized) results; any failure
+    fires a fallback and the client drops to the REST path. Recognition runs
+    in the user's selected language (no per-utterance auto-detect).
+
+6.4 On-device Whisper (lib/voice/whisperSTT.ts + whisperWorker.ts)
+    @huggingface/transformers pipeline in a Web Worker; model
+    onnx-community/whisper-base.en; WebGPU where available, WASM otherwise
+    (device/dtype chosen by modelManager). Its own VAD: FRAME_SIZE 4096,
+    threshold 0.015, MIN_SPEECH_FRAMES 3, MAX_SILENCE_FRAMES 15, max 10 s
+    buffer, segments < 0.5 s dropped. English-only. Used as the offline/
+    private fallback; ~150 MB download, cached by the browser. modelManager.ts
+    orchestrates download progress/ETA for the setup overlay and upgrades the
+    live session to Whisper mid-run when it finishes loading.
+
+6.5 Native Web Speech API — last-resort fallback; also the "instant" engine
+    while models download. Cloud-processing consent notice shown once on
+    browsers without on-device recognition (processLocally probe).
+
+--------------------------------------------------------------------------------
+7. TRANSCRIPT POST-PROCESSING & THE FILL DIALOGUE
+--------------------------------------------------------------------------------
+7.1 transcriptNormalizer.ts — runs on EVERY transcript from every engine:
+    spoken-punctuation to symbols, number words to digits (Indian scales:
+    lakh, crore), 4+ spoken digits to digit strings, "double/triple five"
+    expansion, email patterns ("at the rate" -> @), address abbreviations,
+    Indian-English fixes (Aadhaar casing, PIN code). Also pickBestAlternative()
+    scores N-best lists against a field-type hint (used by the native engine).
+
+7.2 transcriptFormat.ts — field-aware deterministic formatting:
+      formatAnswer() routes by profileKey/label: email, phone (10-digit),
+      Aadhaar (4-4-4 grouping), PIN code, date -> DD/MM/YYYY (day-first),
+      address (spoken commas, title case), names (title case), income
+      (en-IN locale grouping), default sentence case.
+    Spell mode machinery:
+      LETTER_HOMOPHONES map ("bee"->b, "why"->y, "zed"->z …) — how STT
+      usually mishears spoken letters.
+      spellTokensToText(): parses letter-by-letter dictation incl. digits,
+      "double/triple", "space"/"dot"/"dash"/"at", NATO-style anchors
+      ("A for apple" emits just "a"), and expands vowelless consonant
+      clusters ("twn") back into letters (STT merges fast-spoken letters).
+      mergeSpelledCorrection(): splices a spelled word into the previously
+      heard value by edit distance — user re-spells only the wrong word
+      ("Twinsha T Tilkan" + "thilakan" -> "Twinsha T Thilakan"). A spelled
+      string with spaces replaces the whole value.
+      applySpokenEdit(): IVR-style surgical edits during confirmation —
+      "change K to C", "the third letter is E", "replace tilkan with
+      thilakan" (ordinals, case preservation, closest-word matching).
+      editDistance(): plain Levenshtein.
+
+7.3 nameDictionary.ts — personal name memory (localStorage, cap 40 names).
+    Every confirmed name-field value is remembered (rememberName). On a new
+    transcript, snapToKnownName() deterministically corrects toward stored
+    names (whole-value or word-by-word, edit distance ≤ ~34% of length) —
+    a hit skips the LLM entirely. knownNames() feeds the Azure phrase list,
+    the Whisper/Gemini prompts, and the fusion/correction LLM context.
+
+7.4 llm.ts — Groq-backed helpers via /api/chat (all fail soft):
+      correctTranscript(): the "smart lane" — fast model (llama-3.1-8b-
+      instant, ~150 ms) cleans ONE answer given field label/kind/help, with
+      hard rules (never touch digits, never invent, return unchanged when in
+      doubt, snap to known names). Applied ONLY to name/address/free-text
+      fields; digit-bearing and email fields go through deterministic
+      formatting alone ("fast lane") — see smartLane() in useFillSession.
+      interpretCommand()/resolveAction(): map free-form utterances onto the
+      current screen's action registry (constrained classification, temp 0),
+      or answer as chat in the user's language.
+      assist(): answers "what do I put here?" for the current field.
+
+7.5 The fill session (components/screens/useFillSession.ts) — phase machine:
+    loading | start | notice | asking | listening | confirming | typing |
+    paused | done. Key behaviors:
+      - Before asking each field, sets the STT hint: name fields ->
+        setSttFieldHint("name", {label, names: knownNames()}) which triggers
+        the server ensemble for that clip; spell mode -> hint "spell".
+      - Commands recognized in every phase (fillCommands.parseFillCommand):
+        repeat, skip, back, type, pause, help, spell — anchored regexes in
+        English + whole-token keyword lists in Hindi/Malayalam/French
+        (intlCommands.ts, NFC-normalized native script).
+      - Answer path: checkbox -> yes/no parse; choice -> option matching with
+        3-retry fallback to a picker; free text -> snapToKnownName, else
+        correctTranscript (smart lane), then formatAnswer.
+      - Confirmation policy (needsConfirmation): confirm when sensitive,
+        unclear-OCR, date, phone/email/pincode/aadhaar/account/ifsc/roll/
+        income, or a name field; accept everything else immediately (review
+        screen is the final net). STT "confidence" is deliberately ignored —
+        cloud Whisper always reports ~0.97.
+      - Read-back: names/emails/numbers are spelled back character-by-
+        character ("That's T, W, I, N…"). For hi/ml, the name is first
+        transliterated to native script (see §9) so the voice pronounces it
+        the Indian way, while spelled letters stay Latin (that's what lands
+        on the printed form).
+      - Rejection loop: "no" on a spelled value re-enters spell-repair
+        directly; 3 failed confirmations fall back to typing; spoken edits
+        (applySpokenEdit) are tried before re-asking.
+      - Confirmed names feed rememberName() — the system permanently learns
+        this user's names after one successful confirmation.
+      - The next question's TTS audio is prefetched while the user answers.
+
+7.6 VoiceProvider.tsx — global layer: transcript routing (page dialogue gets
+    first refusal, then global command regexes, then the LLM action router —
+    never a dead end), navigation commands in 4 languages, language switching
+    by voice ("speak in Malayalam" -> sttLang ml-IN, confirmed in that
+    language), theme, conversation log persistence per form, mic-volume
+    analyser for the orb visual, PTT pointer/keyboard wiring, model
+    warm-loading, cloud-consent dialog. Debug/e2e hooks: window.__swaramSay
+    (inject an utterance), __swaramSTT, __swaramTTS, __swaramPTT.
+
+--------------------------------------------------------------------------------
+8. TEXT-TO-SPEECH
+--------------------------------------------------------------------------------
+8.1 Server chain (app/api/tts/route.ts) — POST {text ≤2000 chars, lang} ->
+    audio bytes; first success wins:
+      1. Sarvam Bulbul v3 — ONLY for hi/ml (where its voices clearly win),
+         only ≤600 chars (cost control), speaker "priya", 22.05 kHz MP3,
+         enable_cached_responses true.
+      2. Azure Neural — all languages; voices: en-IN-NeerjaNeural (default),
+         en-US-Aria, en-GB-Sonia, hi-IN-SwaraNeural, ml-IN-SobhanaNeural,
+         fr-FR-DeniseNeural. SSML wrapper, output
+         audio-24khz-48kbitrate-mono-mp3.
+      3. Kokoro-82M server-side (kokoroServer.ts) — English only, ONNX q8 on
+         CPU in the Node process (~80 MB, warm-loaded at module import;
+         KOKORO_TTS=off opt-out for small hosts). Generations serialized.
+      4. Google Translate TTS — free, all languages, ~190-char chunks.
+    Multilingual: app lines are authored in English; for non-English the text
+    is first translated via the keyless Google endpoint (sl=auto; skipped when
+    the text already contains the target script) and THEN synthesized.
+    Server LRU cache: 250 entries keyed lang|text — each distinct line is
+    billed at most once per server lifetime. Response carries X-TTS-Provider
+    and Cache-Control: 86400.
+
+8.2 Client (lib/voice/textToSpeech.ts) — ttsProvider setting:
+      "cloud" (default) — fetches MP3 from /api/tts, plays through ONE
+      gesture-unlocked reusable <audio> element (the only reliable iOS
+      Safari / low-end path). playbackRate applied client-side (0.5–2×,
+      preservesPitch) so one cached clip serves all speeds.
+      "system" — browser speechSynthesis with a voice scorer (Siri/Natural/
+      Neural > Alex > Google > premium/enhanced; en-IN > en-GB > en-US),
+      sticky voice per session, 220-char chunking, Chrome pause/resume
+      heartbeat + stuck-utterance watchdog.
+      "local" — Kokoro-82M fully on-device (WebGPU fp32 / WASM q8), voice
+      af_heart; falls back to system voice until loaded; GPU death mid-
+      session triggers a WASM reload.
+    Speech queue: single owner of audio output; speak() with interrupt (the
+    default) aborts current + queued lines via a generation counter; the mic
+    is paused for the entire speaking burst and resumed only when the queue
+    drains — TTS can never feed back into recognition.
+    Client caches: L1 in-memory (40 blobs) + L2 Cache Storage
+    ("swaram-tts-v1", 200 entries, survives reloads) + prefetchTTS() for the
+    next question. Pronunciation respell table (audio-only): "Swaram" ->
+    "Swahrum". spellOut()/speakSpelled() for letter-by-letter read-back at
+    0.72× rate.
+
+--------------------------------------------------------------------------------
+9. TRANSLITERATION (name pronunciation path)
+--------------------------------------------------------------------------------
+/api/transliterate proxies Sarvam's transliteration API: Latin -> phonetic
+Indic script (targets hi-IN, ml-IN; input ≤120 chars; server LRU 500 + client
+session cache). Used before reading a name back in Hindi/Malayalam: Indic
+scripts are phonetic, so "Thilakan" written as തിലകൻ is pronounced correctly,
+while the Latin spelling makes every TTS guess English letter-to-sound rules.
+Verified: "Twinsha" -> ട്വിൻസാ works well. Everything fails soft to the
+original text.
+
+--------------------------------------------------------------------------------
+10. VERIFIED VENDOR FINDINGS (tested live against the real APIs, July 2026)
+--------------------------------------------------------------------------------
+- Sarvam Saaras v3 ("saaras:v3") is the current STT model; Saarika v2.5 is
+  deprecated. Modes: transcribe / translate / verbatim / translit / codemix.
+  REST accepts clips ≤ 30 s; a WebSocket STREAMING endpoint EXISTS but is not
+  yet used by this app.
+- Sarvam has NO hotword / phrase-list / keyterm biasing. Name accuracy must
+  come from app-side machinery (which is why the ensemble + dictionary exist).
+- Saaras transcribes spelled letters cleanly ("T W I N S H A") — much better
+  spell-mode input than Whisper or Web Speech homophones.
+- Bulbul v3 TTS: speakers are lowercase ("priya"), 2500-char limit, supports
+  dict_id pronunciation dictionaries (unused so far — a promising TTS lever);
+  pitch/loudness/enable_preprocessing are v2-only parameters.
+- Round-trip STT test on "Twinsha T Thilakan": en-IN got "Twinsha" right but
+  broke "Thilakan"; ml-IN got "Thilakan" right but broke "Twinsha". A single
+  recognizer pass cannot solve Indian names — hence fusion.
+- Groq Whisper large-v3-turbo: fast (~sub-second on short clips), accepts a
+  context prompt, no word-level confidence/N-best exposed via this API.
+- Azure REST detailed mode returns a usable N-best list; Azure streaming SDK
+  supports phrase-list biasing and interim results.
+
+--------------------------------------------------------------------------------
+11. KNOWN WEAKNESSES / OPEN PROBLEMS (what research should attack)
+--------------------------------------------------------------------------------
+STT quality
+  W1. Proper nouns remain the #1 error class despite the ensemble. Consensus
+      short-circuit means a shared error across engines is accepted at 0.99.
+  W2. Sarvam offers no biasing; Groq exposes no N-best/logprobs; only Azure
+      contributes alternatives — the fusion LLM sees few, shallow hypotheses.
+  W3. The Gemini audio-native arm is designed but dormant (no key). Unknown:
+      is a multimodal-LLM listener the best 4th engine, or would a different
+      vendor (e.g. one with keyterm prompting) add more?
+  W4. Language is user-selected; no automatic language identification and no
+      code-switching handling (Hinglish is common in target users' speech).
+      Saaras has a codemix mode that is unexplored.
+  W5. No accent/user adaptation beyond the name dictionary.
+Latency / interaction feel
+  W6. Default path is clip-based: VAD waits 500 ms of silence, then a full
+      round-trip. No partial results, no streaming (except opt-in Azure).
+      ChatGPT-voice-level responsiveness likely needs streaming or
+      speculative decoding of partial clips.
+  W7. Energy-threshold VAD (RMS > 0.012) is primitive: breathing/noise can
+      trigger it; quiet speakers get clipped; no neural VAD (e.g. Silero),
+      no semantic endpointing ("is the user done talking?").
+  W8. ScriptProcessorNode is deprecated (main-thread audio); AudioWorklet
+      migration pending. Two separate VAD implementations exist (vadCapture
+      and whisperSTT) with different tuning.
+  W9. Ensemble adds ~1.5–2 s on name fields (acceptable but not great);
+      fusion adds an LLM round-trip on top of the slowest engine.
+Robustness
+  W10. Whisper hallucination on short/clipped clips is mitigated by pre-roll
+       but not solved; no hallucination detector (e.g. no-speech probability,
+       compression-ratio checks are unavailable via the Groq API).
+  W11. No server-side retry/backoff strategy beyond the client's 3-failure
+       fallback; a Sarvam outage silently degrades Indic users to Whisper.
+  W12. Spell mode still depends on regex homophone tables when the engine
+       returns words instead of letters.
+  W13. No measurement harness: there is no WER/name-accuracy benchmark set,
+       no logging of ensemble disagreement rates, no A/B infrastructure.
+TTS (secondary)
+  W14. First-audio latency on uncached lines = translate hop (non-EN) +
+       synthesis + full-file download; no streaming TTS anywhere.
+  W15. Bulbul v3 dict_id pronunciation dictionaries and the transliteration
+       path are not combined systematically; English TTS never gets Indian
+       name pronunciation help at all (Neerja reads Latin spellings).
+  W16. No SSML prosody work (pauses around spelled letters are simulated by
+       commas; digit grouping pacing is crude).
+
+--------------------------------------------------------------------------------
+12. HARD CONSTRAINTS FOR ANY PROPOSED SOLUTION
+--------------------------------------------------------------------------------
+C1. Must run inside a Next.js PWA: browser clients (iOS Safari included, so
+    no WebGPU/SharedArrayBuffer assumptions) + Node.js API routes. No
+    separate backend service unless trivially hostable.
+C2. API keys live server-side only; audio may transit our server to vendors
+    but is never stored.
+C3. Primary vendors are already paid for: Sarvam AI (user's own key — cost
+    conscious, per-second/per-char billing), Groq (Whisper + Llama), Azure
+    Speech (centralindia). Gemini can be enabled cheaply. Additional vendors
+    are acceptable if they demonstrably beat these on Indian-language/name
+    accuracy or latency at comparable cost, with a server-key REST/WS API.
+4.  Languages: en-IN first, hi-IN and ml-IN fully supported, fr-FR nice-to-
+    have. Indian accents and code-mixed speech matter.
+C5. Users are blind/low-vision: every design must work eyes-free; errors must
+    be catchable by ear (read-back, spell-back); silence is a bug.
+C6. Cost discipline: everyday clips must stay single-engine; expensive paths
+    only where accuracy decides form correctness (names, IDs, spell mode).
+================================================================================
+END OF DOSSIER
+================================================================================

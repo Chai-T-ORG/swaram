@@ -160,6 +160,9 @@ const SARVAM_TTS_LANGS: Record<string, string> = { hi: "hi-IN", ml: "ml-IN" };
 const SARVAM_TTS_MAX_CHARS = 600;
 
 async function synthesizeSarvam(text: string, langCode: string): Promise<Buffer> {
+  // A registered pronunciation dictionary (scripts/sarvam-dict.mjs) teaches
+  // Bulbul the exact Indic pronunciation of this user's names — bulbul:v3 only.
+  const dictId = process.env.SARVAM_TTS_DICT_ID;
   const res = await fetch("https://api.sarvam.ai/text-to-speech", {
     method: "POST",
     headers: {
@@ -174,7 +177,11 @@ async function synthesizeSarvam(text: string, langCode: string): Promise<Buffer>
       speech_sample_rate: 22050,
       output_audio_codec: "mp3",
       enable_cached_responses: true,
+      ...(dictId ? { dict_id: dictId } : {}),
     }),
+    // Bulbul has a cold path measured at ~5 s; a stalled readback is worse
+    // than falling through to Azure, so cap it.
+    signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) throw new Error("sarvam-" + res.status);
   const data = (await res.json()) as { audios?: string[] };
@@ -251,7 +258,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { text?: string; lang?: string; voice?: string };
+  let body: { text?: string; lang?: string; voice?: string; nameReadback?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -265,7 +272,10 @@ export async function POST(req: NextRequest) {
   const langVoice = resolveVoice(lang);
   const tl = langVoice.tl;
 
-  const cacheKey = `${lang}|${text}`;
+  // Name-readback lines get a different synthesis path (Bulbul + dictionary),
+  // so they must not share cache entries with the ordinary rendering.
+  const nameReadback = Boolean(body.nameReadback) && Boolean(process.env.SARVAM_TTS_DICT_ID);
+  const cacheKey = `${lang}|${nameReadback ? "nr|" : ""}${text}`;
   const cached = cacheGet(cacheKey);
   if (cached) return audioResponse(cached.audio, "cache", cached.contentType);
 
@@ -274,6 +284,23 @@ export async function POST(req: NextRequest) {
 
   const azureVoice = body.voice || langVoice.azure;
   let lastError = "";
+
+  // 0) English name readback with a registered pronunciation dictionary:
+  // Bulbul's en-IN voice + dict_id says Indian names the Indian way, which
+  // no English letter-to-sound engine can (W15). Env-gated on the dictionary
+  // existing; fails through to the normal chain.
+  if (nameReadback && tl === "en" && process.env.SARVAM_API_KEY && speakText.length <= SARVAM_TTS_MAX_CHARS) {
+    try {
+      const audio = await synthesizeSarvam(speakText, "en-IN");
+      if (audio.length > 0) {
+        const out = { audio, contentType: "audio/mpeg", provider: "sarvam-name" };
+        cacheSet(cacheKey, out);
+        return audioResponse(out.audio, out.provider, out.contentType);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
 
   // 1) Sarvam Bulbul v3 — natural Indian voices, only for Indic languages.
   const sarvamLang = SARVAM_TTS_LANGS[tl];

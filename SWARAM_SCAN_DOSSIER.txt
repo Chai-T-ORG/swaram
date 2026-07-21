@@ -1,0 +1,339 @@
+================================================================================
+SWARAM — DOCUMENT SCAN / CAMERA AUTO-CAPTURE DOSSIER
+================================================================================
+Generated: 19 July 2026, from branch `onboarding-animations` (repo: swaram)
+Purpose:  Input document for deep research into making Swaram's camera-based
+          form scanning world-class — detection, guidance, auto-capture, and
+          output quality comparable to commercial document-scanner SDKs
+          (Scanbot SDK, Google ML Kit Document Scanner, Apple VisionKit,
+          Microsoft Lens, Genius Scan, Dropbox scanner) — while honoring the
+          product's unique constraint: the person aiming the camera is BLIND.
+
+--------------------------------------------------------------------------------
+1. PRODUCT CONTEXT — WHY THIS SCANNER IS DIFFERENT
+--------------------------------------------------------------------------------
+Swaram is a voice-first PWA that helps blind and low-vision users in India
+fill paper forms by voice. The scan screen is where a paper form enters the
+system: the user points their phone at a sheet of paper THEY CANNOT SEE in
+the viewfinder, and the app must (a) find the document, (b) guide the user's
+hand entirely by voice ("Bring the phone closer", "Move a little to the
+left", "Hold steady…"), (c) auto-capture at the right moment, (d) crop/
+deskew, and (e) speak an honest verdict of the result ("It looks clean and
+straight" / "It looks tilted — I'd retake it"), because the user cannot
+visually inspect the preview. Everything downstream — OCR, field detection,
+the entire voice fill session, and the final PDF write-back — inherits the
+quality of this one capture.
+
+Non-negotiable product truths:
+- The primary user cannot see the screen. All guidance and quality feedback
+  must work by ear. Visual overlays (live outline polygon, progress ring,
+  corner handles) exist for sighted/low-vision helpers but are secondary.
+- Everything runs in the browser (Next.js PWA): opencv.js WASM on-device.
+  No native SDK, no server round-trip for detection (privacy + offline +
+  zero marginal cost).
+- Devices: low-end Android Chrome and iOS Safari must both work.
+- Typical environment: an Indian household — busy/patterned backgrounds
+  (the canonical failure case was a cream paisley bedsheet), warm indoor
+  lighting, hand-held paper at arm's length (not paper-on-desk).
+
+--------------------------------------------------------------------------------
+2. TECH STACK (scan-relevant)
+--------------------------------------------------------------------------------
+- Next.js 16 / React 19 PWA; TypeScript.
+- @techstark/opencv-js (~13 MB WASM), lazy-loaded via a CJS shim with a 25 s
+  timeout; ALL vision is classical CV — no ML models anywhere in the scan path.
+- onnxruntime-web IS already a project dependency (used elsewhere for Whisper
+  and Kokoro) — adding small ONNX vision models would be architecturally free.
+- getUserMedia video: facingMode environment, ideal 1920x1080. Capture is a
+  <video>-frame grab onto canvas (NOT ImageCapture.takePhoto()).
+- Torch via MediaStreamTrack.applyConstraints({advanced:[{torch}]}) when the
+  capability exists; front/back camera switch; no focus/exposure/zoom control.
+- Voice I/O: the app-wide TTS speech queue (interrupting, mic-pausing) and
+  the STT command pipeline (push-to-talk default) documented in the companion
+  SWARAM_VOICE_DOSSIER.txt.
+- Downstream: tesseract.js OCR (self-hosted; eng / eng+hin / eng+mal),
+  preprocessForOcr (grayscale + Gaussian adaptive threshold block 39 C 15 +
+  median blur 3), shape detection for answer lines/boxes/checkboxes, keyword
+  dictionary matching, LLM field enhancement, pdf-lib write-back.
+
+Key files:
+  components/screens/useScanCapture.ts   (797 lines — all flow logic)
+  lib/vision/shapeDetector.ts            (548 lines — OpenCV routines)
+  components/mobile/ScanMobile.tsx / desktop/ScanDesktop.tsx  (presentation)
+  scripts/scan-sim.mjs                   (fake-camera e2e harness)
+
+--------------------------------------------------------------------------------
+3. THE SCAN FLOW — STATE MACHINE
+--------------------------------------------------------------------------------
+CameraState: idle -> starting -> active -> captured -> confirm  (or error)
+
+idle:      "Tap Start camera, or say start camera." Voice actions: start
+           camera / upload a file instead.
+starting:  getUserMedia; failure -> error state with spoken fallback advice.
+active:    live video + the guidance loop (§4). Voice: "capture" fires a
+           manual capture any time; auto-capture fires on a stable lock.
+captured:  one full-res frame grabbed; corner detection + refinement (§6).
+confirm:   warped preview + spoken verdict; voice "use it"/"retake"; optional
+           corner-adjust mode and 90° rotation (§7).
+accept:    warp full-res -> JPEG 0.92 -> IndexedDB -> /processing/<id> (OCR).
+
+--------------------------------------------------------------------------------
+4. REAL-TIME GUIDANCE LOOP (the auto-capture brain)
+--------------------------------------------------------------------------------
+A setInterval fires every 500 ms while the camera is active (skipped while a
+capture is in flight). Each tick:
+
+4.1 HONEST FRAMING. The probe reads exactly the pixels the user can see:
+    with CSS object-cover (mobile full-bleed) the video element crops the
+    stream, so the tick computes the visible source rect (sx,sy,sw,sh) from
+    the container aspect vs the stream aspect; with object-contain (desktop)
+    the full frame is used. This rect is also remembered for capture-time
+    coordinate mapping. (Probing off-screen pixels caused guidance that
+    contradicted what a sighted helper saw.)
+
+4.2 PROBE CANVAS. The visible region is drawn to a 480-px-wide canvas
+    (height keeps aspect). All real-time detection runs at this resolution.
+
+4.3 checkDocumentInFrame(probe) — cheap heuristic pass:
+    - Sharpness = variance of Laplacian on grayscale.
+    - GaussianBlur 5x5 -> Canny 60/180 -> RETR_EXTERNAL contours ->
+      approxPolyDP(0.03*peri) -> largest >=4-corner bounding rect.
+    - Returns {coverage, offsetX, offsetY, sharpness} or null (no OpenCV).
+
+4.4 detectCorners(probe) — the real quad detector (§5), gated by
+    isPlausibleQuad(): four distinct corners (pairwise gap >= 2% of max
+    dimension), all within 5% outside the frame, fewer than 3 corners on the
+    2% border band, convex, area 15–95% of the frame. (The border rule
+    rejects the "merged background blob" that hugs the viewport.)
+
+4.5 MULTI-FRAME TRACKER trackQuad() — SDK-style stabilization:
+    - Keeps the last 5 normalized detections; renders the per-coordinate
+      MEDIAN of the last 3 (jitter-free outline).
+    - "Stable" = 3 consecutive detections all within 4% (of frame) of the
+      median. Any detection loss clears the history — stability re-earned.
+    - The last stable quad is remembered for capture (§6).
+
+4.6 GUIDANCE ARBITRATION. The tracked quad OUTRANKS the checkDocumentInFrame
+    heuristic for both coverage and centering (offset = quad centroid), so
+    voice guidance can never contradict a locked on-screen outline.
+    Priority ladder each tick (first match wins):
+      coverage < 0.20                 -> "Bring the phone closer…"
+      offsetX < -0.3 / > 0.3          -> "Move a little to the left/right."
+      offsetY < -0.3 / > 0.3          -> "Tilt the phone up/down a little."
+      sharpness < 40                  -> "Hold the phone still."
+      tracked but not yet stable      -> "Hold it right there."
+      stable                          -> "Hold steady…" + start the 1000 ms
+                                          lock timer with an animated ring;
+                                          when it completes -> capture().
+    Any regression mid-lock resets the timer and the ring.
+
+4.7 SPEECH DISCIPLINE (crucial for a voice UI):
+    - sayGuidanceStable(): a correction is spoken only after its condition
+      held for 2 consecutive ticks (~1 s hysteresis) — raw detection flicker
+      would otherwise produce a self-contradicting nag.
+    - Min 3 s gap between different guidance lines; the same line is not
+      repeated within 6 s.
+    - One warm confirmation the FIRST time the sheet is tracked ("I can see
+      the form.", spoken immediately) — a blind user holding paper at arm's
+      length has no other feedback that anything is working.
+
+--------------------------------------------------------------------------------
+5. CORNER DETECTION (detectCorners in shapeDetector.ts)
+--------------------------------------------------------------------------------
+Four independent binary masks are generated; every plausible 4-corner
+candidate from all paths competes on one score.
+
+  Path A — brightness: Otsu threshold on blurred grayscale + MORPH_CLOSE,
+           RETR_EXTERNAL. (Paper is usually the brightest region.)
+  Path S — whiteness: HSV split; low-saturation Otsu AND bright-V Otsu,
+           closed, RETR_EXTERNAL. (Warm cream/wood backgrounds match paper
+           in luminance but carry saturation the paper doesn't.)
+  Path B — edges: Canny 30/100 + ONE gentle 3x3 dilation, RETR_LIST.
+           (On textured backgrounds the dilated texture merges into a blob;
+           the paper survives only as a HOLE inside it — hence RETR_LIST.)
+  Path C — adaptive threshold: Gaussian, blockSize ≈ min(w,h)/8 (odd), C=5,
+           closed, RETR_LIST. (Survives uneven lighting/soft shadows that
+           defeat a single global Otsu split.)
+
+Candidate extraction per contour: area >= 10% of frame -> convex hull ->
+approxPolyDP with epsilon escalation [0.02, 0.04, 0.06, 0.09] x hull
+perimeter until 4 points (a held sheet with fingers/curled corner
+approximates to 5–6 points at tight tolerance before collapsing to its true
+corners).
+
+Hard rejections: quad area outside 10–95% of frame; >= 3 corners in the 2%
+border band (frame-hugging = background blob, never the paper); any corner
+angle with |cos| > 0.5 (a photographed sheet keeps angles within 60–120°
+even under perspective).
+
+Score = area x rectangularity x (1 - maxCos), where rectangularity = quad
+area / bounding-rect area. Winner across all four paths is returned, corners
+sorted tl/tr/br/bl by the sum/diff heuristic.
+
+Verified failure modes this design already survived (do not regress):
+- The paisley-bedsheet case: texture welds into one frame-sized contour that
+  outscores the paper unless frame-hugging quads are rejected and RETR_LIST
+  holes are considered.
+- Cream/warm backgrounds with paper-like luminance: only the saturation path
+  or the low-threshold Canny path finds the sheet. (Otsu-on-S alone
+  underperformed; the AND of low-sat and bright-V works better.)
+
+--------------------------------------------------------------------------------
+6. CAPTURE
+--------------------------------------------------------------------------------
+capture() — manual (voice/tap) or auto (lock timer):
+  1. Grab the CURRENT video frame full-res onto a canvas (videoWidth x
+     videoHeight, i.e. at most 1920x1080 — this is a video frame, NOT a
+     still-photo capture; see W4).
+  2. Keep an untouched JPEG copy for the corner-adjust view.
+  3. Run detectCorners() on the full-res frame.
+  4. TRACKED-QUAD GROUND TRUTH: the last stable live quad (normalized to the
+     visible rect) is scaled to full-frame coordinates. A fresh full-res
+     detection may only REFINE it — if it deviates from the tracked quad by
+     more than 8% of the larger frame dimension, the tracked quad wins.
+     (Otherwise the app captures something different from what it told the
+     user was locked.) With no full-res detection, the tracked quad is used
+     directly; with neither, a 5% inset default quad is set and the UI drops
+     straight into corner-adjust mode with a spoken explanation.
+  5. assessQuad() — post-capture self-assessment SPOKEN to the user:
+       "tilted" when any corner angle has |cos| > 0.35;
+       "small"  when quad area < 25% of the VISIBLE (aimed) region — judged
+                against what the user could see, not the full sensor frame;
+       else "good".
+     Spoken as: "It looks clean and straight." / "It looks tilted — I'd
+     retake it" / "The form looks small and may come out blurry…".
+
+--------------------------------------------------------------------------------
+7. CONFIRM SCREEN
+--------------------------------------------------------------------------------
+- Default view: the WARPED result (perspective-corrected preview), no
+  overlay. JPEG 0.9 object URL.
+- "Adjust corners" is an explicit mode showing the RAW photo with 4
+  draggable handles. INVARIANT: quad/handles are drawn ONLY over the raw
+  image; drawing raw-space corners over the warped image was the original
+  "adjust doesn't work" bug. Handle drag updates coordinates only; the
+  re-warp runs ONCE on pointer-up (performance).
+- rotate90() cycles output rotation.
+- Voice: "use it"/"retake" plus multilingual yes-keywords; retake restarts
+  the camera cleanly (all object URLs revoked, tracker reset).
+- accept(): warpPerspectiveCanvas on the full-res raw canvas (output size =
+  max opposite-edge lengths; INTER_LINEAR), apply rotation, JPEG 0.92,
+  save to IndexedDB as the form's "original" file, navigate to /processing.
+
+warpPerspectiveCanvas: getPerspectiveTransform + warpPerspective; refuses
+outputs smaller than 50 px each side (returns the input canvas).
+
+--------------------------------------------------------------------------------
+8. VOICE CONTROL ON THE SCAN PAGE
+--------------------------------------------------------------------------------
+Commands are state-gated and STT-tolerant (transcripts arrive punctuation-
+normalized: "Re-take." -> "re take"; Indian-English phrasings like "click a
+photo" are accepted):
+  active:  start/stop camera, capture|snap|shoot|take a photo…
+  confirm: retake|scan again|redo…, use it|looks good|accept|confirm +
+           multilingual yes keywords (Hindi/Malayalam/French).
+Every voice action also carries an offline `match` regex fast-lane so loose
+phrasings resolve even with no LLM key configured; otherwise the adaptive
+LLM router maps any phrasing/language onto the registered actions. Dev hook
+window.__swaramSay(text) injects transcripts for testing.
+
+--------------------------------------------------------------------------------
+9. TEST HARNESS (scripts/scan-sim.mjs)
+--------------------------------------------------------------------------------
+A fake-camera drive of the real /scan page against dev on :3000: renders a
+synthetic scene (white "form" with text-like marks, rotated 7°, on a busy
+paisley-like background), patches getUserMedia with canvas.captureStream
+(Chrome's y4m fake-camera device hangs headless), and walks the full flow:
+start camera -> live outline -> auto-capture -> confirm verdict ->
+adjust-corners probe -> retake probe. This is how scan changes are verified
+without a physical phone. Remaining real-device-only checks: lighting/glare,
+TTS timing, torch, the push-to-talk interaction matrix.
+
+--------------------------------------------------------------------------------
+10. KNOWN WEAKNESSES / OPEN PROBLEMS (what research should attack)
+--------------------------------------------------------------------------------
+Detection & robustness
+  W1. Classical CV only. Commercial SDKs (Scanbot, ML Kit, VisionKit) use
+      trained segmentation/corner models that are dramatically more robust
+      on low-contrast (white desk), glare, partial occlusion (fingers), and
+      busy backgrounds. Our four-path heuristic stack is a hand-tuned
+      approximation that still fails on hard scenes and burns CPU running
+      four full mask+contour passes per tick.
+  W2. Probe resolution is 480 px wide — corner precision at capture depends
+      on an 8%-tolerance refinement pass instead of precise live corners.
+  W3. No glare / shadow / over-under-exposure detection at all; torch is
+      manual with no "it's too dark, turning on the light" guidance.
+  W4. Capture grabs a VIDEO frame (<=1920x1080). ImageCapture.takePhoto()
+      can return the full photo-mode sensor resolution (often 8–12 MP) on
+      Android Chrome; iOS Safari lacks ImageCapture but photo quality could
+      still improve via higher video constraints or grabFrame timing. OCR
+      accuracy downstream is capped by this.
+  W5. No camera control: no focusMode/focusDistance, exposureMode,
+      pointsOfInterest, zoom, or resolution renegotiation at capture time.
+      No tap-to-focus equivalent (blind users can't tap anyway — it would
+      need to be automatic on the tracked quad).
+  W6. Sharpness = Laplacian variance with one fixed threshold (40) — scale-
+      and content-dependent; no motion estimation (no IMU/gyro use, no
+      frame-difference motion blur prediction). "Hold still" fires from
+      blur, after the fact, rather than predicting a blurry capture.
+  W7. Single-shot capture: no burst capture with sharpest-frame selection,
+      no multi-frame denoise/HDR; a blink of motion at the wrong moment
+      produces a blurry scan that only OCR failure reveals.
+Guidance & auto-capture UX
+  W8. Fixed policy constants (coverage 0.2, offsets 0.3, lock 1000 ms,
+      2-tick hysteresis, 500 ms tick). No adaptation to how steady this
+      user's hands actually are, and 500 ms polling + hysteresis + TTS
+      latency means guidance can lag the true position by ~1.5–2 s.
+  W9. Guidance vocabulary is coarse (closer/left/right/up/down/still). No
+      distance estimate ("about a foot closer"), no rotation guidance
+      ("turn the paper slightly"), no edge-specific feedback ("the top of
+      the page is cut off") — all things the quad geometry could support.
+  W10. The loop runs on setInterval + main-thread OpenCV; no
+       requestVideoFrameCallback, no worker offload — jank on low-end
+       phones directly worsens both detection and TTS timing.
+Output quality
+  W11. No curved-page dewarping (a form held in one hand bows); warp assumes
+       a perfectly planar quad. No fold/crease handling.
+  W12. No post-capture enhancement profiles (the SDK-standard set: original /
+       grayscale / clean-BW binarized / color-boost). preprocessForOcr's
+       fixed adaptive threshold runs later for OCR, but the saved "original"
+       is the raw warp — shadows and color casts survive into the archive
+       and the final PDF background.
+  W13. The spoken verdict is geometry-only (tilted/small). No readability
+       probe — a quick low-cost OCR sample at confirm time could let the
+       app say "the text looks sharp" or "the text looks blurry — retake"
+       which is the single most useful fact for a blind user.
+  W14. No multi-page flow (each scan = one page = one form record).
+Testing
+  W15. One synthetic scene in scan-sim.mjs; no corpus of hard scenes
+       (glare, shadow, low contrast, occlusion, curved pages), no metrics
+       (corner IoU, time-to-capture, capture success rate) tracked over
+       changes.
+
+--------------------------------------------------------------------------------
+11. HARD CONSTRAINTS FOR ANY PROPOSED SOLUTION
+--------------------------------------------------------------------------------
+C1. Browser PWA only: Chrome Android (low-end included) + iOS Safari. No
+    native SDKs, no Capacitor. WASM/WebGL/WebGPU-optional acceptable with
+    graceful fallback (opencv.js already fails soft).
+C2. On-device strongly preferred: privacy (forms hold personal data), works
+    offline, zero marginal cost. A server hop for detection is a last
+    resort; commercial per-scan licensing (e.g. Scanbot's) is out of budget
+    — we want their QUALITY, not their invoice.
+C3. onnxruntime-web is already shipped; small ONNX models (a few MB) are an
+    acceptable dependency if they demonstrably beat the classical stack.
+    The 13 MB opencv.js load already exists and can host more classical
+    processing at no download cost.
+C4. Blind users are primary: every improvement must surface through voice
+    (or earcons/haptics); anything visual-only is a secondary nicety.
+    Speech has real latency — guidance design must respect the existing
+    hysteresis/interrupt discipline rather than talking more.
+C5. Preserve the verified invariants in §5–§7 (coordinate spaces, frame-quad
+    rejection, tracked-quad capture, spoken verdict) — each one maps to a
+    real bug a user hit.
+C6. Changes must be verifiable with the fake-camera harness pattern
+    (scripts/scan-sim.mjs) — proposals should include how to test them
+    without a physical device.
+================================================================================
+END OF DOSSIER
+================================================================================

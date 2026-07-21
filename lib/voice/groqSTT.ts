@@ -8,7 +8,7 @@
  *
  * Nothing here downloads a model, so it's the most demo-reliable STT path.
  */
-import { startVadCapture, type VadHandle } from "./vadCapture";
+import { startVadCapture, setVadSpellMode, type VadHandle } from "./vadCapture";
 import { getVoiceSettings } from "./voiceSettings";
 import { encodeWav16k } from "./wavEncode";
 
@@ -50,6 +50,14 @@ let fieldContext: SttFieldContext = {};
 export function setSttFieldHint(hint: SttFieldHint, context: SttFieldContext = {}): void {
   fieldHint = hint;
   fieldContext = context;
+  // Spelling changes how the VAD must segment: letters come with long
+  // pauses, so the capture layer holds the utterance open between them.
+  setVadSpellMode(hint === "spell");
+}
+
+/** Current hint + context — for capture paths outside this module (PTT). */
+export function getSttFieldHint(): { hint: SttFieldHint; context: SttFieldContext } {
+  return { hint: fieldHint, context: fieldContext };
 }
 
 type TranscriptListener = (text: string, confidence: number) => void;
@@ -164,6 +172,7 @@ async function transcribe(pcm: Float32Array, sampleRate: number): Promise<void> 
   const lang = settings.sttLang || "en-IN";
   const wants16k =
     provider === "azure" || provider === "azure-stream" || provider === "sarvam" ||
+    provider === "sarvam-stream" ||
     fieldHint !== "" || !lang.startsWith("en");
   const wav = wants16k ? encodeWav16k(pcm, sampleRate) : encodeWav(pcm, sampleRate);
   const headers: Record<string, string> = {

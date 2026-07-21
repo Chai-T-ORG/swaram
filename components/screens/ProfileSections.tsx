@@ -208,9 +208,10 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
             value={p.sttProvider}
             onChange={(e) => p.selectSttProvider(e.target.value as SttProvider)}
           >
-            <option value="groq">Cloud Whisper (Groq) — most accurate, needs internet</option>
+            <option value="groq">Cloud — Sarvam + Whisper (best for Indian speech), needs internet</option>
             <option value="azure">Azure Speech (Regional) — tuned per language, needs internet</option>
             <option value="azure-stream">Azure Speech — real-time (beta) — fastest, auto-detects language</option>
+            <option value="sarvam-stream">Sarvam — real-time (beta) — instant Indian-language recognition</option>
             <option value="auto">Automatic — cloud when online, on-device otherwise</option>
             <option value="whisper">On-device Whisper — private &amp; offline (~150MB)</option>
             <option value="native">Browser built-in — instant, no download</option>
@@ -220,6 +221,13 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
             <p className="mt-1 max-w-sm text-[11px] leading-normal text-soft">
               Real-time streaming: text appears as you speak, auto-detecting English, Hindi, Malayalam or French. If it
               can&rsquo;t connect it falls back to the standard Azure path automatically.
+            </p>
+          )}
+
+          {p.sttProvider === "sarvam-stream" && (
+            <p className="mt-1 max-w-sm text-[11px] leading-normal text-soft">
+              Real-time Sarvam streaming: answers finalize a fraction of a second after you stop speaking. Needs the
+              local relay (npm run stt:relay); without it, this falls back to the standard Sarvam path automatically.
             </p>
           )}
 
