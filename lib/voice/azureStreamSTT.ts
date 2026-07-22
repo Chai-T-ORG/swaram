@@ -16,6 +16,7 @@ import type * as SpeechSDKType from "microsoft-cognitiveservices-speech-sdk";
 import { getStream, initMic } from "./micManager";
 import { getVoiceSettings } from "./voiceSettings";
 import { INTL_KEYWORDS } from "./intlCommands";
+import { knownNames } from "./nameDictionary";
 
 export interface AzureStreamHandlers {
   onFinal: (text: string, confidence: number) => void;
@@ -64,7 +65,11 @@ function selectedLocale(): string {
   return getVoiceSettings().sttLang || "en-IN";
 }
 
-/** Command words across all languages, so Azure hears them crisply. */
+/**
+ * Command words across all languages, so Azure hears them crisply — plus the
+ * user's previously-confirmed names, so "Twinsha Thilakan" is biased toward
+ * the exact spelling they already approved.
+ */
 function commandPhrases(): string[] {
   const english = [
     "skip", "next", "repeat", "again", "go back", "previous", "change",
@@ -72,7 +77,7 @@ function commandPhrases(): string[] {
     "type", "spell", "upload", "scan", "profile", "home", "start", "continue",
   ];
   const intl = Object.values(INTL_KEYWORDS).flat();
-  return Array.from(new Set([...english, ...intl])).slice(0, 150);
+  return Array.from(new Set([...english, ...intl, ...knownNames()])).slice(0, 180);
 }
 
 /* ------------------------- shared capture audio --------------------------- */
@@ -249,6 +254,14 @@ export async function startAzureStream(h: AzureStreamHandlers): Promise<boolean>
     const grammar = sdk.PhraseListGrammar.fromRecognizer(recognizer);
     for (const phrase of commandPhrases()) {
       if (phrase) grammar.addPhrase(phrase);
+    }
+    // Raise the bias weight above the 1.0 default so the user's confirmed
+    // names beat their generic English homophones. Guarded — setWeight is
+    // only in newer SDK builds.
+    try {
+      (grammar as unknown as { setWeight?: (w: number) => void }).setWeight?.(1.5);
+    } catch {
+      /* best-effort */
     }
 
     recognizer.recognizing = (_s, e) => {

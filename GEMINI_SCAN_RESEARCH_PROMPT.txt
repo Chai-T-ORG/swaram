@@ -1,0 +1,115 @@
+You are researching for the engineering team of Swaram, a voice-first PWA
+that helps blind users in India scan and fill paper forms. The attached
+document (SWARAM_SCAN_DOSSIER.txt) describes the entire current camera-scan
+implementation: read it fully first — every recommendation must slot into
+that architecture, respect its constraints (§11), preserve its verified
+invariants (§5–§7), and attack its listed weaknesses (§10).
+
+RESEARCH GOAL
+Make Swaram's in-browser document detection, voice guidance, auto-capture,
+and scan output quality world-class — on par with commercial scanner SDKs
+(Scanbot SDK, Google ML Kit Document Scanner, Apple VisionKit/DataScanner,
+Microsoft Lens, Genius Scan SDK, Dropbox's scanner) — WITHOUT native code or
+per-scan licensing: everything must run in a browser PWA (Chrome Android
+low-end + iOS Safari), preferably fully on-device. The unique twist: the
+person aiming the camera is blind, so guidance and quality feedback are
+delivered by voice.
+
+QUESTIONS TO ANSWER (in priority order)
+
+1. HOW THE BEST SCANNER SDKS ACTUALLY WORK. Reverse-engineer from public
+   sources (engineering blogs, patents, docs, conference talks, APK/model
+   inspection write-ups) how Scanbot, ML Kit Document Scanner, VisionKit,
+   Microsoft Lens, and Dropbox implement: document segmentation/corner
+   detection (which model architectures — HED-style edge nets, U-Net/
+   DeepLab segmentation, direct corner regression?), frame-to-frame
+   tracking, auto-capture gating (their stability windows, angle/size/
+   sharpness thresholds, hold timers), and capture-quality checks. What of
+   this is replicable in a browser?
+
+2. ON-DEVICE ML DOCUMENT DETECTION IN THE BROWSER. Survey open models and
+   techniques that could replace or augment our four-path classical OpenCV
+   detector (dossier §5) via onnxruntime-web (already a dependency):
+   document-localization models (e.g. DocAligner, PaddleOCR's PP-Doc /
+   UVDoc-adjacent models, LDC/HED edge detectors, MobileSAM-class
+   segmentation, YOLO-style corner detectors trained on SmartDoc), their
+   size, license, browser inference speed on low-end Android (WASM vs
+   WebGL vs WebGPU backends), and conversion paths to ONNX. Recommend a
+   specific model + backend + fallback plan, with expected FPS at ~480–640
+   px input. If a well-trained classical pipeline can match ML on our
+   scenes, say so with evidence.
+
+3. CAMERA CAPTURE QUALITY IN THE BROWSER. Definitive current state (2025-26)
+   of: ImageCapture.takePhoto() support and real resolution gains on
+   Android Chrome; iOS Safari's actual ceiling (getUserMedia max
+   resolution, ImageCapture/grabFrame support, known Safari bugs);
+   MediaTrackConstraints for focusMode/focusDistance, exposureMode/
+   exposureCompensation, pointsOfInterest, zoom, torch — which browsers
+   honor them; requestVideoFrameCallback for the analysis loop; strategies
+   SDK-quality web scanners use (burst capture + sharpest-frame selection,
+   capture-time constraint renegotiation, OffscreenCanvas/worker
+   pipelines). Give a concrete capture-path upgrade for our capture()
+   (dossier §6, weakness W4/W5/W7).
+
+4. REAL-TIME QUALITY GATES. Cheap-enough-for-500ms-ticks algorithms
+   (classical or tiny-ML) for: glare/specular highlight detection, shadow
+   detection, exposure problems, motion-blur prediction (frame differencing
+   or DeviceMotion/gyro — including iOS permission flow), and adaptive
+   sharpness thresholds that replace our fixed Laplacian-variance-40. How
+   do commercial SDKs gate auto-capture on these? Which belong in the
+   guidance ladder (dossier §4.6) and with what spoken feedback?
+
+5. ACCESSIBLE (EYES-FREE) SCANNING UX. Research how blind users actually
+   scan documents today: Microsoft Seeing AI's document channel, Apple
+   VoiceOver + doc detection in Magnifier/Files, Envision AI, Be My Eyes.
+   What guidance vocabularies, audio cues (earcons vs speech vs continuous
+   sonification like pitch-for-distance), haptic patterns, and capture
+   confirmations are proven to work? Evaluate our current guidance ladder
+   and speech discipline (dossier §4.6–4.7) against this literature and
+   propose concrete improvements (edge-specific cues, distance estimates,
+   rotation guidance) with attention to speech latency.
+
+6. OUTPUT ENHANCEMENT. Post-capture processing feasible on-device in the
+   browser: curved-page dewarping (DewarpNet, DocTr, UVDoc, FDRNet — any
+   browser-feasible distillations?), shadow removal, illumination
+   normalization, the standard SDK enhancement profiles (original/
+   grayscale/clean-BW/color-boost) and when to apply which for (a) OCR
+   input and (b) the archived/printed PDF background; plus a cheap
+   OCR-readability probe at confirm time so the app can SAY "the text
+   looks sharp" (weakness W13) — e.g. a fast tesseract sample on a crop,
+   or a text-region sharpness metric.
+
+7. EVALUATION HARNESS. Extend our fake-camera approach (scripts/
+   scan-sim.mjs, dossier §9): how to build a reproducible benchmark of
+   hard scenes (glare, shadows, low contrast, occluding fingers, curved
+   pages, busy Indian-household backgrounds) — synthetic generation plus
+   public datasets (SmartDoc 2015/2017, DocUNet, WarpDoc, MIDV-500) —
+   and which metrics to track per change: corner IoU / Jaccard, detection
+   rate, time-to-auto-capture, false-capture rate, downstream OCR accuracy
+   delta.
+
+8. MULTI-PAGE & EDGE CASES (secondary). Patterns for multi-page capture
+   sessions (SDK UX conventions), double-page spreads, ID-card-sized
+   documents, and how they'd fit our voice-first flow.
+
+DELIVERABLE FORMAT
+- Executive summary: the 5 highest-leverage changes ranked by (capture
+  quality gain x guidance/UX gain) / implementation effort, each mapped to
+  the dossier weakness (W1–W15) it addresses.
+- Per-question findings with citations to primary sources (SDK docs,
+  papers, caniuse/web-platform status, model repos with licenses). Include
+  concrete numbers: model sizes, FPS on representative hardware, browser
+  support tables, benchmark scores.
+- A proposed target architecture (text diagram) for the upgraded scan
+  pipeline: analysis loop (worker/rVFC), detector (ML + classical
+  fallback), tracker, quality gates, capture path, enhancement, and where
+  each voice cue fires.
+- A migration plan in 3 phases (quick wins <=1 week, medium <=1 month,
+  ambitious), each phase shippable alone and testable with the fake-camera
+  harness.
+- Flag anything in the dossier's assumptions your research contradicts.
+
+Be skeptical of vendor marketing; prefer measured/benchmarked claims; when
+browser support claims matter (especially iOS Safari), cite current
+platform-status sources rather than older blog posts, and say explicitly
+when evidence is thin.

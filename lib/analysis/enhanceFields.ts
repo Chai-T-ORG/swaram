@@ -86,15 +86,23 @@ export async function enhanceFieldsWithLlm(
     }
     if (llm.drop) continue; // LLM says this isn't a real field
 
-    const nextType = validType(llm.type) ?? field.type;
-    const options =
-      nextType === "choice"
-        ? (Array.isArray(llm.options) && llm.options.length ? llm.options : field.options)
-        : undefined;
+    // Only let the LLM re-type "basic" fields. comb / table / signature come
+    // from the VLM's grounded layout read and must never be downgraded to text.
+    const BASIC = new Set<FormField["type"]>(["text", "date", "choice", "checkbox"]);
+    const nextType = BASIC.has(field.type) ? validType(llm.type) ?? field.type : field.type;
+
+    let options = field.options;
+    if (nextType === "choice") {
+      // Keep the VLM options when we have per-option tick boxes aligned to them
+      // (reordering/renaming would desync optionBboxes); otherwise accept the
+      // LLM's cleaned list.
+      if (!field.optionBboxes && Array.isArray(llm.options) && llm.options.length) options = llm.options;
+    } else if (nextType !== "table") {
+      options = undefined;
+    }
 
     out.push({
       ...field,
-      label: typeof llm.label === "string" && llm.label.trim() ? llm.label.trim() : field.label,
       type: nextType,
       options,
       question: typeof llm.question === "string" && llm.question.trim() ? llm.question.trim() : field.question,

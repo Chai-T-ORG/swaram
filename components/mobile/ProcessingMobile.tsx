@@ -44,13 +44,46 @@ export default function ProcessingMobile() {
       {!p.done && !p.failed ? (
         <div className="card w-full flex flex-col items-center gap-5 p-5">
           <VoiceOrb state="thinking" size="md" className="mt-2" />
-          <header className="text-center">
+          <header className="text-center flex flex-col items-center gap-2">
             <h1 className="font-display text-2xl leading-tight text-ink">Reading your form…</h1>
-            <p className="mt-1.5 text-sm text-soft">Usually 20 to 40 seconds.</p>
+            <p className="text-sm text-soft">Usually 20 to 40 seconds.</p>
+
+            {/* Document Thumbnail (~140px wide) wrapped in overflow-hidden container with laser line */}
+            <div className="relative overflow-hidden rounded-lg border border-line/60 shadow-sm bg-white w-36 my-1">
+              {p.thumbnailUrl ? (
+                <img
+                  src={p.thumbnailUrl}
+                  alt="Document preview"
+                  className="w-full h-auto max-h-48 object-contain block rounded"
+                />
+              ) : (
+                <div aria-hidden="true" className="grid h-36 w-full place-items-center bg-sunken text-soft">
+                  <IconDoc className="h-8 w-8" />
+                </div>
+              )}
+              {/* Laser scan line clipped to thumbnail container */}
+              {!prefersReducedMotion ? (
+                <div className="laser-line pointer-events-none" aria-hidden="true" />
+              ) : (
+                <div className="absolute inset-0 bg-accent/5 ring-1 ring-inset ring-accent/30 pointer-events-none" aria-hidden="true" />
+              )}
+            </div>
+
+            <Link href="/" className="text-xs text-soft underline underline-offset-2 hover:text-ink">
+              Cancel
+            </Link>
           </header>
 
           <div className="w-full">
             <StatusAnnouncer message={p.status} tone="info" />
+          </div>
+
+          {/* Slim Determinate Progress Bar */}
+          <div className="w-full bg-sunken h-1.5 rounded-full overflow-hidden border border-line/40 my-0.5">
+            <div
+              className="bg-accent h-full transition-all duration-500 ease-out rounded-full"
+              style={{ width: `${Math.round(p.progressRatio * 100)}%` }}
+            />
           </div>
 
           <ol className="m-0 flex w-full list-none flex-col gap-1 border-t border-line/50 pt-4" aria-label="Analysis progress">
@@ -117,27 +150,52 @@ export default function ProcessingMobile() {
           {p.done && p.fieldCount > 0 && (
             <div className="card flex w-full flex-col gap-4 p-5 animate-slide-up">
               <div className="flex items-center gap-3.5 border-b border-line pb-3.5">
-                <span aria-hidden="true" className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-ok-soft text-ok">
-                  <IconDoc className="h-5.5 w-5.5" />
-                </span>
-                <div>
+                {/* Persistent Thumbnail */}
+                <div className="relative overflow-hidden rounded-lg border border-line/60 shadow-sm bg-white h-16 w-12 shrink-0 grid place-items-center">
+                  {p.thumbnailUrl ? (
+                    <img
+                      src={p.thumbnailUrl}
+                      alt="Document preview"
+                      className="h-full w-full object-cover block"
+                    />
+                  ) : (
+                    <span aria-hidden="true" className="grid h-full w-full place-items-center bg-sunken text-soft">
+                      <IconDoc className="h-5 w-5" />
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-0.5">
                   <h2 className="font-display text-xl leading-tight text-ink">{p.fieldCount} fields detected</h2>
-                  {p.record?.isAcroForm && <p className="mt-0.5 text-xs text-soft">Built-in fillable PDF.</p>}
+                  {p.typeBreakdown && (
+                    <p className="text-xs font-semibold text-soft">{p.typeBreakdown}</p>
+                  )}
+                  {p.record?.isAcroForm && <p className="text-xs text-soft">Built-in fillable PDF.</p>}
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
                 {p.autofillable > 0 && (
-                  <span className="chip bg-accent-soft text-[11px] font-bold text-accent">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.autofillable} auto-fill fields`}
+                    className="chip bg-accent-soft text-[11px] font-bold text-accent cursor-pointer hover:bg-accent-soft/80"
+                  >
                     <IconSparkle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.autofillable} auto-fill
-                  </span>
+                  </button>
                 )}
                 {p.unclearCount > 0 && (
-                  <span className="chip bg-warn-soft text-[11px] font-bold text-warn">
+                  <button
+                    type="button"
+                    onClick={p.goReview}
+                    aria-label={`See the ${p.unclearCount} unclear fields`}
+                    className="chip bg-warn-soft text-[11px] font-bold text-warn cursor-pointer hover:bg-warn-soft/80"
+                  >
                     <IconAlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
                     {p.unclearCount} unclear
-                  </span>
+                  </button>
                 )}
               </div>
 

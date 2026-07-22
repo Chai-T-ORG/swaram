@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { intentRegex } from "@/lib/voice/intlCommands";
 import { getFile, getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import { analyzeForm, type AnalysisStage } from "@/lib/analysis/analyzeForm";
@@ -19,27 +19,27 @@ import { enhanceFieldsWithLlm } from "@/lib/analysis/enhanceFields";
 import { isLlmAvailable } from "@/lib/voice/llm";
 import { speak } from "@/lib/voice/textToSpeech";
 import type { FormRecord } from "@/lib/types";
-import { getProfile } from "@/lib/storage/profileStore";
-import { matchFieldsToProfile } from "@/lib/matching/fuzzyProfileMatch";
+
+import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdfReader";
 
 export type StepState = "pending" | "active" | "done";
 
 export const PROCESSING_STEPS: { key: AnalysisStage | "done"; label: string }[] = [
   { key: "reading", label: "Opening your form" },
-  { key: "ocr", label: "Reading text content" },
-  { key: "layout", label: "Detecting layout grid" },
+  { key: "ocr", label: "Reading your form with AI vision" },
+  { key: "layout", label: "Understanding the layout" },
   { key: "fields", label: "Identifying input fields" },
   { key: "ordering", label: "Preparing voice checklist" },
 ];
 
 const STAGE_ORDER: (AnalysisStage | "done")[] = ["reading", "ocr", "layout", "fields", "ordering", "done"];
 
+const activeProcesses = new Set<string>();
+
 export function useProcessing() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
-  const voice = useVoice();
   const startedRef = useRef(false);
-  const announcedStageRef = useRef<AnalysisStage | null>(null);
 
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [stage, setStage] = useState<AnalysisStage | "done" | "failed">("reading");
@@ -66,7 +66,7 @@ export function useProcessing() {
               () => router.push(`/fill/${formId}`),
               "start filling",
             ],
-            [/preview|review fields/, () => router.push(`/review/${formId}`), "preview fields"],
+            [/preview|review fields/, () => router.push(`/preview/${formId}`), "preview fields"],
           ]
         : [],
       // Adaptive router: any phrasing / language for "begin filling" resolves
@@ -81,7 +81,7 @@ export function useProcessing() {
             {
               id: "preview_fields",
               description: "Preview or review the detected form fields before filling.",
-              run: () => router.push(`/review/${formId}`),
+              run: () => router.push(`/preview/${formId}`),
             },
           ]
         : [],
@@ -90,15 +90,25 @@ export function useProcessing() {
   );
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    run();
+    if (activeProcesses.has(formId)) {
+      // Form is already being processed in another instance (Strict Mode).
+      const interval = setInterval(async () => {
+        const form = await getForm(formId);
+        if (form && form.status !== "processing") {
+          clearInterval(interval);
+          run(); // Fast-path to 'done' state
+        }
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+
+    activeProcesses.add(formId);
+    run().finally(() => activeProcesses.delete(formId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function run() {
     try {
-      voice?.transitionConversation({ type: "PROCESSING" });
       const form = await getForm(formId);
       if (!form) {
         setStage("failed");
@@ -121,39 +131,19 @@ export function useProcessing() {
         return;
       }
 
-      const heartbeat = window.setInterval(() => {
-        // Queue, never interrupt: a progress update must not cut a sentence
-        // that is already being spoken.
-        void speak("I'm still working on your form.", { interrupt: false });
-      }, 7000);
-      let result;
-      try {
-        result = await analyzeForm(blob, form.sourceType, (progress) => {
+      const result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
-        voice?.transitionConversation({
-          type: progress.stage === "fields" || progress.stage === "ordering" ? "EXTRACTING_FIELDS" : "PROCESSING",
-        });
-        if (announcedStageRef.current !== progress.stage) {
-          announcedStageRef.current = progress.stage;
-          const narration: Record<AnalysisStage, string> = {
-            reading: "I'm reading the form.",
-            ocr: "I'm reading the text on the page.",
-            layout: "I'm identifying the form layout.",
-            fields: "I'm finding the fields you can fill in.",
-            ordering: "I'm preparing the questions in order.",
-          };
-          void speak(narration[progress.stage], { interrupt: false });
-        }
-        if (progress.stage === "ocr" && progress.page && progress.pageCount) {
-          const pct = progress.pct !== undefined ? ` — ${Math.round(progress.pct * 100)}%` : "";
-          setDetail(`page ${progress.page} of ${progress.pageCount}${pct}`);
+        if (progress.stage === "ocr") {
+          const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
+          if (progress.page && progress.pageCount) {
+            setDetail(`page ${progress.page} of ${progress.pageCount}${pct ? ` — ${pct}` : ""}`);
+          } else {
+            setDetail(pct ? `processing securely with AI vision — ${pct}` : "sending to AI vision");
+          }
         } else {
           setDetail("");
         }
-        });
-      } finally {
-        window.clearInterval(heartbeat);
-      }
+      });
 
       // AI pass: refine the OCR'd fields (cleaner labels, correct types,
       // natural questions). Best-effort — falls back to OCR if the LLM is off.
@@ -183,7 +173,6 @@ export function useProcessing() {
       const unclear = fields.filter((f) => f.confidence < 60 && f.source === "ocr").length;
       setUnclearCount(unclear);
       setStage("done");
-      voice?.transitionConversation({ type: "READY_TO_FILL" });
 
       if (fields.length === 0) {
         const message =
@@ -197,9 +186,7 @@ export function useProcessing() {
       // are, and how many will be auto-filled from the saved profile.
       const sectionKind = result.isAcroForm ? "a digital form with built-in fields" : "a scanned form";
       const preview = fields.slice(0, 4).map((f) => f.label).join(", ");
-      // A field being compatible with a profile is not evidence that the user
-      // has supplied a value. Only count verified, locally persisted matches.
-      const autofillable = matchFieldsToProfile(fields, getProfile()).length;
+      const autofillable = fields.filter((f) => f.profileKey && !f.sensitive).length;
       const summary =
         `Your form is ready. It's ${sectionKind} with ${fields.length} field${fields.length === 1 ? "" : "s"}, ` +
         `including ${preview}${fields.length > 4 ? ", and more" : ""}. ` +
@@ -216,7 +203,6 @@ export function useProcessing() {
       setStage("failed");
       const message = "Something went wrong while analyzing the form. Please try again.";
       setStatus(message);
-      voice?.transitionConversation({ type: "ERROR", message });
       speak(message);
     }
   }
@@ -230,7 +216,71 @@ export function useProcessing() {
     return "pending";
   }
 
-  const autofillable = record ? matchFieldsToProfile(record.fields, getProfile()).length : 0;
+  const autofillable = record?.fields.filter((f) => f.profileKey && !f.sensitive).length ?? 0;
+
+  const stageIdx = STAGE_ORDER.indexOf(stage as AnalysisStage | "done");
+  const progressRatio =
+    stageIdx >= 0 ? Math.min(1, Math.max(0, (stageIdx + 1) / STAGE_ORDER.length)) : 0;
+
+  const typeBreakdown = record
+    ? (() => {
+        const counts: Record<string, number> = {};
+        for (const f of record.fields) {
+          counts[f.type] = (counts[f.type] || 0) + 1;
+        }
+        return Object.entries(counts)
+          .map(([type, count]) => `${count} ${type}`)
+          .join(" · ");
+      })()
+    : "";
+
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  const recordId = record?.id;
+  const recordSourceType = record?.sourceType;
+
+  useEffect(() => {
+    let active = true;
+    let createdUrl: string | null = null;
+
+    if (!recordId || !recordSourceType) return;
+
+    if (recordSourceType === "image") {
+      getFile(formId, "original").then((blob) => {
+        if (!active || !blob) return;
+        createdUrl = URL.createObjectURL(blob);
+        setThumbnailUrl(createdUrl);
+      });
+    } else if (recordSourceType === "pdf") {
+      getFile(formId, "original").then(async (blob) => {
+        if (!active || !blob) return;
+        try {
+          const buffer = await blob.arrayBuffer();
+          if (!active) return;
+          const pdf = await loadPdfDocument(buffer);
+          if (!active) return;
+          try {
+            const rendered = await renderPageToCanvas(pdf, 1, 600);
+            if (!active) return;
+            rendered.canvas.toBlob((b) => {
+              if (!active || !b) return;
+              createdUrl = URL.createObjectURL(b);
+              setThumbnailUrl(createdUrl);
+            }, "image/png");
+          } finally {
+            (pdf as { destroy?: () => void }).destroy?.();
+          }
+        } catch (err) {
+          console.error("Failed to render PDF thumbnail:", err);
+        }
+      });
+    }
+
+    return () => {
+      active = false;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [formId, recordId, recordSourceType]);
 
   return {
     formId,
@@ -244,15 +294,12 @@ export function useProcessing() {
     failed,
     fieldCount,
     autofillable,
+    progressRatio,
+    typeBreakdown,
+    thumbnailUrl,
     stepState,
-    goFill: () => {
-      voice?.transitionConversation({ type: "FILLING_FORM" });
-      router.push(`/fill/${formId}`);
-    },
-    goReview: () => {
-      voice?.transitionConversation({ type: "REVIEWING" });
-      router.push(`/review/${formId}`);
-    },
+    goFill: () => router.push(`/fill/${formId}`),
+    goReview: () => router.push(`/preview/${formId}`),
   };
 }
 

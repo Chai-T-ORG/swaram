@@ -11,15 +11,22 @@
 export type TtsProvider = "system" | "cloud" | "local" | "google";
 /**
  * "groq"         — cloud Whisper via Groq (most accurate, needs internet + key)
+ * "sarvam"       — cloud Sarvam Saaras v3 (best for Indian languages & names,
+ *                  server key). Note: even on other providers, the server
+ *                  promotes Indic-language / name / spell clips to Sarvam.
  * "azure"        — cloud Azure Speech, REST (regional locales, server key + region)
  * "azure-stream" — cloud Azure Speech, real-time streaming SDK: partial results,
  *                  auto language detection, phrase-list biasing. Falls back to
  *                  the Azure REST path on any failure. (Opt-in / beta.)
+ * "sarvam-stream" — cloud Sarvam Saaras v3 over WebSocket: server-side neural
+ *                  VAD endpointing, ~150 ms finals after speech ends. Needs the
+ *                  local relay (scripts/sarvam-ws-relay.mjs); falls back to the
+ *                  clip-based Sarvam path on any failure. (Opt-in / beta.)
  * "whisper"      — on-device Whisper (private, offline, heavier)
  * "native"       — the browser's built-in recognition (instant, no download)
  * "auto"         — groq if configured & online, else whisper if ready, else native
  */
-export type SttProvider = "groq" | "azure" | "azure-stream" | "whisper" | "native" | "auto";
+export type SttProvider = "groq" | "sarvam" | "azure" | "azure-stream" | "sarvam-stream" | "whisper" | "native" | "auto";
 /**
  * "ptt"        — push-to-talk: capture only while the user holds space / taps
  *                the mic. Reliable in noisy/crowded rooms; nothing is recorded
@@ -45,6 +52,8 @@ export interface VoiceSettings {
   micMode: MicMode;
   /** Whether the first-time model setup has completed successfully. */
   setupComplete: boolean;
+  /** Dedicated flag for whether first-run onboarding has been completed by the user. */
+  onboardingComplete: boolean;
 }
 
 const KEY = "swaram_voice_settings";
@@ -58,6 +67,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   sttProvider: "groq",        // Cloud Whisper (Groq) — accurate & instant; native is the fallback
   micMode: "ptt",             // Push-to-talk by default — reliable in noisy rooms
   setupComplete: false,
+  onboardingComplete: false,
 };
 
 export function getVoiceSettings(): VoiceSettings {
@@ -75,6 +85,7 @@ export function getVoiceSettings(): VoiceSettings {
       sttProvider: isValidSttProvider(parsed.sttProvider) ? parsed.sttProvider! : DEFAULT_VOICE_SETTINGS.sttProvider,
       micMode: parsed.micMode === "continuous" || parsed.micMode === "ptt" ? parsed.micMode : DEFAULT_VOICE_SETTINGS.micMode,
       setupComplete: typeof parsed.setupComplete === "boolean" ? parsed.setupComplete : DEFAULT_VOICE_SETTINGS.setupComplete,
+      onboardingComplete: typeof parsed.onboardingComplete === "boolean" ? parsed.onboardingComplete : Boolean(parsed.setupComplete),
     };
   } catch {
     return DEFAULT_VOICE_SETTINGS;
@@ -86,6 +97,18 @@ export function setVoiceSettings(update: Partial<VoiceSettings>): VoiceSettings 
   next.rate = clampRate(next.rate);
   localStorage.setItem(KEY, JSON.stringify(next));
   return next;
+}
+
+export function isOnboardingComplete(): boolean {
+  return getVoiceSettings().onboardingComplete;
+}
+
+export function markOnboardingComplete(): void {
+  setVoiceSettings({ onboardingComplete: true });
+}
+
+export function resetOnboarding(): void {
+  setVoiceSettings({ onboardingComplete: false });
 }
 
 function clampRate(rate: number): number {
@@ -118,5 +141,5 @@ export function migrateVoiceSettings(): void {
 }
 
 function isValidSttProvider(provider: any): provider is SttProvider {
-  return ["groq", "azure", "azure-stream", "whisper", "native", "auto"].includes(provider);
+  return ["groq", "sarvam", "azure", "azure-stream", "sarvam-stream", "whisper", "native", "auto"].includes(provider);
 }

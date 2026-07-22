@@ -1,9 +1,8 @@
 "use client";
 
 /**
- * Review screen logic — field list with inline edits, read-back loop, and the
- * "answer skipped" path (/fill/{id}?only=skipped — the fill loop reads that
- * query param). Moved verbatim from the old page.
+ * Review screen logic — field list with inline edits, read-back loop, and state-aware
+ * split between mid-fill (pending > 0) and post-fill review.
  */
 
 import { useEffect, useState } from "react";
@@ -11,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
 
 export type ReviewTone = "info" | "success" | "warning" | "error";
@@ -26,24 +26,35 @@ export function useReview() {
   const [editValue, setEditValue] = useState("");
   const [reading, setReading] = useState(false);
 
+  const pendingCount =
+    record?.fields.filter((f) => f.status === "pending").length ?? 0;
   const skippedCount =
-    record?.fields.filter((f) => f.status === "skipped" || f.status === "unclear" || f.status === "pending").length ?? 0;
+    record?.fields.filter((f) => f.status === "skipped" || f.status === "unclear").length ?? 0;
 
   useVoicePage(
     {
-      title: "Review your answers",
+      title: pendingCount > 0 ? "Filling in progress" : "Review your answers",
       hint:
-        skippedCount > 0
-          ? `${skippedCount} field${skippedCount === 1 ? "s" : ""} still need attention. Say answer skipped, read my answers, or continue.`
-          : "Say read my answers, or continue.",
-      description: `Review your answers. ${skippedCount} fields skipped. Say read answers or continue.`,
+        pendingCount > 0
+          ? `${pendingCount} field${pendingCount === 1 ? " is" : "s are"} not asked yet. Say continue filling, or read my answers.`
+          : skippedCount > 0
+            ? `${skippedCount} field${skippedCount === 1 ? "s" : ""} still need attention. Say answer skipped, read my answers, or continue.`
+            : "Say read my answers, or continue.",
+      description:
+        pendingCount > 0
+          ? `In progress. ${pendingCount} fields not asked yet. Say continue filling.`
+          : `Review your answers. ${skippedCount} fields skipped. Say read answers or continue.`,
       commands: [
         [/read (my |all )?(answers|form)|read back/, () => readBack(), "read my answers"],
         [/answer skipped|skipped fields/, () => router.push(`/fill/${formId}?only=skipped`), "answer skipped"],
-        [/^(continue|looks good|done|finish)/, () => continueToComplete(), "continue"],
+        [
+          /^(continue|looks good|done|finish)/,
+          () => (pendingCount > 0 ? router.push(`/fill/${formId}`) : continueToComplete()),
+          "continue",
+        ],
       ],
     },
-    [record?.id, skippedCount, reading],
+    [record?.id, pendingCount, skippedCount, reading],
   );
 
   useEffect(() => {
@@ -55,12 +66,16 @@ export function useReview() {
         return;
       }
       setRecord(form);
+      const pending = form.fields.filter((f) => f.status === "pending").length;
       const skipped = form.fields.filter((f) => f.status === "skipped" || f.status === "unclear").length;
-      setStatus(
-        skipped > 0
-          ? `${skipped} field${skipped === 1 ? " was" : "s were"} skipped — answer them now or continue.`
-          : "Everything is filled in. Check the answers, then continue.",
-      );
+
+      if (pending > 0) {
+        setStatus(`${pending} field${pending === 1 ? " is" : "s are"} not asked yet — continue filling or edit answers below.`);
+      } else if (skipped > 0) {
+        setStatus(`${skipped} field${skipped === 1 ? " was" : "s were"} skipped — answer them now or continue.`);
+      } else {
+        setStatus("Everything is filled in. Check the answers, then continue.");
+      }
     });
     return () => cancelSpeech();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,7 +107,9 @@ export function useReview() {
     setReading(true);
     for (const field of [...record.fields].sort((a, b) => a.order - b.order)) {
       const answer =
-        field.status === "skipped" || field.status === "unclear" ? "skipped" : field.value || "blank";
+        field.status === "skipped" || field.status === "unclear"
+          ? "skipped"
+          : fieldDisplayValue(field) || "blank";
       await speak(`${field.label}: ${answer}.`, { interrupt: false });
     }
     setReading(false);
@@ -136,9 +153,11 @@ export function useReview() {
     readBack,
     reading,
     continueToComplete,
+    pendingCount,
     skippedCount,
     counts,
     sortedFields,
+    goFill: () => router.push(`/fill/${formId}`),
     goSkipped: () => router.push(`/fill/${formId}?only=skipped`),
   };
 }

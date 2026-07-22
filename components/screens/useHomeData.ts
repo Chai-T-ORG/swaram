@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { listForms } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
 
@@ -19,10 +19,10 @@ export function routeForForm(form: FormRecord): string {
 }
 
 /** Answered share of a form, 0-100. */
-export function formProgress(form: FormRecord): number {
-  if (!form.fields.length) return 0;
-  const done = form.fields.filter((f) => f.status === "answered" || f.status === "autofilled").length;
-  return Math.round((done / form.fields.length) * 100);
+export function formProgress(f: any): number {
+  if (!f || !f.fields || f.fields.length === 0) return 0;
+  const done = f.fields.filter((field: any) => field.status === "answered" || field.status === "autofilled").length;
+  return Math.round((done / f.fields.length) * 100);
 }
 
 export function formatFormDate(ts: number): string {
@@ -30,26 +30,13 @@ export function formatFormDate(ts: number): string {
 }
 
 export function useHomeData() {
-  const [recent, setRecent] = useState<FormRecord[]>([]);
-  const [activeForm, setActiveForm] = useState<FormRecord | null>(null);
+  const { data: forms = [] } = useSWR("local_forms_list", () => listForms(), {
+    revalidateOnFocus: true,
+    dedupingInterval: 2000,
+  });
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const list = await listForms();
-        if (!alive) return;
-        setRecent(list.slice(0, 3));
-        const active = list.find((f) => f.status === "filling" || f.status === "processing");
-        if (active) setActiveForm(active);
-      } catch (e) {
-        console.warn("Failed to load recent sessions:", e);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const recent = forms.slice(0, 3);
+  const activeForm = forms.find((f) => f.status === "filling" || f.status === "processing") || null;
 
   return { recent, activeForm };
 }

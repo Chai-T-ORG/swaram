@@ -48,8 +48,6 @@ import {
   needsCloudNotice,
   acknowledgeCloudNotice,
   CLOUD_FALLBACK_NOTICE,
-  setBargeInCallback,
-  resumeContinuousListening,
 } from "@/lib/voice/speechToText";
 import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
 import { getProfile } from "@/lib/storage/profileStore";
@@ -70,9 +68,6 @@ import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
 import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from "@/lib/voice/modelManager";
-import { classifyIntent } from "@/lib/voice/intentClassifier";
-import { offTopicRedirect } from "@/lib/voice/offTopicRedirect";
-import { logClassification } from "@/lib/voice/intentMetrics";
 import {
   initialConversation,
   transitionConversation,
@@ -107,6 +102,8 @@ export interface ConversationMessage {
   timestamp: number;
 }
 
+export type VoiceUiState = "idle" | "listening" | "thinking" | "speaking" | "paused" | "success" | "error";
+
 interface VoiceContextValue {
   setPage: (config: PageVoiceConfig) => () => void;
   announce: (text: string) => void;
@@ -126,15 +123,7 @@ interface VoiceContextValue {
   setActiveFormId: (id: string | null) => void;
   micVolume: number;
   ttsActive: boolean;
-  /** Current fill page context for intent classification. */
-  fillContext?: {
-    phase: string;
-    currentFieldLabel?: string;
-    currentFieldType?: string;
-    formName?: string;
-  };
-  /** Set by fill page to provide context. */
-  setFillContext?: (ctx: VoiceContextValue["fillContext"]) => void;
+  voiceUiState: VoiceUiState;
   conversation: ConversationSnapshot;
   transitionConversation: (event: ConversationEvent) => void;
 }
@@ -176,6 +165,7 @@ interface VoiceShellValue {
   onMicPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onMicPointerCancel: () => void;
   togglePtt: () => void;
+  voiceUiState: VoiceUiState;
 }
 
 const VoiceShellContext = createContext<VoiceShellValue | null>(null);
@@ -210,9 +200,6 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const pageRef = useRef<PageVoiceConfig>({});
   const announcedRef = useRef<string>("");
   const pageListenerRef = useRef<((text: string, confidence: number) => boolean) | null>(null);
-  // Async routing must only act on the latest utterance. This prevents a slow
-  // network reply from interrupting the user's next request.
-  const routingTurnRef = useRef(0);
 
   const [exclusive, setExclusive] = useState(false);
   const [sttState, setSttState] = useState<"listening" | "paused-silence" | "off">("off");
@@ -233,10 +220,6 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const [micVolume, setMicVolume] = useState(0);
   const [ttsActive, setTtsActive] = useState(false);
   const [conversation, dispatchConversation] = useReducer(transitionConversation, initialConversation);
-
-  const [fillContext, setFillContext] = useState<VoiceContextValue["fillContext"]>(undefined);
-  const fillContextRef = useRef(fillContext);
-  fillContextRef.current = fillContext;
 
   // One-time: move legacy installs off the old (silent-on-mobile) Kokoro default.
   useEffect(() => {
@@ -282,22 +265,14 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         const dataArray = new Uint8Array(bufferLength);
         source.connect(analyser);
 
-        let lastUpdate = 0;
-        let lastVolume = 0;
-
-        const update = (now: number) => {
+        const update = () => {
           analyser.getByteFrequencyData(dataArray);
           let sum = 0;
           for (let i = 0; i < bufferLength; i++) {
             sum += dataArray[i];
           }
           const avg = sum / bufferLength;
-          const clamped = Math.min(1, avg / 120);
-          if (Math.abs(clamped - lastVolume) > 0.02 || now - lastUpdate > 200) {
-            lastVolume = clamped;
-            lastUpdate = now;
-            setMicVolume(clamped);
-          }
+          setMicVolume(Math.min(1, avg / 120));
           animationId = requestAnimationFrame(update);
         };
         animationId = requestAnimationFrame(update);
@@ -516,11 +491,26 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     ];
   }, [router, navigateWithFeedback, setAssistantLang]);
 
+  /**
+   * One normal form for every matcher lane: NFC (native scripts), lowercase,
+   * apostrophes removed ("let's" → "lets", so /let'?s/ still matches), and all
+   * other punctuation/hyphens become spaces ("Re-take." → "re take") — STT
+   * punctuation habits must never defeat a command regex.
+   */
+  const normalizeUtterance = (t: string) =>
+    t
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .replace(/[.,!?;:"“”()।…|-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
   const runGlobalTranscript = useCallback(
     (transcript: string) => {
       // NFC so native-script (Malayalam/Hindi) regexes compare against the same
       // code-point form the recognizer emits.
-      const heard = transcript.normalize("NFC").toLowerCase().trim();
+      const heard = normalizeUtterance(transcript);
       const commands = [...(pageRef.current.commands ?? []), ...globalCommands()];
       for (const [pattern, handler] of commands) {
         if (pattern.test(heard)) {
@@ -538,15 +528,14 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   // any offline matcher, then the LLM, which maps arbitrary phrasings and any
   // language onto a real action (or answers as chat). Fails soft.
   const resolveWithLlm = useCallback(
-    async (transcript: string, turn: number) => {
-      const isCurrentTurn = () => routingTurnRef.current === turn;
+    async (transcript: string) => {
       const actions = getAvailableActions();
-      const lower = transcript.toLowerCase();
+      const lower = normalizeUtterance(transcript);
 
       // Fast lane: an action carrying its own offline matcher.
       for (const a of actions) {
         if (a.match && a.match.test(lower)) {
-          if (isCurrentTurn()) a.run();
+          a.run();
           return;
         }
       }
@@ -558,20 +547,16 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         ? `On this screen you can say: ${[...pageOpts, "go home"].slice(0, 5).join(", ")}. What would you like to do?`
         : "I'm here to help you fill forms by voice. You can say: upload, scan, my forms, or profile. What would you like to do?";
       if (!isLlmAvailable()) {
-        if (isCurrentTurn()) speak(nudge);
+        speak(nudge);
         return;
       }
 
-      if (!isCurrentTurn()) return;
       flashToast("Thinking…", 3000);
       const res = await resolveAction(
         transcript,
         { pageLabel: pageRef.current.title, lang: getVoiceSettings().sttLang },
         actions.map((a) => ({ id: a.id, description: a.description })),
       );
-
-      // Ignore a response that completed after the user started a newer turn.
-      if (!isCurrentTurn()) return;
 
       if (res.action === "chat") {
         speak(res.reply || nudge);
@@ -614,90 +599,52 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
       if (state === "paused-silence") {
         flashToast("Microphone paused to save battery. Tap anywhere to resume.", 8000);
       } else if (state === "listening") {
-        dispatchConversation({ type: "LISTENING" });
         flashToast("Listening ready…", 4000);
       }
     });
 
     const handleTranscript = (text: string, confidence: number) => {
+      // Ignore empty/noise fragments so we don't nag "sorry" at stray sounds.
       const trimmed = text.trim();
-      if (!trimmed) return;
-      const turn = ++routingTurnRef.current;
+      if (trimmed.length < 2) return;
+      flashToast(`“${text}”`);
 
-      // A fill session is an exclusive dialogue. Give it first refusal before
-      // global intent classification so a field answer can never be mistaken
-      // for navigation (for example, back to the upload screen).
-      if (pathname.startsWith("/fill/") && pageListenerRef.current) {
-        flashToast(`"${trimmed}"`);
-        if (pageListenerRef.current(trimmed, confidence)) return;
+      if (pathname.startsWith("/fill/")) {
+        addMessage("user", text);
       }
 
-      // ── Intent classification (local, no LLM) ──
-      const ctx = fillContextRef.current;
-      const intent = classifyIntent(trimmed, {
-        phase: ctx?.phase,
-        currentFieldLabel: ctx?.currentFieldLabel,
-        currentFieldType: ctx?.currentFieldType,
-        formName: ctx?.formName,
-        lang: getVoiceSettings().sttLang,
-      });
-      logClassification(intent, pathname.startsWith("/fill/") ? "fill" : "global");
-
-      // Noise: defensive (speechToText.ts already filters), but safe to drop
-      if (intent.type === "noise") return;
-
-      // Command: pass through to page/global handlers as before
-      if (intent.type === "command") {
-        flashToast(`"${trimmed}"`);
-        const consumedByPage = pageListenerRef.current
-          ? pageListenerRef.current(trimmed, confidence)
-          : false;
-        if (!consumedByPage) runGlobalTranscript(trimmed);
-        return;
-      }
-
-      // Answer: pass through (page dialogue handles validation / confirmation)
-      if (intent.type === "answer") {
-        flashToast(`"${trimmed}"`);
-        if (pathname.startsWith("/fill/")) addMessage("user", trimmed);
-        pageListenerRef.current?.(trimmed, confidence);
-        return;
-      }
-
-      // Off-topic: speak a polite redirect, don't route to page/global
-      if (intent.type === "off_topic") {
-        // speak() interrupts the previous prompt by default. Acknowledge a
-        // genuine interruption instead of making the user repeat themselves.
-        const redirect = offTopicRedirect({
-          transcript: trimmed,
-          topic: intent.topic,
-          inFillMode: !!pageListenerRef.current,
-          formName: ctx?.formName,
-          currentFieldLabel: ctx?.currentFieldLabel,
-        });
-        speak(redirect);
-        return;
-      }
-
-      // Unknown: route to page/global, then LLM fallback if needed
-      if (pathname.startsWith("/fill/")) addMessage("user", trimmed);
+      // Route transcript: the page dialogue gets first refusal; anything it
+      // doesn't consume falls through to the global commands, so "go home"
+      // or "help" always works — even mid-form.
       const consumedByPage = pageListenerRef.current
-        ? pageListenerRef.current(trimmed, confidence)
+        ? pageListenerRef.current(text, confidence)
         : false;
       if (!consumedByPage) {
-        const handled = runGlobalTranscript(trimmed);
-        if (!handled && !pageListenerRef.current) {
-          void resolveWithLlm(trimmed, turn);
+        const handled = runGlobalTranscript(text);
+        // The fill screen runs its own rich dialogue; don't second-guess it.
+        // Only escalate to the LLM for a real phrase (avoids "sorry" spam).
+        if (!handled && !pageListenerRef.current && !pathname.startsWith("/fill/") && trimmed.length >= 3) {
+          void resolveWithLlm(text);
         }
       }
     };
 
     addTranscriptListener(handleTranscript);
 
+    // Dev-only: lets tests inject an utterance as if STT heard it
+    // (scripts/scan-sim.mjs drives voice commands through this).
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as Record<string, unknown>).__swaramSay = (t: string) =>
+        handleTranscript(t, 1);
+    }
+
     return () => {
       removeTranscriptListener(handleTranscript);
+      if (process.env.NODE_ENV !== "production") {
+        delete (window as unknown as Record<string, unknown>).__swaramSay;
+      }
     };
-  }, [flashToast, runGlobalTranscript, resolveWithLlm, pathname, addMessage]);
+  }, [flashToast, runGlobalTranscript, pathname, addMessage]);
 
   // Listen to TTS speech outputs to log assistant prompts
   useEffect(() => {
@@ -714,18 +661,6 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, [pathname, addMessage]);
-
-  // Wire up barge-in callback — when speech is detected during TTS, resume listening
-  useEffect(() => {
-    setBargeInCallback(() => {
-      console.log("[VoiceProvider] Barge-in detected — resuming listening");
-      // The barge-in detection in textToSpeech.ts already stops TTS.
-      // We just need to make sure listening resumes (runSpeechQueue handles this
-      // after queue drains, but for immediate resume we call it directly).
-      resumeContinuousListening();
-    });
-    return () => setBargeInCallback(null);
-  }, []);
 
   const startListeningNow = useCallback(() => {
     if (!isSttSupported()) {
@@ -1089,6 +1024,20 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     };
   }, [micMode, sttState, startListeningNow]);
 
+  const listening = sttState === "listening";
+  const thinking = !listening && toast.startsWith("Thinking");
+  const isError = toast.toLowerCase().includes("fail") || toast.toLowerCase().includes("error") || toast.toLowerCase().includes("denied");
+  const isSuccess = toast.toLowerCase().includes("ready") || toast.toLowerCase().includes("saved") || toast.toLowerCase().includes("done") || toast.toLowerCase().includes("complete");
+
+  const voiceUiState: VoiceUiState =
+    isError ? "error"
+    : isSuccess ? "success"
+    : listening ? "listening"
+    : ttsActive ? "speaking"
+    : thinking ? "thinking"
+    : sttState === "paused-silence" ? "paused"
+    : "idle";
+
   const contextValue: VoiceContextValue = {
     setPage,
     announce: (text) => speak(text),
@@ -1103,8 +1052,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     setActiveFormId,
     micVolume,
     ttsActive,
-    fillContext,
-    setFillContext,
+    voiceUiState,
     conversation,
     transitionConversation: dispatchConversation,
   };
@@ -1128,6 +1076,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     onMicPointerUp,
     onMicPointerCancel,
     togglePtt,
+    voiceUiState,
   };
 
   return (

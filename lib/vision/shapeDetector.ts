@@ -311,61 +311,181 @@ function sortCorners(points: number[]): number[] {
   return [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y];
 }
 
+/** Shoelace area of a quad [x0,y0,...,x3,y3]. */
+function quadAreaOf(pts: number[]): number {
+  let area = 0;
+  for (let i = 0; i < 4; i++) {
+    area +=
+      pts[i * 2] * pts[((i + 1) % 4) * 2 + 1] - pts[((i + 1) % 4) * 2] * pts[i * 2 + 1];
+  }
+  return Math.abs(area) / 2;
+}
+
 export async function detectCorners(canvas: HTMLCanvasElement): Promise<number[] | null> {
   const cv = await loadOpenCv();
   if (!cv) return null;
 
   const src = cv.imread(canvas);
   const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  const edges = new cv.Mat();
-  const approx = new cv.Mat();
+  const work = new cv.Mat();
+  const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
 
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    cv.Canny(blurred, edges, 60, 180);
+  const w = canvas.width;
+  const h = canvas.height;
+  const frameArea = w * h;
+  const minArea = frameArea * 0.1;
+  const maxArea = frameArea * 0.95;
+  const borderX = w * 0.02;
+  const borderY = h * 0.02;
 
+  let bestScore = 0;
+  let bestPoints: number[] | null = null;
+
+  /**
+   * Score every plausible 4-corner candidate in a binary mask. The hull is
+   * convex by construction; a held sheet (fingers, curled corner) often
+   * approximates to 5-6 points at tight tolerance before collapsing to its
+   * 4 true corners, hence the epsilon escalation. Quads that hug the frame
+   * are the merged-background blob, never the paper — rejected outright.
+   */
+  const considerContours = (mask: unknown, mode: number) => {
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    let bestArea = 0;
-    let bestPoints: number[] | null = null;
+    cv.findContours(mask as never, contours, hierarchy, mode, cv.CHAIN_APPROX_SIMPLE);
 
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
-      const peri = cv.arcLength(contour, true);
-      cv.approxPolyDP(contour, approx, 0.03 * peri, true);
-      if ((approx as any).rows === 4) {
-        const rect = cv.boundingRect(approx);
-        const area = rect.width * rect.height;
-        if (area > bestArea && area > canvas.width * canvas.height * 0.15) {
-          bestArea = area;
+      const area = cv.contourArea(contour);
+      if (area < minArea) {
+        contour.delete();
+        continue;
+      }
+
+      const hull = new cv.Mat();
+      cv.convexHull(contour, hull, false, true);
+      const hullPeri = cv.arcLength(hull, true);
+
+      for (const eps of [0.02, 0.04, 0.06, 0.09]) {
+        const approx = new cv.Mat();
+        cv.approxPolyDP(hull, approx, eps * hullPeri, true);
+        if ((approx as any).rows === 4) {
           const pts: number[] = [];
           for (let j = 0; j < 4; j++) {
             pts.push((approx as any).data32S[j * 2], (approx as any).data32S[j * 2 + 1]);
           }
-          bestPoints = pts;
+          const qa = quadAreaOf(pts);
+          let borderCorners = 0;
+          for (let j = 0; j < 4; j++) {
+            const x = pts[j * 2];
+            const y = pts[j * 2 + 1];
+            if (x < borderX || x > w - borderX || y < borderY || y > h - borderY) borderCorners++;
+          }
+          // A photographed sheet keeps its corners near 90° even under
+          // perspective; |cos| > 0.5 (outside 60°–120°) is never the paper.
+          let maxCos = 0;
+          for (let j = 0; j < 4; j++) {
+            const v1x = pts[((j + 3) % 4) * 2] - pts[j * 2];
+            const v1y = pts[((j + 3) % 4) * 2 + 1] - pts[j * 2 + 1];
+            const v2x = pts[((j + 1) % 4) * 2] - pts[j * 2];
+            const v2y = pts[((j + 1) % 4) * 2 + 1] - pts[j * 2 + 1];
+            const cos = Math.abs(
+              (v1x * v2x + v1y * v2y) / (Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y) || 1),
+            );
+            maxCos = Math.max(maxCos, cos);
+          }
+          if (qa >= minArea && qa <= maxArea && borderCorners < 3 && maxCos <= 0.5) {
+            // Prefer large, rectangular, and right-angled: a paper sheet
+            // fills its bounding box; sprawling background contours don't.
+            const rect = cv.boundingRect(approx);
+            const rectangularity = qa / Math.max(1, rect.width * rect.height);
+            const score = qa * rectangularity * (1 - maxCos);
+            if (score > bestScore) {
+              bestScore = score;
+              bestPoints = pts;
+            }
+          }
+          approx.delete();
+          break;
         }
+        approx.delete();
       }
+      hull.delete();
       contour.delete();
     }
 
-    approx.delete();
     contours.delete();
     hierarchy.delete();
+  };
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, work, new cv.Size(5, 5), 0);
+
+    // Path A — the paper is usually the brightest region in frame: segment it
+    // directly (robust on busy/colored backgrounds where edges are hopeless).
+    const bright = new cv.Mat();
+    cv.threshold(work, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kernel);
+    considerContours(bright, cv.RETR_EXTERNAL);
+    bright.delete();
+
+    // Path S — whiteness: paper is bright AND unsaturated. Warm light-colored
+    // backgrounds (cream fabric, wood) fool a pure brightness split, but they
+    // carry saturation the paper doesn't.
+    const rgb = new cv.Mat();
+    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+    const hsv = new cv.Mat();
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    rgb.delete();
+    const chans = new cv.MatVector();
+    cv.split(hsv, chans);
+    hsv.delete();
+    const sat = chans.get(1);
+    const val = chans.get(2);
+    const lowSat = new cv.Mat();
+    cv.threshold(sat, lowSat, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    const brightV = new cv.Mat();
+    cv.threshold(val, brightV, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    const white = new cv.Mat();
+    cv.bitwise_and(lowSat, brightV, white);
+    lowSat.delete();
+    brightV.delete();
+    sat.delete();
+    val.delete();
+    chans.delete();
+    cv.morphologyEx(white, white, cv.MORPH_CLOSE, kernel);
+    considerContours(white, cv.RETR_EXTERNAL);
+    white.delete();
+
+    // Path B — edge outline with ONE gentle gap-closing dilation. RETR_LIST,
+    // because on textured backgrounds the dilated texture merges into a blob
+    // and the paper survives only as a hole inside it.
+    const edges = new cv.Mat();
+    cv.Canny(work, edges, 30, 100);
+    cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 1);
+    considerContours(edges, cv.RETR_LIST);
+    edges.delete();
+
+    // Path C — adaptive threshold: survives uneven lighting and soft shadows
+    // that defeat the single global Otsu split.
+    const adaptive = new cv.Mat();
+    const rawBlock = Math.max(3, Math.round(Math.min(w, h) / 8));
+    const blockSize = rawBlock % 2 === 1 ? rawBlock : rawBlock + 1;
+    cv.adaptiveThreshold(work, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, blockSize, 5);
+    cv.morphologyEx(adaptive, adaptive, cv.MORPH_CLOSE, kernel);
+    considerContours(adaptive, cv.RETR_LIST);
+    adaptive.delete();
 
     if (!bestPoints) return null;
-    return sortCorners(bestPoints);
+    return sortCorners((bestPoints as number[]).map((v) => Math.round(v)));
   } catch (error) {
     console.warn("[swaram] detectCorners failed:", error);
     return null;
   } finally {
     src.delete();
     gray.delete();
-    blurred.delete();
-    edges.delete();
+    work.delete();
+    kernel.delete();
   }
 }
 

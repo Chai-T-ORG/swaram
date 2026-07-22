@@ -25,6 +25,7 @@ import {
 import {
   isGroqConfigured,
   isAzureConfigured,
+  isSarvamConfigured,
   startGroqListening,
   stopGroqListening,
   pauseGroqListening,
@@ -40,6 +41,12 @@ import {
   pauseAzureStream,
   resumeAzureStream,
 } from "./azureStreamSTT";
+import {
+  startSarvamStream,
+  stopSarvamStream,
+  pauseSarvamStream,
+  resumeSarvamStream,
+} from "./sarvamStreamSTT";
 
 interface SRAlternative {
   transcript: string;
@@ -352,8 +359,11 @@ export function wakeUpContinuous(): void {
 let usingWhisper = false;
 let usingGroq = false;
 let usingAzureStream = false;
+let usingSarvamStream = false;
 /** Set once Azure streaming has fallen back, so we don't re-select it this session. */
 let azureStreamDisabled = false;
+/** Set once Sarvam streaming has fallen back, so we don't re-select it this session. */
+let sarvamStreamDisabled = false;
 
 /** Shared: normalize, play the earcon, reset silence timer, and fan out. */
 function emitTranscript(source: string, text: string, confidence: number): void {
@@ -402,7 +412,9 @@ setGroqFallback(() => {
   removeGroqTranscriptListener(groqBridgeListener);
   usingGroq = false;
   if (!shouldBeListening) return;
-  if (isWhisperReady() && getVoiceSettings().sttProvider !== "native") {
+  // Whisper-base.en is English-only — non-English sessions fall to native.
+  const lang = getVoiceSettings().sttLang || "en-IN";
+  if (isWhisperReady() && lang.startsWith("en") && getVoiceSettings().sttProvider !== "native") {
     usingWhisper = true;
     addWhisperTranscriptListener(whisperBridgeListener);
     startWhisperListening().catch(() => startNativeContinuousListening());
@@ -445,14 +457,44 @@ export function startContinuousListening(options: { lang?: string } = {}): void 
     return;
   }
 
-  // ── Cloud STT via our /api/transcribe proxy (Groq or Azure REST) ──
-  const cloudConfigured = provider === "azure" ? isAzureConfigured() : isGroqConfigured();
+  // ── Sarvam real-time streaming (opt-in) ──────────────────────────
+  // Needs the local WS relay; any failure drops to the clip-based capture,
+  // whose Sarvam promotion covers the same languages.
+  if (provider === "sarvam-stream" && !sarvamStreamDisabled) {
+    console.log("[STT] Using Sarvam streaming engine");
+    usingSarvamStream = true;
+    usingGroq = false;
+    usingWhisper = false;
+    if (continuousActive) { try { continuousActive.abort(); } catch { /* ignore */ } continuousActive = null; }
+    const fallBack = (reason: string) => {
+      console.warn("[STT] Sarvam streaming unavailable — falling back:", reason);
+      sarvamStreamDisabled = true;
+      usingSarvamStream = false;
+      if (shouldBeListening) startCloudVadCapture(options);
+    };
+    startSarvamStream({
+      onFinal: (text, confidence) => emitTranscript("SarvamStream", text, confidence),
+      onFallback: fallBack,
+    }).then((ok) => {
+      if (ok) { if (onStateChangeCallback) onStateChangeCallback("listening"); }
+      else fallBack("start-failed");
+    });
+    return;
+  }
+
+  // ── Cloud STT via our /api/transcribe proxy (Groq, Sarvam, or Azure REST) ──
+  const cloudConfigured =
+    provider === "azure"
+      ? isAzureConfigured()
+      : provider === "sarvam" || provider === "sarvam-stream"
+        ? isSarvamConfigured() || isGroqConfigured()
+        : isGroqConfigured();
   if (
-    (provider === "groq" || provider === "auto" || provider === "azure") &&
+    (provider === "groq" || provider === "auto" || provider === "azure" || provider === "sarvam" || provider === "sarvam-stream") &&
     cloudConfigured &&
     !groqDisabledThisSession
   ) {
-    console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : "Groq"})`);
+    console.log(`[STT] Using cloud engine (${provider === "azure" ? "Azure" : provider === "sarvam" ? "Sarvam" : "Groq"})`);
     startCloudVadCapture(options);
     return;
   }
@@ -482,9 +524,15 @@ function startCloudVadCapture(options: { lang?: string } = {}): void {
 /** Whisper if ready & permitted, otherwise the native browser engine. */
 function startWhisperOrNative(options: { lang?: string } = {}): void {
   const provider = getVoiceSettings().sttProvider;
+  // On-device Whisper is whisper-base.en — English only. For any other
+  // language the browser's native recognizer is the correct fallback;
+  // routing Malayalam/Hindi audio into an English Whisper yields fluent
+  // hallucinations, not transcripts.
+  const lang = options.lang || getVoiceSettings().sttLang || "en-IN";
   if (
     isWhisperReady() &&
-    (provider === "whisper" || provider === "auto" || provider === "groq" || provider === "azure")
+    lang.startsWith("en") &&
+    (provider === "whisper" || provider === "auto" || provider === "groq" || provider === "azure" || provider === "sarvam")
   ) {
     console.log("[STT] Using Whisper engine");
     usingWhisper = true;
@@ -607,6 +655,12 @@ export function stopContinuousListening(): void {
     usingAzureStream = false;
   }
 
+  // Stop Sarvam streaming if active
+  if (usingSarvamStream) {
+    stopSarvamStream();
+    usingSarvamStream = false;
+  }
+
   // Stop Groq if active
   if (usingGroq) {
     stopGroqListening();
@@ -637,6 +691,9 @@ export function pauseContinuousListening(): void {
   isPausedForTTS = true;
   if (usingAzureStream) {
     pauseAzureStream();
+  }
+  if (usingSarvamStream) {
+    pauseSarvamStream();
   }
   if (usingGroq) {
     pauseGroqListening();
@@ -697,6 +754,8 @@ export function resumeContinuousListening(): void {
   if (shouldBeListening && !isAutoPaused) {
     if (usingAzureStream) {
       resumeAzureStream();
+    } else if (usingSarvamStream) {
+      resumeSarvamStream();
     } else if (usingGroq) {
       resumeGroqListening();
     } else if (usingWhisper) {

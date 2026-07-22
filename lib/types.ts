@@ -48,6 +48,11 @@ export interface FormField {
   
   // Specific to "comb" fields (letter-by-letter)
   combLength?: number;
+  /** Per-cell boxes for a comb whose cells are grouped/spaced (Aadhaar 4-4-4,
+   *  boxed dates). When present, write-back places each character in its own
+   *  cell instead of dividing the bbox into equal cells. Optional — absence
+   *  keeps the uniform-division behavior. */
+  combCells?: BBox[];
 
   // Specific to "table" fields
   columns?: string[];

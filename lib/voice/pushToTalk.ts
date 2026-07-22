@@ -11,11 +11,12 @@
  * proxy → Groq Whisper. Falls back through the same proxy fallbacks.
  */
 import { getStream, initMic } from "./micManager";
-import { getGroqKey } from "./groqSTT";
+import { getGroqKey, getSttFieldHint } from "./groqSTT";
 import { getVoiceSettings } from "./voiceSettings";
 import { emitExternalTranscript } from "./speechToText";
 import { blobToWav16k } from "./wavEncode";
 import { startAzureStream, stopAzureStream } from "./azureStreamSTT";
+import { startSarvamStream, stopSarvamStream, flushSarvamStream } from "./sarvamStreamSTT";
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -24,6 +25,7 @@ let startedAt = 0;
 // Push-to-talk with the streaming provider: the recognizer runs for the whole
 // press and emits transcripts live, instead of one clip at release.
 let usingStream = false;
+let usingSarvamWs = false;
 let lastStreamText = "";
 const stateListeners = new Set<(capturing: boolean) => void>();
 
@@ -59,7 +61,7 @@ function pickMimeType(): string | undefined {
 export async function startPtt(): Promise<boolean> {
   if (capturing) return true;
 
-  // Streaming provider: run the recognizer for the duration of the press.
+  // Streaming providers: run the recognizer for the duration of the press.
   if (getVoiceSettings().sttProvider === "azure-stream") {
     lastStreamText = "";
     const ok = await startAzureStream({
@@ -73,6 +75,24 @@ export async function startPtt(): Promise<boolean> {
     }
     // Streaming couldn't start — fall through to the MediaRecorder clip path,
     // which posts to /api/transcribe (routed to Azure REST) as a backstop.
+  }
+  if (getVoiceSettings().sttProvider === "sarvam-stream") {
+    lastStreamText = "";
+    const ok = await startSarvamStream({
+      // Finals during the press are server-endpointed utterances; the flush
+      // on release finalizes the tail. Emission happens on release so a turn
+      // is exactly one transcript, like the clip path.
+      onFinal: (text) => { lastStreamText = text; },
+      onFallback: () => { usingStream = false; usingSarvamWs = false; },
+    });
+    if (ok) {
+      usingStream = true;
+      usingSarvamWs = true;
+      setCapturing(true);
+      return true;
+    }
+    // No relay / connect failure — MediaRecorder clip path (server routes the
+    // clip to Sarvam REST) is the backstop.
   }
 
   let stream = getStream();
@@ -101,10 +121,17 @@ export async function startPtt(): Promise<boolean> {
  * transcript, or "" if nothing usable was said.
  */
 export async function stopPtt(): Promise<string> {
-  // Streaming press: transcripts were already emitted live; return the last one
-  // only so the caller's "didn't catch that" check is accurate.
+  // Streaming press: finalize and return the transcript.
   if (usingStream) {
     usingStream = false;
+    if (usingSarvamWs) {
+      usingSarvamWs = false;
+      const text = await flushSarvamStream();
+      stopSarvamStream();
+      setCapturing(false);
+      if (text) emitExternalTranscript(text);
+      return text;
+    }
     stopAzureStream();
     setCapturing(false);
     return lastStreamText;
@@ -123,8 +150,8 @@ export async function stopPtt(): Promise<string> {
   // Ignore accidental taps (too short to contain speech).
   if (heldMs < 300 || blob.size < 1500) return "";
 
-  const text = await transcribeBlob(blob);
-  if (text) emitExternalTranscript(text);
+  const { text, confidence } = await transcribeBlob(blob);
+  if (text) emitExternalTranscript(text, confidence);
   return text;
 }
 
@@ -132,7 +159,12 @@ export async function stopPtt(): Promise<string> {
 export function cancelPtt(): void {
   if (usingStream) {
     usingStream = false;
-    stopAzureStream();
+    if (usingSarvamWs) {
+      usingSarvamWs = false;
+      stopSarvamStream();
+    } else {
+      stopAzureStream();
+    }
     setCapturing(false);
     return;
   }
@@ -153,36 +185,52 @@ if (typeof window !== "undefined") {
   };
 }
 
-async function transcribeBlob(blob: Blob): Promise<string> {
+async function transcribeBlob(blob: Blob): Promise<{ text: string; confidence: number }> {
   const provider = getVoiceSettings().sttProvider;
+  const lang = getVoiceSettings().sttLang || "en-IN";
+  // The fill session's field hint decides the server path: name/spell clips
+  // run the multi-engine ensemble. Push-to-talk is the DEFAULT input mode, so
+  // omitting these headers here silently disabled the ensemble for most real
+  // usage — the "it guesses my name" bug.
+  const { hint, context } = getSttFieldHint();
 
-  // Azure's REST endpoint only accepts 16 kHz mono WAV. MediaRecorder emits
-  // webm/mp4/ogg, so decode the clip to 16 kHz WAV via the browser before
-  // upload. If decoding fails, send the original and let the server fall back.
-  // ("azure-stream" reaches this MediaRecorder path only as its REST fallback.)
+  // Sarvam and Azure only accept 16 kHz mono WAV, and hinted clips fan out to
+  // both — so anything beyond the plain-English Groq path is decoded to WAV
+  // in the browser. If decoding fails, send the original and let the server
+  // fall back to Whisper.
   let body: Blob = blob;
-  if (provider === "azure" || provider === "azure-stream") {
+  if (hint !== "" || !lang.startsWith("en") || provider !== "groq") {
     const wav = await blobToWav16k(blob);
     if (wav) body = wav;
   }
 
   const headers: Record<string, string> = {
     "Content-Type": body.type || "audio/webm",
-    "x-language": getVoiceSettings().sttLang || "en-IN",
+    "x-language": lang,
     "x-stt-provider": provider,
   };
+  if (hint) {
+    headers["x-stt-hint"] = hint;
+    if (context.label) headers["x-field-label"] = encodeURIComponent(context.label.slice(0, 80));
+    if (context.names?.length) {
+      headers["x-known-names"] = encodeURIComponent(context.names.join(", ").slice(0, 240));
+    }
+  }
   const localKey = getGroqKey();
   if (localKey) headers["x-groq-key"] = localKey;
   try {
     const res = await fetch("/api/transcribe", { method: "POST", headers, body });
-    const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+    const data = (await res.json().catch(() => ({}))) as { text?: string; provider?: string; error?: string };
     if (!res.ok || data.error) {
       console.warn("[PTT] transcription failed:", res.status, data.error);
-      return "";
+      return { text: "", confidence: 0 };
     }
-    return (data.text ?? "").trim();
+    // Mirror the VAD path's confidence semantics: unanimous engines beat a
+    // fused disagreement, which beats a lone engine's word.
+    const confidence = data.provider === "consensus" ? 0.99 : data.provider === "fusion" ? 0.85 : 0.97;
+    return { text: (data.text ?? "").trim(), confidence };
   } catch (err) {
     console.warn("[PTT] transcription error:", err);
-    return "";
+    return { text: "", confidence: 0 };
   }
 }

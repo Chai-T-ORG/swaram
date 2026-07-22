@@ -15,32 +15,26 @@ import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { isLlmAvailable, assist, correctTranscript } from "@/lib/voice/llm";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
+import { expandTableCells, applyCellValue, parseCount, type CellRef, type RowCountRef } from "@/lib/analysis/tableCells";
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
-import { spellTokensToText, titleCase, formatAnswer } from "@/lib/voice/transcriptFormat";
-import { parseFillCommand, isNameField, needsConfirmation, plausibleAnswer } from "@/lib/voice/fillCommands";
+import { validateField } from "@/lib/validation/rules";
+import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE } from "@/lib/voice/transcriptFormat";
+import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
+import { setSttFieldHint } from "@/lib/voice/groqSTT";
+import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
+import { transliterateForSpeech } from "@/lib/voice/transliterate";
 import { INTL_KEYWORDS, containsKeyword } from "@/lib/voice/intlCommands";
 import {
   isSttSupported,
   acknowledgeCloudNotice,
+  addTranscriptListener,
+  removeTranscriptListener,
 } from "@/lib/voice/speechToText";
 
 const UNCLEAR_THRESHOLD = 0.6;
-
-/** Confidence thresholds for answer acceptance. */
-const HIGH_CONFIDENCE = 0.98;   // ≥ this → auto-fill without asking
-const MED_CONFIDENCE = 0.95;    // ≥ this → ask confirmation, < this → ask to repeat
-
-/**
- * Detect letter-by-letter spelling patterns in a transcript.
- * Matches "A N S H" or "a n s h" — individual single letters separated by spaces.
- */
-function isSpellingPattern(text: string): boolean {
-  const tokens = text.toLowerCase().trim().split(/\s+/);
-  if (tokens.length < 2) return false;
-  const letterTokens = tokens.filter((t) => /^[a-z]$/.test(t) || t in { double: 1, triple: 1, space: 1 });
-  return letterTokens.length >= 2 && letterTokens.length / tokens.length > 0.6;
-}
+const HIGH_CONFIDENCE = 0.98;
+const MED_CONFIDENCE = 0.95;
 
 export type FillPhase =
   | "loading"
@@ -84,6 +78,10 @@ export function useFillSession() {
   const posRef = useRef(0);
   const queueRef = useRef<FormField[]>([]);
   const generationRef = useRef(0);
+  /** Synthetic table-cell queue items -> their {tableId,row,col} in record.fields. */
+  const cellMapRef = useRef<Map<string, CellRef>>(new Map());
+  /** Synthetic "how many entries?" items -> the list table they gate. */
+  const rowCountMapRef = useRef<Map<string, RowCountRef>>(new Map());
   const onlySkippedRef = useRef(searchParams.get("only") === "skipped");
   const retriesRef = useRef(0);
   const noSpeechRef = useRef(0);
@@ -92,23 +90,34 @@ export function useFillSession() {
   const listenKindRef = useRef<"answer" | "confirm">("answer");
   /** When true, the next answer utterance is dictated letters (spell mode). */
   const spellInputRef = useRef(false);
-  /** When a field ID is set, it's locked — no new answers accepted until unlocked. */
+  /** Prevent another answer from replacing a just-committed field. */
   const lockedFieldRef = useRef<string | null>(null);
+  /** True while the value awaiting confirmation came from spelling — a "no"
+   * then re-enters spell-repair instead of asking the question over. */
+  const spelledPendingRef = useRef(false);
+  /** Continuation endpointing: a half-finished answer waiting for its rest. */
+  const pendingContinuationRef = useRef<{ text: string; extensions: number; timer: ReturnType<typeof setTimeout> } | null>(null);
 
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
 
-  const currentField = record?.fields.find((f) => f.id === currentId) ?? null;
+  // currentId may point at a synthetic table-cell field that lives only in the
+  // queue, so fall back to searching the queue when it isn't in record.fields.
+  const currentField =
+    record?.fields.find((f) => f.id === currentId) ??
+    queueRef.current.find((f) => f.id === currentId) ??
+    null;
   const queueLength = queueRef.current.length;
-  const questionNumber = record
-    ? record.fields.length - queueLength + Math.min(posRef.current + 1, queueLength)
-    : 1;
+  // Progress is queue-relative: table expansion makes the queue longer than
+  // record.fields, so counting against record.fields would go negative.
+  const questionNumber = queueLength > 0 ? Math.min(posRef.current + 1, queueLength) : 1;
 
   // Track active components
   useEffect(() => {
     load();
     return () => {
       cancelSpeech();
+      setSttFieldHint("");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formId]);
@@ -116,46 +125,83 @@ export function useFillSession() {
   // Hook transcript listeners to handle incoming voice inputs. Commands work
   // in EVERY phase — not just while actively listening for an answer — so
   // "start", "resume", and "use voice" all respond by voice.
+  //
+  // Registered as the PAGE transcript listener (not a plain listener): while
+  // the dialogue is active it must CONSUME utterances, or they also reach the
+  // global command table — where "back" means router.back() and threw the
+  // user out of the session to the start page instead of the previous field.
   useEffect(() => {
-    if (!voice) return;
-    return voice.registerPageTranscriptListener((text: string, confidence: number) => {
+    function onTranscript(text: string, confidence: number): boolean {
       const clean = text.toLowerCase().trim();
 
       if (phase === "start" || phase === "notice") {
         if (/\b(start|begin|let'?s go|fill|continue|go|ready|haan|shuru)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.start)) {
           handleStart();
+          return true;
         }
-        return true;
+        return false; // global commands ("go home") still work pre-start
       }
       if (phase === "paused") {
         if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.resume)) {
           resume();
+          return true;
         }
-        return true;
+        return false;
       }
       if (phase === "typing") {
         if (/use voice|voice instead|resume voice|listen/.test(clean)) {
           resume();
+          return true;
         }
         return true;
       }
-      if (phase === "listening" || phase === "confirming") {
-        handleSpeechInput(text, confidence);
+      if (phase === "asking") {
+        // The question is still being spoken — a command ("skip", "repeat",
+        // "pause") interrupts it; anything else waits for listening.
+        if (parseFillCommand(clean)) {
+          void handleSpeechInput(text, confidence);
+          return true;
+        }
+        return false;
       }
-      return true;
-    });
+      if (phase === "listening" || phase === "confirming") {
+        const bare = clean.replace(/[.,!?]+$/, "").trim();
+        // Escape hatch 1 — language switching and screen readback are global
+        // capabilities; these ANCHORED verb forms can't be mistaken for an
+        // answer (a bare "Malayalam" answering a mother-tongue field stays
+        // an answer).
+        if (
+          /^(?:please )?(?:speak|talk|switch)(?: to| in)? (?:english|hindi|malayalam|french)$|^hindi (?:me|mein)(?: bolo)?$|^read (?:this |the )?page$|^where am i$/.test(bare)
+        ) {
+          return false; // let the global command table handle it
+        }
+        // Escape hatch 2 — leave the session by voice. Progress is already
+        // saved after every answer, so this is always safe.
+        if (
+          /^(?:quit|exit|leave(?: the)? (?:form|session)|stop filling|go home|go to home(?: page)?|main menu)$/.test(bare) ||
+          containsKeyword(text, INTL_KEYWORDS.home)
+        ) {
+          beginRun();
+          setSttFieldHint("");
+          speak("Okay, pausing this form. Your answers are saved — continue anytime from My Forms.").then(() => {
+            router.push("/");
+          });
+          return true;
+        }
+        // Everything else is the dialogue's: an answer, a yes/no, or a fill
+        // command ("back" = previous question, never browser history).
+        void handleSpeechInput(text, confidence);
+        return true;
+      }
+      return false;
+    }
+    if (voice) return voice.registerPageTranscriptListener(onTranscript);
+    // No provider (tests): fall back to the plain listener without consume.
+    const plain = (t: string, c: number) => void onTranscript(t, c);
+    addTranscriptListener(plain);
+    return () => removeTranscriptListener(plain);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice?.registerPageTranscriptListener, phase]);
-
-  useEffect(() => {
-    voice?.setFillContext?.({
-      phase,
-      currentFieldLabel: currentField?.label,
-      currentFieldType: currentField?.type,
-      formName: record?.name,
-    });
-    return () => voice?.setFillContext?.(undefined);
-  }, [voice?.setFillContext, phase, currentField?.id, record?.name]);
+  }, [phase, voice]);
 
   // Synchronize state values
   function syncRecord() {
@@ -208,7 +254,6 @@ export function useFillSession() {
     const rec = recordRef.current;
     if (!rec) return;
 
-    voice?.transitionConversation({ type: "FILLING_FORM" });
     rec.status = "filling";
     syncRecord();
 
@@ -223,7 +268,11 @@ export function useFillSession() {
       return;
     }
 
-    queueRef.current = pending;
+    // Expand any table fields into one synthetic question per empty cell,
+    // gating list tables (family members etc.) behind a "how many?" question.
+    cellMapRef.current = new Map();
+    rowCountMapRef.current = new Map();
+    queueRef.current = expandTableCells(pending, cellMapRef.current, rowCountMapRef.current);
     posRef.current = 0;
     const id = beginRun();
 
@@ -264,6 +313,8 @@ export function useFillSession() {
     switch (field.type) {
       case "date":
         return `What is your ${field.label}? For example: 25 May 2002.`;
+      case "comb":
+        return `What is your ${field.label}? This is one character per box, so you can say let me spell.`;
       case "checkbox":
         return `${field.label} — yes or no?`;
       default:
@@ -277,10 +328,12 @@ export function useFillSession() {
   async function askField(pos: number, id: number) {
     let field = fieldAt(pos);
 
-    // Automatically skip signatures and unmet dependencies
+    // Automatically skip signatures and unmet dependencies. Tables are normally
+    // expanded into per-cell questions before they reach the queue; this skip
+    // only guards the jumpToField path, which uses the raw record.fields.
     while (field) {
       let skip = false;
-      if (field.type === "signature") {
+      if (field.type === "signature" || field.type === "table") {
         skip = true;
       } else if (field.dependsOn) {
         const target = recordRef.current?.fields.find((f) => f.profileKey === field!.dependsOn!.fieldKey);
@@ -310,7 +363,22 @@ export function useFillSession() {
     retriesRef.current = 0;
     noSpeechRef.current = 0;
     unclearTriedRef.current = false;
-    lockedFieldRef.current = null; // unlock for new field
+    lockedFieldRef.current = null;
+    // A stale value from the previous field must never seed a spell-repair,
+    // and a half-finished answer must never leak into the next question.
+    pendingConfirmRef.current = null;
+    spelledPendingRef.current = false;
+    if (pendingContinuationRef.current) {
+      clearTimeout(pendingContinuationRef.current.timer);
+      pendingContinuationRef.current = null;
+    }
+    // Tell the STT router what kind of clip is coming: name-field audio runs
+    // the server's multi-engine ensemble with this label + the user's known
+    // names as biasing context.
+    setSttFieldHint(
+      smartLane(field).kind === "name" ? "name" : "",
+      { label: field.label, names: knownNames() },
+    );
     setPhase("asking");
     setTone("info");
     setStatus(questionFor(field));
@@ -332,11 +400,18 @@ export function useFillSession() {
   }
 
   async function handleSpeechInput(transcript: string, confidence: number) {
+    // A held-open answer (continuation endpointing): the user paused
+    // mid-answer and this utterance is the rest of it. Commands still win —
+    // "skip" mid-address discards the partial.
+    const pending = pendingContinuationRef.current;
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingContinuationRef.current = null;
+    }
     const id = beginRun();
     const clean = transcript.toLowerCase().trim();
     const cmd = parseFillCommand(clean);
 
-    // Field is locked — reject new answers until they go back or re-ask.
     if (lockedFieldRef.current && !cmd) {
       await speak("This field is already answered. Say go back to change it, or continue to the next question.");
       if (alive(id)) setPhase("listening");
@@ -346,18 +421,15 @@ export function useFillSession() {
     // Commands work in both answer and confirm modes.
     if (cmd === "help") {
       await speak(
-        "Just say your answer. You can also say: repeat, skip, go back, let me spell, type instead, or pause.",
+        "Just say your answer. You can also say: repeat, skip, go back, let me spell, type instead, or pause. " +
+          "While confirming, you can say things like: change K to C, or: the third letter is E.",
       );
       if (alive(id)) setPhase("listening");
       return;
     }
     if (cmd === "repeat") { handleCommand("repeat", posRef.current, id); return; }
     if (cmd === "skip") { handleCommand("skip", posRef.current, id); return; }
-    if (cmd === "back") {
-      lockedFieldRef.current = null; // unlock when going back
-      handleCommand("back", posRef.current, id);
-      return;
-    }
+    if (cmd === "back") { lockedFieldRef.current = null; handleCommand("back", posRef.current, id); return; }
     if (cmd === "type") { spellInputRef.current = false; setPhase("typing"); return; }
     if (cmd === "pause") {
       setPhase("paused");
@@ -376,25 +448,27 @@ export function useFillSession() {
         if (alive(id)) { spellInputRef.current = true; setPhase("listening"); }
         return;
       }
-      const value = field && isNameField(field) ? titleCase(spelled) : spelled;
+      // Repair, don't restart: when the user spells right after rejecting a
+      // heard value, splice the spelling into it — fixing only the wrong word
+      // ("Twinsha T Tilkan" + "t h i l a k a n" -> "Twinsha T Thilakan").
+      const prior = pendingConfirmRef.current;
+      const merged = prior && field?.type === "text" ? mergeSpelledCorrection(prior, spelled) : spelled;
+      const value = field && isNameField(field)
+        ? titleCase(merged)
+        : field && ID_FIELD_RE.test(field.label.toLowerCase())
+          ? formatIdCode(merged)
+          : merged;
+      setSttFieldHint("");
+      spelledPendingRef.current = true;
       pendingConfirmRef.current = value;
       setConfirmValue(value);
       setHeard(value);
       listenKindRef.current = "confirm";
       setPhase("confirming");
-      setStatus(`Spelled: "${value}". Correct?`);
+      setStatus(`Spelled: “${value}”. Correct?`);
       await speak(`I got: ${spellOut(value)}. Is that correct?`);
       if (alive(id)) setPhase("listening");
       return;
-    }
-
-    // Auto-detect spelling pattern for name fields: "A N S H" → enter spell mode
-    if (listenKindRef.current !== "confirm") {
-      const field = fieldAt(posRef.current);
-      if (field && isNameField(field) && isSpellingPattern(clean)) {
-        enterSpellMode(id);
-        return;
-      }
     }
 
     // Smart assist: let the user ask what to put or what a field means.
@@ -426,24 +500,71 @@ export function useFillSession() {
     if (listenKindRef.current === "confirm") {
       await handleConfirmationTranscript(transcript, confidence, id);
     } else {
-      await handleAnswer(posRef.current, transcript, confidence, id);
+      const merged = pending && !cmd ? `${pending.text} ${transcript}` : transcript;
+      await handleAnswer(posRef.current, merged, confidence, id, pending ? pending.extensions + 1 : 0);
     }
+  }
+
+  /**
+   * Continuation endpointing (the deterministic half of "semantic
+   * endpointing"): a clip that ends mid-thought — a dangling connective in an
+   * address, or fewer digits than the field needs — is held open instead of
+   * being committed, and the next utterance is stitched on. The acoustic VAD
+   * decides where speech pauses; THIS decides whether the answer is done.
+   */
+  function answerLooksIncomplete(field: FormField, text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t) return false;
+    const label = field.label.toLowerCase();
+    const key = field.profileKey ?? "";
+    const digits = t.replace(/\D/g, "").length;
+    // Digit-bearing fields: a pause while reading a card is normal; the
+    // count says whether the number is complete.
+    if (key === "phone" || /(phone|mobile|whatsapp|contact)/.test(label)) return digits > 0 && digits < 10;
+    if (/(aadhaar|aadhar|adhar|uid)/.test(label)) return digits > 0 && digits < 12;
+    if (key === "pincode" || /pin ?code|postal/.test(label)) return digits > 0 && digits < 6;
+    if (field.type !== "text" || isNameField(field)) return false;
+    // Free text / addresses: a trailing connective means the sentence isn't over.
+    return /(,|\band\b|\bnear\b|\bopposite\b|\bbehind\b|\bflat\b|\bhouse\b|\bbuilding\b|\bnumber\b|\bno\b|\bis\b|\bmy\b|\bthe\b|-)$/.test(t);
   }
 
   function enterSpellMode(id: number) {
     spellInputRef.current = true;
     listenKindRef.current = "answer";
+    setSttFieldHint("spell", { label: fieldAt(posRef.current)?.label });
     setTone("info");
-    setStatus("Spell it letter by letter. Say “space” between words.");
-    speak("Go ahead — spell it letter by letter. Say space between words.").then(() => {
+    const repairing = Boolean(pendingConfirmRef.current);
+    setStatus(
+      repairing
+        ? "Spell just the wrong word — or the whole answer. Say “space” between words."
+        : "Spell it letter by letter. Say “space” between words.",
+    );
+    speak(
+      repairing
+        ? "Go ahead — spell just the word I got wrong, letter by letter. Or spell the whole answer with space between words."
+        : "Go ahead — spell it letter by letter. Say space between words.",
+    ).then(() => {
       if (alive(id)) setPhase("listening");
     });
   }
 
-  async function handleAnswer(pos: number, raw: string, confidence: number, id: number) {
+  async function handleAnswer(pos: number, raw: string, confidence: number, id: number, extensions = 0, finalize = false) {
     const field = fieldAt(pos);
     if (!field) return;
-    let value: string;
+
+    // Hold an unfinished answer open (max 2 extensions) and keep listening;
+    // the timeout finalizes it as-is so the user is never stuck.
+    if (!finalize && extensions < 2 && answerLooksIncomplete(field, raw)) {
+      pendingContinuationRef.current = {
+        text: raw,
+        extensions,
+        timer: setTimeout(() => {
+          pendingContinuationRef.current = null;
+          if (alive(id)) void handleAnswer(pos, raw, confidence, id, extensions, true);
+        }, 3500),
+      };
+      return;
+    }
 
     if (field.type === "checkbox") {
       const yn = parseYesNo(raw);
@@ -480,27 +601,36 @@ export function useFillSession() {
     // touches digits, and deterministic formatting + spell-back handles those.
     const lane = smartLane(field);
     let source = raw;
-    if (lane.correct && isLlmAvailable()) {
+    // A name the user already confirmed once beats any model: snap to it
+    // deterministically and skip the LLM round-trip entirely.
+    const snapped = lane.kind === "name" ? snapToKnownName(raw, field.profileKey) : null;
+    if (snapped) {
+      source = snapped;
+    } else if (lane.correct && isLlmAvailable()) {
       const corrected = await correctTranscript(
         raw,
         { label: field.label, kind: lane.kind, help: field.help },
         getVoiceSettings().sttLang,
+        lane.kind === "name" ? knownNames() : [],
       );
       if (!alive(id)) return;
       if (corrected) source = corrected;
     }
 
-    value = formatAnswer(source, field);
+    const value = formatAnswer(source, field);
     if (!value) {
       await speak("I didn't catch that. Could you repeat it?");
       if (alive(id)) setPhase("listening");
       return;
     }
 
-    // Confidence-based routing:
-    //   < 0.95  → ask to repeat (too uncertain)
-    //   ≥ 0.95  → normal confirmation flow (spell-back for names/numbers)
-    //   ≥ 0.98  → auto-fill (skip confirmation for simple fields)
+    const validationError = validateField(field.label, value);
+    if (validationError) {
+      await speak(`${validationError} Let's try again.`);
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
     if (confidence < MED_CONFIDENCE) {
       retriesRef.current += 1;
       if (retriesRef.current >= 3) {
@@ -514,24 +644,38 @@ export function useFillSession() {
       return;
     }
 
-    // High confidence + field doesn't need confirmation → auto-fill
     if (confidence >= HIGH_CONFIDENCE && !needsConfirmation(field, isUnclear(field))) {
       commit(pos, value, id, `${value}.`);
       return;
     }
 
-    // Medium confidence or confirmation-required field → spell back for verification
     pendingConfirmRef.current = value;
+    spelledPendingRef.current = false;
     setConfirmValue(value);
     setHeard(value);
     listenKindRef.current = "confirm";
+    setSttFieldHint("");
     setPhase("confirming");
     setStatus(`I heard: “${value}”. Correct?`);
     // For names, emails, and numbers, read it back character-by-character so
     // the user can actually verify it — this is where mishearings hide.
     const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
-    const readback = spellItBack ? `I heard: ${value}. That's ${spellOut(value)}. Correct?` : `I heard: ${value}. Correct?`;
-    await speak(readback + (field.type === "text" ? " You can also say: let me spell." : ""));
+    // In Hindi/Malayalam, speak the name in its phonetic native script so the
+    // voice pronounces it the Indian way; the spelled-back letters stay Latin
+    // because that's what lands on the printed form.
+    const spokenValue = isNameField(field)
+      ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
+      : value;
+    if (!alive(id)) return;
+    const readback = spellItBack
+      ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
+      : `I heard: ${spokenValue}. Correct?`;
+    await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""), {
+      // Name lines route through the pronunciation-dictionary TTS path so
+      // "Thilakan" is said the Indian way even in English (no-op until the
+      // dictionary is registered server-side).
+      nameReadback: isNameField(field),
+    });
     if (alive(id)) {
       setPhase("listening");
     }
@@ -559,15 +703,45 @@ export function useFillSession() {
         if (alive(id)) setPhase("typing");
         return;
       }
+      // A rejected SPELLED value goes straight back to spell-repair — the user
+      // was already spelling; making them start over is the old, broken flow.
+      if (spelledPendingRef.current && isTextLike(field)) {
+        enterSpellMode(id);
+        return;
+      }
       setPhase("confirming");
       const spellHint =
-        field.type === "text" ? " You can also say: let me spell." : "";
+        isTextLike(field)
+          ? " You can also say: let me spell, or: change a letter."
+          : "";
       await speak("Okay, once more. " + questionFor(field) + spellHint);
       if (alive(id)) {
         listenKindRef.current = "answer";
+        setSttFieldHint(smartLane(field).kind === "name" ? "name" : "", {
+          label: field.label,
+          names: knownNames(),
+        });
         setPhase("listening");
       }
       return;
+    }
+
+    // Not a yes and not a no — maybe a surgical edit: "change k to c",
+    // "the third letter is e", "replace tilkan with thilakan".
+    const pending = pendingConfirmRef.current;
+    if (pending && isTextLike(field)) {
+      const edited = applySpokenEdit(pending, transcript);
+      if (edited) {
+        const value = isNameField(field) ? titleCase(edited) : edited;
+        pendingConfirmRef.current = value;
+        setConfirmValue(value);
+        setHeard(value);
+        setPhase("confirming");
+        setStatus(`Changed to: “${value}”. Correct?`);
+        await speak(`Changed. Now I have: ${spellOut(value)}. Correct?`);
+        if (alive(id)) setPhase("listening");
+        return;
+      }
     }
 
     retriesRef.current += 1;
@@ -586,20 +760,45 @@ export function useFillSession() {
     if (field) {
       field.value = val;
       field.status = "answered";
-      lockedFieldRef.current = field.id; // lock the field after answering
+      lockedFieldRef.current = field.id;
+      // If this is a synthetic table cell, mirror the answer into its parent
+      // table's value grid so write-back (table path) picks it up.
+      const cell = cellMapRef.current.get(field.id);
+      if (cell) {
+        const table = rec.fields.find((f) => f.id === cell.tableId);
+        if (table) applyCellValue(table, cell, val);
+      }
+      // If this is a "how many entries?" answer, drop the cell questions for
+      // rows beyond the requested count from the rest of the queue.
+      const rowCount = rowCountMapRef.current.get(field.id);
+      if (rowCount) {
+        const n = parseCount(val);
+        if (n !== null) {
+          const keep = Math.max(0, Math.min(n, rowCount.maxRows));
+          queueRef.current = queueRef.current.filter((qf, i) => {
+            if (i <= pos) return true;
+            const c = cellMapRef.current.get(qf.id);
+            return !(c && c.tableId === rowCount.tableId && c.row >= keep);
+          });
+        }
+      }
       syncRecord();
 
-      // DOM verification: confirm the value actually stuck
       const verified = queueRef.current[pos]?.value === val;
       if (!verified) {
         setTone("warning");
-        console.warn(`[fill] DOM verification failed for "${field.label}": expected "${val}", got "${queueRef.current[pos]?.value}"`);
+        console.warn(`[fill] Value verification failed for "${field.label}".`);
       }
+
+      // A confirmed name is learned for good: future STT snaps to it, the LLM
+      // corrector sees it, and Azure's phrase list is biased toward it.
+      if (isNameField(field)) rememberName(field.profileKey, val);
 
       if (voice) {
         voice.addMessage("user", val);
       }
     }
+    setSttFieldHint("");
     const nextPos = pos + 1;
     const isLast = nextPos >= queueRef.current.length;
     const speechText = isLast ? `${speakPrefix} All questions answered.` : `${speakPrefix} Got it.`;
@@ -638,11 +837,11 @@ export function useFillSession() {
   async function finish(id: number) {
     const rec = recordRef.current;
     if (!rec) return;
+    setSttFieldHint("");
     setPhase("done");
     setTone("success");
     rec.status = "review";
     syncRecord();
-    voice?.transitionConversation({ type: "REVIEWING" });
     const msg = "Excellent! We have gone through all questions. Let's review the form now.";
     setStatus(msg);
     await speak(msg);
@@ -675,7 +874,7 @@ export function useFillSession() {
   }
 
   function doBack() {
-    lockedFieldRef.current = null; // unlock when going back
+    lockedFieldRef.current = null;
     const id = beginRun();
     handleCommand("back", posRef.current, id);
   }
@@ -695,7 +894,6 @@ export function useFillSession() {
       setStatus("Type an answer, or skip this field.");
       return;
     }
-    // Set verifying phase while we commit and check the DOM value
     setPhase("verifying");
     setTone("info");
     setStatus("Verifying your answer...");
@@ -743,11 +941,10 @@ export function useFillSession() {
     currentField,
     currentId,
     questionNumber,
-    total: record?.fields.length || 0,
+    total: queueLength > 0 ? queueLength : record?.fields.length || 0,
     confirmValue,
     /** True while the session is waiting on a yes/no for confirmValue. */
     confirmMode: listenKindRef.current === "confirm",
-    /** True when the current field is locked (already answered, waiting for go-back). */
     fieldLocked: lockedFieldRef.current !== null,
     typedValue,
     setTypedValue,
@@ -786,9 +983,15 @@ export function typeLabel(type: FormField["type"]): string {
       return "Multiple choice";
     case "checkbox":
       return "Yes / no";
+    case "comb":
+      return "One character per box";
     default:
       return "Text input";
   }
+}
+
+function isTextLike(field: FormField): boolean {
+  return field.type === "text" || field.type === "comb";
 }
 
 function parseYesNo(transcript: string): boolean | null {
@@ -836,7 +1039,10 @@ function smartLane(field: FormField): { correct: boolean; kind: string } {
     return { correct: false, kind: "number" };
   }
   if (/e-?mail/.test(label)) return { correct: false, kind: "email" };
-  if (isNameField(field) || /\bname\b/.test(label)) return { correct: true, kind: "name" };
+  // Names are corrected by the SERVER ensemble (multi-engine + faithful
+  // fusion + dictionary snap). The small client LLM must not touch them — it
+  // "helpfully" completes a spoken "Tejas" into a stored "Tejas K M".
+  if (isNameField(field) || /\bname\b/.test(label)) return { correct: false, kind: "name" };
   if (/address|street|city|town|village|district|\bstate\b|landmark|\barea\b|place|locality|road|house|building/.test(label)) {
     return { correct: true, kind: "address" };
   }

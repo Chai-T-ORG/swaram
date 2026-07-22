@@ -20,6 +20,28 @@ const MIN_SPEECH_MS = 60;
 const SILENCE_FLUSH_MS = 500; // end the utterance this long after speech stops
                               // (500ms keeps short commands snappy without
                               //  clipping the natural pauses in a spoken answer)
+// Spelling letter-by-letter has LONG pauses between letters; flushing at
+// 500 ms chops "T W I…" / "N S H A" into fragments — the reason spell mode
+// felt broken. While the spell hint is active, wait much longer.
+const SPELL_FLUSH_MS = 2000;
+
+let spellMode = false;
+let sileroSpellSetter: ((on: boolean) => void) | null = null;
+
+/**
+ * Called by the STT hint plumbing when the user enters/leaves spell mode, so
+ * BOTH VADs (energy + Silero) hold the utterance open between letters.
+ */
+export function setVadSpellMode(on: boolean): void {
+  spellMode = on;
+  sileroSpellSetter?.(on);
+}
+
+/** The Silero module registers its live-tuning hook here (avoids a cycle). */
+export function registerSileroSpellSetter(fn: (on: boolean) => void): void {
+  sileroSpellSetter = fn;
+  fn(spellMode);
+}
 const MAX_UTTERANCE_MS = 14000; // hard cap
 // Keep this much audio from *before* speech is detected, so soft word onsets
 // ("T" in "Tejas") aren't clipped — clipped onsets are what makes Whisper
@@ -58,6 +80,16 @@ export async function startVadCapture(
     bargeInThreshold?: number;
   },
 ): Promise<VadHandle | null> {
+  // Prefer the neural VAD (Silero) — far better segmentation in noisy rooms
+  // and it never clips soft consonant onsets. Falls back to the energy loop
+  // below on any load failure (old browsers, missing /vad assets, iOS WASM
+  // quirks), which keeps this function's contract unchanged.
+  const { startSileroCapture, isSileroDisabled } = await import("./sileroVad");
+  if (!isSileroDisabled()) {
+    const silero = await startSileroCapture(onUtterance);
+    if (silero) return silero;
+  }
+
   let stream = getStream();
   if (!stream) stream = await initMic();
   if (!stream) return null;
@@ -91,11 +123,18 @@ export async function startVadCapture(
 
   const flush = () => {
     const hadSpeech = speechMs >= MIN_SPEECH_MS;
+    const utteranceSpeechMs = speechMs;
     const chunks = buffer;
     buffer = [];
     speechMs = 0;
     silenceMs = 0;
     if (!hadSpeech || chunks.length === 0) return;
+    // Pre-flight quality gate: a clip that is almost entirely silence is a
+    // noise transient (fan, traffic) that briefly crossed the threshold, not
+    // speech. Sending it wastes a network call and is exactly the input that
+    // makes Whisper hallucinate a fluent sentence out of nothing.
+    const clipMs = totalMs(chunks);
+    if (clipMs > 2000 && utteranceSpeechMs / clipMs < 0.15) return;
     const total = chunks.reduce((s, b) => s + b.length, 0);
     const full = new Float32Array(total);
     let off = 0;
@@ -134,7 +173,7 @@ export async function startVadCapture(
       silenceMs = 0;
     } else {
       silenceMs += frameMsOf(samples);
-      if (silenceMs >= SILENCE_FLUSH_MS) flush();
+      if (silenceMs >= (spellMode ? SPELL_FLUSH_MS : SILENCE_FLUSH_MS)) flush();
     }
     if (totalMs(buffer) >= MAX_UTTERANCE_MS) flush();
   };

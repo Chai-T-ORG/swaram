@@ -18,91 +18,6 @@ import {
   getDeviceConfig,
   registerRetryCallback,
 } from "./modelManager";
-import { getStream } from "./micManager";
-
-// ── Barge-in detection (Web Audio API AnalyserNode) ──
-const BARGE_IN_RMS_THRESHOLD = 0.015;
-const BARGE_IN_DEBOUNCE_MS = 400;
-let bargeInCleanup: (() => void) | null = null;
-
-/**
- * Detect user speech during TTS playback using a lightweight AnalyserNode
- * on the existing mic stream. Returns a cleanup function.
- */
-function startBargeInDetection(onBargeIn: () => void): () => void {
-  let stream: MediaStream | null = null;
-  let audioCtx: AudioContext | null = null;
-  let animId: number | null = null;
-  let stopped = false;
-  let lastSpeechAt = 0;
-
-  try {
-    stream = getStream();
-    if (!stream) return () => {}; // no mic available
-
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    audioCtx = new AudioCtx();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    const tick = () => {
-      if (stopped) return;
-      analyser.getByteFrequencyData(dataArray);
-
-      // Frequency-weighted RMS: weight lower frequencies more (speech band 85–300 Hz)
-      let weightedSum = 0;
-      let totalWeight = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        const freq = (i * (audioCtx?.sampleRate ?? 48000)) / analyser.fftSize;
-        // Only consider speech frequencies (85–4000 Hz)
-        if (freq >= 85 && freq <= 4000) {
-          // Weight: stronger for speech band, weaker outside
-          const weight = freq <= 300 ? 1.5 : freq <= 1000 ? 1.0 : 0.5;
-          const val = dataArray[i] / 255;
-          weightedSum += val * val * weight;
-          totalWeight += weight;
-        }
-      }
-
-      const rms = totalWeight > 0 ? Math.sqrt(weightedSum / totalWeight) : 0;
-
-      if (rms > BARGE_IN_RMS_THRESHOLD) {
-        const now = Date.now();
-        if (now - lastSpeechAt > BARGE_IN_DEBOUNCE_MS) {
-          lastSpeechAt = now;
-          console.log(`[TTS] Barge-in detected (RMS: ${rms.toFixed(4)})`);
-          onBargeIn();
-          return;
-        }
-      }
-
-      animId = requestAnimationFrame(tick);
-    };
-
-    animId = requestAnimationFrame(tick);
-  } catch (err) {
-    console.warn("[TTS] Barge-in detection init failed:", err);
-  }
-
-  return () => {
-    stopped = true;
-    if (animId) cancelAnimationFrame(animId);
-    if (audioCtx && audioCtx.state !== "closed") {
-      void audioCtx.close();
-    }
-  };
-}
-
-function stopBargeInDetection(): void {
-  if (bargeInCleanup) {
-    bargeInCleanup();
-    bargeInCleanup = null;
-  }
-}
 
 type KokoroModel = {
   generate: (text: string, options: { voice: string }) => Promise<{ audio: Float32Array; sampling_rate: number }>;
@@ -495,33 +410,23 @@ function getTtsAudioEl(): HTMLAudioElement {
   return ttsAudioEl;
 }
 
-// A separate element used only for unlockAudioPlayback so it never races with
-// an in-flight playServerTTS call on the shared ttsAudioEl.
-let unlockAudioEl: HTMLAudioElement | null = null;
-
 // A 44-byte silent WAV — played once on a user gesture to unlock playback.
 const SILENT_WAV =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
 /**
  * Unlock audio output. MUST be called from a real user gesture (tap/click/key).
- * Primes a hidden <audio> element plus the speechSynthesis/AudioContext
+ * Primes the shared <audio> element plus the speechSynthesis/AudioContext
  * fallbacks so the first spoken line isn't swallowed by autoplay policy.
- * Uses a dedicated element so it never races with playServerTTS on the shared
- * ttsAudioEl.
  */
 export function unlockAudioPlayback(): void {
   if (typeof window === "undefined") return;
-  if (!unlockAudioEl) {
-    unlockAudioEl = new Audio();
-    unlockAudioEl.preload = "auto";
-  }
+  const el = getTtsAudioEl();
   try {
-    unlockAudioEl.muted = true;
-    unlockAudioEl.src = SILENT_WAV;
-    const p = unlockAudioEl.play();
+    el.muted = true;
+    el.src = SILENT_WAV;
+    const p = el.play();
     if (p && typeof p.then === "function") {
-      const el = unlockAudioEl;
       p.then(() => {
         el.pause();
         el.currentTime = 0;
@@ -529,8 +434,12 @@ export function unlockAudioPlayback(): void {
       }).catch(() => {
         el.muted = false;
       });
+    } else {
+      el.muted = false;
     }
-  } catch {}
+  } catch {
+    el.muted = false;
+  }
   unlockSafariSpeech();
   getAudioContext();
 }
@@ -554,20 +463,20 @@ const CLIENT_TTS_CACHE_MAX = 40;
 const TTS_CACHE_NAME = "swaram-tts-v1";
 const PERSIST_MAX = 200;
 
-/** A stable, opaque Request key for a (lang, text) pair. */
-function persistKey(text: string, lang: string): string {
-  return `https://swaram.local/tts/${encodeURIComponent(lang)}/${encodeURIComponent(text)}`;
+/** A stable, opaque Request key for a (lang, text, readback-mode) triple. */
+function persistKey(text: string, lang: string, nameReadback = false): string {
+  return `https://swaram.local/tts/${encodeURIComponent(lang)}${nameReadback ? "/nr" : ""}/${encodeURIComponent(text)}`;
 }
 
 function cacheStorageAvailable(): boolean {
   return typeof caches !== "undefined";
 }
 
-async function persistentGet(text: string, lang: string): Promise<Blob | null> {
+async function persistentGet(text: string, lang: string, nameReadback = false): Promise<Blob | null> {
   if (!cacheStorageAvailable()) return null;
   try {
     const cache = await caches.open(TTS_CACHE_NAME);
-    const hit = await cache.match(persistKey(text, lang));
+    const hit = await cache.match(persistKey(text, lang, nameReadback));
     if (!hit) return null;
     const blob = await hit.blob();
     return blob.size > 0 ? blob : null;
@@ -576,12 +485,12 @@ async function persistentGet(text: string, lang: string): Promise<Blob | null> {
   }
 }
 
-async function persistentSet(text: string, lang: string, blob: Blob): Promise<void> {
+async function persistentSet(text: string, lang: string, blob: Blob, nameReadback = false): Promise<void> {
   if (!cacheStorageAvailable()) return;
   try {
     const cache = await caches.open(TTS_CACHE_NAME);
     await cache.put(
-      persistKey(text, lang),
+      persistKey(text, lang, nameReadback),
       new Response(blob, { headers: { "Content-Type": blob.type || "audio/mpeg" } }),
     );
     // Bound the store. Cache.keys() is insertion-ordered, so the oldest
@@ -596,13 +505,13 @@ async function persistentSet(text: string, lang: string, blob: Blob): Promise<vo
   }
 }
 
-async function fetchTTS(text: string, lang: string): Promise<Blob> {
-  const key = `${lang}|${text}`;
+async function fetchTTS(text: string, lang: string, nameReadback = false): Promise<Blob> {
+  const key = `${lang}|${nameReadback ? "nr|" : ""}${text}`;
   const memBlob = clientTtsCache.get(key);
   if (memBlob) return memBlob;
 
   // L2: persisted from an earlier session — instant and free.
-  const persisted = await persistentGet(text, lang);
+  const persisted = await persistentGet(text, lang, nameReadback);
   if (persisted) {
     clientTtsCache.set(key, persisted);
     return persisted;
@@ -611,7 +520,7 @@ async function fetchTTS(text: string, lang: string): Promise<Blob> {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, lang }),
+    body: JSON.stringify({ text, lang, ...(nameReadback ? { nameReadback: true } : {}) }),
   });
   if (!res.ok) throw new Error("tts-http-" + res.status);
   const blob = await res.blob();
@@ -621,7 +530,7 @@ async function fetchTTS(text: string, lang: string): Promise<Blob> {
   if (clientTtsCache.size > CLIENT_TTS_CACHE_MAX) {
     clientTtsCache.delete(clientTtsCache.keys().next().value as string);
   }
-  void persistentSet(text, lang, blob); // fire-and-forget
+  void persistentSet(text, lang, blob, nameReadback); // fire-and-forget
   return blob;
 }
 
@@ -635,9 +544,9 @@ export function prefetchTTS(text: string, lang = "en-IN"): void {
 }
 
 /** Speak one line via the cloud proxy. Rejects (to trigger fallback) on failure. */
-function playServerTTS(text: string, lang: string, rate: number, myGen: number): Promise<void> {
+function playServerTTS(text: string, lang: string, rate: number, myGen: number, nameReadback = false): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    fetchTTS(text, lang)
+    fetchTTS(text, lang, nameReadback)
       .then((blob) => {
         if (jobCancelled(myGen)) return resolve();
         const url = URL.createObjectURL(blob);
@@ -675,8 +584,12 @@ export interface SpeakOptions {
   pitch?: number;
   interrupt?: boolean;
   voiceURI?: string;
-  /** Enable barge-in detection — speech during this utterance cancels TTS. */
-  bargeIn?: boolean;
+  /**
+   * This line reads a person's name back to the user: route it through the
+   * TTS path that pronounces Indian names correctly (Bulbul + pronunciation
+   * dictionary). No-op until SARVAM_TTS_DICT_ID is configured server-side.
+   */
+  nameReadback?: boolean;
 }
 
 export type SpeechListener = (text: string) => void;
@@ -776,14 +689,9 @@ function hardStopPlayback(): void {
 /** Speak text aloud. Resolves when this utterance finishes or is superseded. */
 export function speak(text: string, options: SpeakOptions = {}): Promise<void> {
   if (!text.trim() || typeof window === "undefined") return Promise.resolve();
-  // Enable barge-in by default — callers can opt out with bargeIn: false
-  // Complete speech is the safe default. Energy-only barge-in cannot reliably
-  // distinguish a user from speaker leakage, so it caused prompts to stop
-  // halfway through. Explicit user actions (PTT / Stop) still cancel speech.
-  const opts = { interrupt: false, bargeIn: false, ...options };
   return new Promise<void>((resolve) => {
-    const job: SpeechJob = { text, options: opts, resolve };
-    if (opts.interrupt !== false) {
+    const job: SpeechJob = { text, options, resolve };
+    if (options.interrupt !== false) {
       generation += 1; // invalidate any in-flight render
       hardStopPlayback();
       const dropped = speechQueue;
@@ -801,48 +709,25 @@ async function runSpeechQueue(): Promise<void> {
   pauseContinuousListening();
   setTtsActive(true);
 
-  // Check if any job in the queue has barge-in enabled
-  const bargeInEnabled = speechQueue.some((j) => j.options.bargeIn);
-  let bargeInTriggered = false;
+  while (speechQueue.length > 0) {
+    const job = speechQueue.shift()!;
+    const myGen = (generation += 1);
 
-  // Start barge-in detection if any job has it enabled
-  if (bargeInEnabled) {
-    bargeInCleanup = startBargeInDetection(() => {
-      if (bargeInTriggered) return;
-      bargeInTriggered = true;
-      console.log("[TTS] Barge-in: cancelling speech queue");
-      // Cancel all remaining jobs
-      const remaining = speechQueue.splice(0);
-      remaining.forEach((j) => j.resolve());
-      // Stop current playback
-      generation += 1;
-      hardStopPlayback();
-    });
-  }
-
-  try {
-    while (speechQueue.length > 0 && !bargeInTriggered) {
-      const job = speechQueue.shift()!;
-      const myGen = (generation += 1);
-
-      // Captions show the human-readable text, not the phonetic respelling.
-      speechListeners.forEach((listener) => {
-        try {
-          listener(job.text);
-        } catch (e) {
-          console.error("[TTS] Speech listener error:", e);
-        }
-      });
-
+    // Captions show the human-readable text, not the phonetic respelling.
+    speechListeners.forEach((listener) => {
       try {
-        await renderJob(normalizeForSpeech(job.text), job.options, myGen);
+        listener(job.text);
       } catch (e) {
-        console.warn("[TTS] render failed:", e);
+        console.error("[TTS] Speech listener error:", e);
       }
-      job.resolve();
+    });
+
+    try {
+      await renderJob(normalizeForSpeech(job.text), job.options, myGen);
+    } catch (e) {
+      console.warn("[TTS] render failed:", e);
     }
-  } finally {
-    stopBargeInDetection();
+    job.resolve();
   }
 
   queueRunning = false;
@@ -857,7 +742,7 @@ async function renderJob(text: string, options: SpeakOptions, myGen: number): Pr
 
   if (settings.ttsProvider === "cloud" || settings.ttsProvider === "google") {
     try {
-      await playServerTTS(text, settings.sttLang || "en-IN", rate, myGen);
+      await playServerTTS(text, settings.sttLang || "en-IN", rate, myGen, options.nameReadback);
       return;
     } catch (err) {
       console.warn("[TTS] Cloud voice failed, falling back to system:", err);

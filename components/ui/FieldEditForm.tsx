@@ -3,9 +3,32 @@
 import { motion, useReducedMotion } from "framer-motion";
 import type { FormField } from "@/lib/types";
 import type { ReviewScreen } from "@/components/screens/useReview";
+import { describeTable } from "@/lib/analysis/tableCells";
 
 export default function FieldEditForm({ r, field }: { r: ReviewScreen; field: FormField }) {
   const prefersReducedMotion = useReducedMotion();
+
+  // Tables are edited cell-by-cell during voice filling, not via a single text
+  // box (that would clobber the JSON grid). Show a read-only summary instead.
+  if (field.type === "table") {
+    return (
+      <motion.div
+        initial={prefersReducedMotion ? {} : { height: 0, opacity: 0 }}
+        animate={prefersReducedMotion ? {} : { height: "auto", opacity: 1 }}
+        transition={{ type: "spring", stiffness: 300, damping: 26 }}
+        style={{ overflow: "hidden" }}
+        className="mt-3.5 flex flex-col gap-2.5"
+      >
+        <p className="text-sm text-soft">{describeTable(field) || "No rows filled yet."}</p>
+        <p className="text-xs text-faint">
+          Table rows are filled by voice, one cell at a time. Re-run filling to change them.
+        </p>
+        <button type="button" className="btn-secondary min-h-12 max-w-max px-4 text-xs" onClick={r.cancelEdit}>
+          Close
+        </button>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.form
