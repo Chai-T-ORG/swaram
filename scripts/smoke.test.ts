@@ -28,6 +28,7 @@ import {
 } from "../lib/voice/transcriptFormat";
 import { fillAcroformPdf, fillFlatPdf } from "../lib/pdf/pdfWriter";
 import { parseFillCommand, needsConfirmation, isNameField } from "../lib/voice/fillCommands";
+import { matchOption, parseOptionNumber, soundex } from "../lib/voice/choiceMatch";
 import type { FormField } from "../lib/types";
 import type { OcrLine } from "../lib/ocr/tesseractEngine";
 
@@ -218,6 +219,16 @@ async function main() {
   check("speakableDate day/month by name", speakableDate("05/06/2002") === "the 5th of June, 2002", speakableDate("05/06/2002"));
   check("speakableDate 21st", speakableDate("21/11/1990") === "the 21st of November, 1990", speakableDate("21/11/1990"));
   check("speakableDate passes through non-dates", speakableDate("not a date") === "not a date");
+  // Choice homophones: "male" heard as "mail" must still select Male.
+  const genderOpts = ["Male", "Female", "Other"];
+  check("soundex male==mail", soundex("male") === soundex("mail"), `${soundex("male")} vs ${soundex("mail")}`);
+  check("choice: 'mail' -> Male", matchOption("mail", genderOpts) === "Male", String(matchOption("mail", genderOpts)));
+  check("choice: exact 'female'", matchOption("female", genderOpts) === "Female");
+  check("choice: 'Mail.' punctuated -> Male", matchOption("Mail.", genderOpts) === "Male", String(matchOption("Mail.", genderOpts)));
+  check("choice: unrelated -> null", matchOption("banana", genderOpts) === null, String(matchOption("banana", genderOpts)));
+  check("optionNumber: 'number two' -> idx1", parseOptionNumber("number two", 3) === 1, String(parseOptionNumber("number two", 3)));
+  check("optionNumber: 'the first one' -> idx0", parseOptionNumber("the first one", 3) === 0, String(parseOptionNumber("the first one", 3)));
+  check("optionNumber: out of range -> null", parseOptionNumber("five", 3) === null, String(parseOptionNumber("five", 3)));
   const genericField = field({ label: "Remarks" });
   check(
     "formatAnswer spoken punctuation",

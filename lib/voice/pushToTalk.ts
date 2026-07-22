@@ -18,6 +18,7 @@ import { blobToWav16k } from "./wavEncode";
 import { startAzureStream, stopAzureStream } from "./azureStreamSTT";
 import { startSarvamStream, stopSarvamStream, flushSarvamStream } from "./sarvamStreamSTT";
 import { playEarconStart, playEarconStop } from "./earcons";
+import { haptic } from "./haptics";
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -43,8 +44,8 @@ function setCapturing(value: boolean): void {
   // (this path is MediaRecorder, not iOS's quirky continuous Web Speech), so
   // iPhone VoiceOver users finally hear the cue too.
   if (value !== capturing) {
-    if (value) playEarconStart();
-    else playEarconStop();
+    if (value) { playEarconStart(); haptic("listen"); }
+    else { playEarconStop(); haptic("stop"); }
   }
   capturing = value;
   for (const l of stateListeners) {

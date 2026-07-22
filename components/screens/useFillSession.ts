@@ -20,6 +20,7 @@ import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from 
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { validateField } from "@/lib/validation/rules";
 import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE, speakableDate } from "@/lib/voice/transcriptFormat";
+import { matchOption, parseOptionNumber } from "@/lib/voice/choiceMatch";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
 import { setSttFieldHint } from "@/lib/voice/groqSTT";
 import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
@@ -30,11 +31,9 @@ import {
   acknowledgeCloudNotice,
   addTranscriptListener,
   removeTranscriptListener,
-  startContinuousListening,
-  stopContinuousListening,
-  needsCloudNotice,
 } from "@/lib/voice/speechToText";
-import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
+import { playEarcon } from "@/lib/voice/earcons";
+import { haptic } from "@/lib/voice/haptics";
 
 const UNCLEAR_THRESHOLD = 0.6;
 
@@ -96,8 +95,6 @@ export function useFillSession() {
   const spelledPendingRef = useRef(false);
   /** Continuation endpointing: a half-finished answer waiting for its rest. */
   const pendingContinuationRef = useRef<{ text: string; extensions: number; timer: ReturnType<typeof setTimeout> } | null>(null);
-  /** True while the in-session auto-listen turn has the mic open (PTT mode). */
-  const micArmedRef = useRef(false);
 
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
@@ -204,46 +201,13 @@ export function useFillSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, voice]);
 
-  // Conversational turn-taking (push-to-talk mode).
-  //
-  // Push-to-talk stays the default input model, but inside a fill session the
-  // mic auto-opens for exactly the window we're waiting on the user — the
-  // "listening" phase, and only once the assistant has stopped speaking
-  // (`!ttsActive`) — then closes again. This removes the tap-before-every-
-  // answer that blind testers hated (they kept speaking into a closed mic
-  // after each question) WITHOUT an always-on mic and WITHOUT capturing our
-  // own TTS: the mic is shut during "asking"/"confirming" and during the
-  // "Got it" acknowledgements (all `ttsActive`), and continuation endpointing
-  // still works because the phase stays "listening" between an answer and its
-  // tail. Manual push-to-talk (hold space / tap) still works as barge-in while
-  // a question is playing. Continuous mode is untouched (its mic is already
-  // global), and we never bypass the one-time cloud-STT consent screen.
-  const autoListen =
-    !!voice &&
-    voice.micMode === "ptt" &&
-    phase === "listening" &&
-    !voice.ttsActive &&
-    isSttSupported() &&
-    !needsCloudNotice();
-
-  useEffect(() => {
-    if (!autoListen) return;
-    // Cue first, then open the mic AFTER the earcon has finished, so the tone
-    // itself isn't captured by the VAD as a phantom first "utterance".
-    playEarconStart();
-    const armTimer = setTimeout(() => {
-      micArmedRef.current = true;
-      startContinuousListening();
-    }, 300);
-    return () => {
-      clearTimeout(armTimer);
-      if (micArmedRef.current) {
-        micArmedRef.current = false;
-        stopContinuousListening();
-        playEarconStop();
-      }
-    };
-  }, [autoListen]);
+  // NOTE: an earlier "auto-listen" experiment opened a continuous VAD mic during
+  // the listening phase to remove the tap-before-every-answer. It was reverted:
+  // continuous VAD FRAGMENTS the utterance on silence and captures room noise,
+  // which measurably hurt the name/answer ensemble — push-to-talk's one clean,
+  // user-bounded clip is the bigger accuracy win. Turn clarity is solved instead
+  // with distinct earcons + haptics + spoken orientation, not by changing the
+  // capture model. Keep PTT the capture path.
 
   // Synchronize state values
   function syncRecord() {
@@ -429,7 +393,11 @@ export function useFillSession() {
       return;
     }
 
-    await speak(questionFor(field));
+    // Orientation: a blind user can't see a progress bar, so speak position
+    // before the question. Kept short; skipped for single-question queues.
+    const total = queueRef.current.length;
+    const progress = total > 1 ? `Question ${pos + 1} of ${total}. ` : "";
+    await speak(progress + questionFor(field));
     if (!alive(id)) return;
 
     listenKindRef.current = "answer";
@@ -604,6 +572,8 @@ export function useFillSession() {
     if (field.type === "checkbox") {
       const yn = parseYesNo(raw);
       if (yn === null) {
+        playEarcon("error");
+        haptic("error");
         await speak("Please answer yes or no.");
         if (alive(id)) setPhase("listening");
         return;
@@ -613,15 +583,25 @@ export function useFillSession() {
     }
 
     if (field.type === "choice" && field.options?.length) {
-      const option = matchOption(raw, field.options);
+      // Phonetic + fuzzy match handles homophones ("male" heard as "mail"),
+      // and a spoken option NUMBER is an escape hatch a homophone can't block.
+      let option = matchOption(raw, field.options);
       if (!option) {
+        const numIdx = parseOptionNumber(raw, field.options.length);
+        if (numIdx !== null) option = field.options[numIdx];
+      }
+      if (!option) {
+        playEarcon("error");
+        haptic("error");
         retriesRef.current += 1;
         if (retriesRef.current >= 3) {
           await speak("Let's pick it from a list instead.");
           if (alive(id)) setPhase("typing");
           return;
         }
-        await speak(`I heard ${raw}. The options are: ${field.options.join(", ")}. Say one.`);
+        // Enumerate so the answer can be given as a number, not just the word.
+        const numbered = field.options.map((o, i) => `${i + 1} for ${o}`).join(", ");
+        await speak(`I heard ${raw}. Say the option, or its number: ${numbered}.`);
         if (alive(id)) setPhase("listening");
         return;
       }
@@ -654,6 +634,8 @@ export function useFillSession() {
 
     const value = formatAnswer(source, field);
     if (!value) {
+      playEarcon("error");
+      haptic("error");
       await speak("I didn't catch that. Could you repeat it?");
       if (alive(id)) setPhase("listening");
       return;
@@ -661,6 +643,8 @@ export function useFillSession() {
 
     const validationError = validateField(field.label, value);
     if (validationError) {
+      playEarcon("error");
+      haptic("error");
       await speak(`${validationError} Let's try again.`);
       if (alive(id)) setPhase("listening");
       return;
@@ -781,6 +765,9 @@ export function useFillSession() {
   function commit(pos: number, val: string, id: number, speakPrefix = "") {
     const rec = recordRef.current;
     if (!rec) return;
+    // Multimodal "accepted, moving on" cue before the spoken acknowledgement.
+    playEarcon("success");
+    haptic("success");
     const field = queueRef.current[pos];
     if (field) {
       field.value = val;
@@ -1017,23 +1004,6 @@ function parseYesNo(transcript: string): boolean | null {
   return null;
 }
 
-function matchOption(transcript: string, options: string[]): string | null {
-  const heard = transcript.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
-  if (!heard) return null;
-  for (const option of options) {
-    if (option.toLowerCase() === heard) return option;
-  }
-  for (const option of options) {
-    const o = option.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
-    if (heard.includes(o) || o.includes(heard)) return option;
-  }
-  const squashed = heard.replace(/\s+/g, "");
-  for (const option of options) {
-    const o = option.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (o === squashed) return option;
-  }
-  return null;
-}
 
 /**
  * Adaptive-STT routing: should this field's answer go through the LLM corrector

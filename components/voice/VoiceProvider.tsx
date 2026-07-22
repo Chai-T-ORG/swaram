@@ -49,6 +49,7 @@ import {
   CLOUD_FALLBACK_NOTICE,
 } from "@/lib/voice/speechToText";
 import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
+import { setHapticsEnabled } from "@/lib/voice/haptics";
 import { getProfile } from "@/lib/storage/profileStore";
 import { getStream, primeMicIfGranted } from "@/lib/voice/micManager";
 import { loadWhisper, isWhisperReady } from "@/lib/voice/whisperSTT";
@@ -902,6 +903,31 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // First-load voice. Page intros are gated on audio being unlocked (browser
+  // autoplay policy), so the very FIRST screen a blind user lands on would stay
+  // silent until they happened to trigger something. Announce the current
+  // page's intro on the first gesture that unlocks audio, then self-remove.
+  useEffect(() => {
+    if (typeof window === "undefined" || speechUnlocked()) return;
+    const announceOnUnlock = () => {
+      unlockAudioPlayback();
+      const cfg = pageRef.current;
+      const key = `${pathname}:${cfg.title ?? ""}`;
+      if (cfg.title && announcedRef.current !== key) {
+        announcedRef.current = key;
+        speak(`${cfg.title}.${cfg.hint ? ` ${cfg.hint}` : ""}`);
+      }
+      window.removeEventListener("pointerdown", announceOnUnlock, true);
+      window.removeEventListener("keydown", announceOnUnlock, true);
+    };
+    window.addEventListener("pointerdown", announceOnUnlock, true);
+    window.addEventListener("keydown", announceOnUnlock, true);
+    return () => {
+      window.removeEventListener("pointerdown", announceOnUnlock, true);
+      window.removeEventListener("keydown", announceOnUnlock, true);
+    };
+  }, [pathname]);
+
   // AI voice (Kokoro) + Whisper STT: warm-load in the background.
   // The SetupOverlay handles first-visit progress UI. This effect handles
   // subsequent visits where models are already cached.
@@ -971,10 +997,12 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     };
   }, [flashToast]);
 
-  // Keep micMode in sync with settings (updates when the user changes it in
-  // Profile and navigates back).
+  // Keep micMode + haptics in sync with settings (updates when the user changes
+  // them in Profile and navigates back).
   useEffect(() => {
-    setMicMode(getVoiceSettings().micMode);
+    const s = getVoiceSettings();
+    setMicMode(s.micMode);
+    setHapticsEnabled(s.hapticsEnabled);
   }, [pathname]);
 
   // Push-to-talk needs the mic stream ready ahead of time (so the first hold

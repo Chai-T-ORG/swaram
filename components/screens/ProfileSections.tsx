@@ -179,6 +179,22 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
         </div>
 
         <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
+          <label htmlFor="haptics-toggle" className="flex max-w-sm items-center justify-between gap-3 text-xs font-bold uppercase text-soft">
+            Vibration cues
+            <input
+              id="haptics-toggle"
+              type="checkbox"
+              className="h-5 w-5 accent-accent"
+              checked={p.hapticsEnabled}
+              onChange={(e) => p.toggleHaptics(e.target.checked)}
+            />
+          </label>
+          <p className="max-w-sm text-[11px] leading-normal text-faint">
+            A short buzz when I start listening, accept an answer, or hit a problem. Full patterns on Android; a single Taptic tick on iPhone (iOS 17.4–26.4).
+          </p>
+        </div>
+
+        <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
           <label className="text-xs font-bold uppercase text-soft">
             First-run welcome setup
           </label>
