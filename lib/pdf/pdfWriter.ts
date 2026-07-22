@@ -203,7 +203,9 @@ function drawAnswer(
   // sit the text just above its TOP edge — font-size-independent, so long fields
   // whose font shrinks don't drop onto the line. A tall bbox is an open answer
   // area: write near its bottom.
-  const isUnderline = field.bbox.h < 0.008;
+  // gboxToBBox floors h at 0.008, so a printed underline arrives as exactly
+  // 0.008 — catch that (a real answer area is 0.011+).
+  const isUnderline = field.bbox.h < 0.009;
   const baseline = isUnderline
     ? ph - field.bbox.y * ph + 3
     : boxBottom + Math.max(boxH * 0.22, size * 0.4);
