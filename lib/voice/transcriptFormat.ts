@@ -499,6 +499,39 @@ export function formatDate(raw: string): string {
   return raw.trim();
 }
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function ordinalDay(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
+}
+
+/**
+ * "05/06/2002" -> "the 5th of June 2002" for confirmation readback. Reading a
+ * date back as "five, six" is ambiguous (5 June vs 6 May) — the exact bug
+ * blind testers caught immediately — so we spell the month by NAME so a
+ * swapped day/month is impossible to miss. Falls back to the raw value if it
+ * isn't a clean DD/MM/YYYY string.
+ */
+export function speakableDate(value: string): string {
+  const m = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return value;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = m[3].length === 2 ? `20${m[3]}` : m[3];
+  if (day < 1 || day > 31 || month < 1 || month > 12) return value;
+  return `the ${ordinalDay(day)} of ${MONTH_NAMES[month - 1]}, ${year}`;
+}
+
 /** Addresses: spoken punctuation, capitalized words, digits kept. */
 export function formatAddress(raw: string): string {
   const punctuated = spokenPunctuation(raw);
@@ -522,6 +555,20 @@ const NAME_KEYS = new Set([
 
 /** Fields whose value is an alphanumeric code (roll no, registration no…). */
 export const ID_FIELD_RE = /roll|registration|application|enrol|admission|licen[cs]e|reference|token no/;
+
+/**
+ * Leading carrier phrases people prepend to a spoken name ("my name is …",
+ * "myself …", "call me …"). Stripped before a name is committed so that a clip
+ * where the actual name was inaudible reduces to "" (a re-prompt) instead of
+ * the literal words "My name". Mirrors the server's stripCarrier so both the
+ * ensemble and single-engine paths are covered.
+ */
+const NAME_CARRIER_RE = /^\s*(?:my name is|the name is|my name's|my name|name is|myself|i'?m called|call me|it'?s|this is|i am|i'?m)\b\s*/i;
+
+/** Remove a leading spoken name carrier ("My name is Maya" -> "Maya"). */
+export function stripNameCarrier(t: string): string {
+  return t.replace(NAME_CARRIER_RE, "").trim();
+}
 
 /** "ab 12 c 3456." -> "AB12C3456" — codes are written tight and uppercase. */
 export function formatIdCode(raw: string): string {
@@ -550,9 +597,14 @@ export function formatAnswer(raw: string, field: Pick<FormField, "type" | "profi
   if (ID_FIELD_RE.test(label)) return formatIdCode(trimmed);
   if (key === "address" || /address/.test(label)) return formatAddress(trimmed);
   if (NAME_KEYS.has(key) || /\bname\b/.test(label)) {
+    // Drop a leading carrier ("my name is …") so it never lands on the form;
+    // if the name itself was inaudible, return "" so the caller re-prompts
+    // rather than writing the words "My name".
+    const stripped = stripNameCarrier(spokenPunctuation(trimmed));
+    if (!stripped) return "";
     // Engines punctuate initials differently ("K.M.", "K. M", "K M") — the
     // printed form wants bare spaced letters: "Tejas K M".
-    const deDotted = spokenPunctuation(trimmed)
+    const deDotted = stripped
       .replace(/\b(\p{L})\.(?=\s|\p{L}|$)/gu, "$1 ")
       .replace(/\s+/g, " ")
       .trim();

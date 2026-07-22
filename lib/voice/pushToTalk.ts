@@ -17,6 +17,7 @@ import { emitExternalTranscript } from "./speechToText";
 import { blobToWav16k } from "./wavEncode";
 import { startAzureStream, stopAzureStream } from "./azureStreamSTT";
 import { startSarvamStream, stopSarvamStream, flushSarvamStream } from "./sarvamStreamSTT";
+import { playEarconStart, playEarconStop } from "./earcons";
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -36,6 +37,15 @@ export function onPttStateChange(listener: (capturing: boolean) => void): () => 
 }
 
 function setCapturing(value: boolean): void {
+  // Earcon on the state EDGE only — a rising chime the instant the mic opens,
+  // a falling one when it closes. This is push-to-talk's only "am I listening?"
+  // signal, and unlike the native-STT earcons it is NOT gated off on iOS
+  // (this path is MediaRecorder, not iOS's quirky continuous Web Speech), so
+  // iPhone VoiceOver users finally hear the cue too.
+  if (value !== capturing) {
+    if (value) playEarconStart();
+    else playEarconStop();
+  }
   capturing = value;
   for (const l of stateListeners) {
     try { l(value); } catch { /* ignore */ }

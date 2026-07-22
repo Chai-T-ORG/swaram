@@ -380,9 +380,20 @@ function normalized(s: string): string {
   return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim();
 }
 
-/** "My name is Tejas K M" -> "Tejas K M" — the form wants the answer alone. */
+/**
+ * "My name is Tejas K M" -> "Tejas K M" — the form wants the answer alone.
+ *
+ * The carrier is stripped whether or not a name follows it (\s* , and the
+ * bare "my name" / "myself" forms), so a clip where the actual name was
+ * inaudible ("my name is …") collapses to "" — a failed capture the caller
+ * re-prompts for — instead of committing the literal words "My name" as the
+ * answer (the "said their name, got 'My name'" bug). Longer carriers are
+ * listed first so the alternation prefers them.
+ */
 function stripCarrier(t: string): string {
-  return t.replace(/^\s*(?:my name is|the name is|name is|it'?s|this is|i am|i'm)\s+/i, "").trim();
+  return t
+    .replace(/^\s*(?:my name is|the name is|my name's|my name|name is|myself|i'?m called|call me|it'?s|this is|i am|i'?m)\b\s*/i, "")
+    .trim();
 }
 
 /** Of two normalized-equal hypotheses, keep the properly-cased one. */

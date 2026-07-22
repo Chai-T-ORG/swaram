@@ -23,6 +23,8 @@ import {
   editDistance,
   mergeSpelledCorrection,
   applySpokenEdit,
+  speakableDate,
+  stripNameCarrier,
 } from "../lib/voice/transcriptFormat";
 import { fillAcroformPdf, fillFlatPdf } from "../lib/pdf/pdfWriter";
 import { parseFillCommand, needsConfirmation, isNameField } from "../lib/voice/fillCommands";
@@ -205,6 +207,17 @@ async function main() {
   check("digits: 'double nine one'", wordsToDigits("double nine one") === "991");
   const fmtNameField = field({ label: "Full Name", profileKey: "full_name" });
   check("formatAnswer capitalizes names", formatAnswer("arun kumar", fmtNameField) === "Arun Kumar");
+  // Carrier-phrase bug: a spoken carrier must be stripped, and a carrier with
+  // no name behind it must NOT become the literal words "My name".
+  check("name carrier stripped", formatAnswer("my name is arun kumar", fmtNameField) === "Arun Kumar", formatAnswer("my name is arun kumar", fmtNameField));
+  check("name 'myself' carrier stripped", formatAnswer("myself priya menon", fmtNameField) === "Priya Menon", formatAnswer("myself priya menon", fmtNameField));
+  check("carrier-only name rejected", formatAnswer("my name is", fmtNameField) === "", `"${formatAnswer("my name is", fmtNameField)}"`);
+  check("stripNameCarrier bare", stripNameCarrier("My name is") === "", `"${stripNameCarrier("My name is")}"`);
+  check("stripNameCarrier keeps real name", stripNameCarrier("Ian Fernandes") === "Ian Fernandes", stripNameCarrier("Ian Fernandes"));
+  // Date readback must be unambiguous words, not "five slash six".
+  check("speakableDate day/month by name", speakableDate("05/06/2002") === "the 5th of June, 2002", speakableDate("05/06/2002"));
+  check("speakableDate 21st", speakableDate("21/11/1990") === "the 21st of November, 1990", speakableDate("21/11/1990"));
+  check("speakableDate passes through non-dates", speakableDate("not a date") === "not a date");
   const genericField = field({ label: "Remarks" });
   check(
     "formatAnswer spoken punctuation",

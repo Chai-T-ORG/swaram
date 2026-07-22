@@ -19,7 +19,7 @@ import { expandTableCells, applyCellValue, parseCount, type CellRef, type RowCou
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { validateField } from "@/lib/validation/rules";
-import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE } from "@/lib/voice/transcriptFormat";
+import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE, speakableDate } from "@/lib/voice/transcriptFormat";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
 import { setSttFieldHint } from "@/lib/voice/groqSTT";
 import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
@@ -30,7 +30,11 @@ import {
   acknowledgeCloudNotice,
   addTranscriptListener,
   removeTranscriptListener,
+  startContinuousListening,
+  stopContinuousListening,
+  needsCloudNotice,
 } from "@/lib/voice/speechToText";
+import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
 
 const UNCLEAR_THRESHOLD = 0.6;
 
@@ -92,6 +96,8 @@ export function useFillSession() {
   const spelledPendingRef = useRef(false);
   /** Continuation endpointing: a half-finished answer waiting for its rest. */
   const pendingContinuationRef = useRef<{ text: string; extensions: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** True while the in-session auto-listen turn has the mic open (PTT mode). */
+  const micArmedRef = useRef(false);
 
   const isContinuousListening = voice?.sttState === "listening";
   const messages = voice?.messages ?? [];
@@ -197,6 +203,47 @@ export function useFillSession() {
     return () => removeTranscriptListener(plain);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, voice]);
+
+  // Conversational turn-taking (push-to-talk mode).
+  //
+  // Push-to-talk stays the default input model, but inside a fill session the
+  // mic auto-opens for exactly the window we're waiting on the user — the
+  // "listening" phase, and only once the assistant has stopped speaking
+  // (`!ttsActive`) — then closes again. This removes the tap-before-every-
+  // answer that blind testers hated (they kept speaking into a closed mic
+  // after each question) WITHOUT an always-on mic and WITHOUT capturing our
+  // own TTS: the mic is shut during "asking"/"confirming" and during the
+  // "Got it" acknowledgements (all `ttsActive`), and continuation endpointing
+  // still works because the phase stays "listening" between an answer and its
+  // tail. Manual push-to-talk (hold space / tap) still works as barge-in while
+  // a question is playing. Continuous mode is untouched (its mic is already
+  // global), and we never bypass the one-time cloud-STT consent screen.
+  const autoListen =
+    !!voice &&
+    voice.micMode === "ptt" &&
+    phase === "listening" &&
+    !voice.ttsActive &&
+    isSttSupported() &&
+    !needsCloudNotice();
+
+  useEffect(() => {
+    if (!autoListen) return;
+    // Cue first, then open the mic AFTER the earcon has finished, so the tone
+    // itself isn't captured by the VAD as a phantom first "utterance".
+    playEarconStart();
+    const armTimer = setTimeout(() => {
+      micArmedRef.current = true;
+      startContinuousListening();
+    }, 300);
+    return () => {
+      clearTimeout(armTimer);
+      if (micArmedRef.current) {
+        micArmedRef.current = false;
+        stopContinuousListening();
+        playEarconStop();
+      }
+    };
+  }, [autoListen]);
 
   // Synchronize state values
   function syncRecord() {
@@ -637,10 +684,13 @@ export function useFillSession() {
     const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
     // In Hindi/Malayalam, speak the name in its phonetic native script so the
     // voice pronounces it the Indian way; the spelled-back letters stay Latin
-    // because that's what lands on the printed form.
+    // because that's what lands on the printed form. Dates are read as words
+    // ("the 5th of June, 2002") so a swapped day/month is impossible to miss.
     const spokenValue = isNameField(field)
       ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
-      : value;
+      : field.type === "date"
+        ? speakableDate(value)
+        : value;
     if (!alive(id)) return;
     const readback = spellItBack
       ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
