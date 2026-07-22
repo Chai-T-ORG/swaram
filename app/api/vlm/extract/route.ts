@@ -3,6 +3,10 @@ import { buildExtractionPrompt } from "@/lib/analysis/vlmPrompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The OpenAI/Gemini vision call takes ~15-25s. Vercel Hobby functions default to
+// a 10s timeout, which would abort the request and force the (bad) legacy
+// fallback — raise it to the Hobby max so the model call can finish.
+export const maxDuration = 60;
 
 const GEMINI_MODEL = process.env.VLM_MODEL || "gemini-flash-latest";
 const OPENAI_MODEL = process.env.OPENAI_VLM_MODEL || "gpt-5.5";
