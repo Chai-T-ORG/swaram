@@ -50,6 +50,15 @@ const MAX_PAGES = 10;
 const UNDERSCORE_RUN = /_{3,}|\.{6,}/;
 
 /**
+ * Render width (px) for pages sent to the VLM. Vision models return grounded
+ * bounding boxes accurately at ~150 DPI (≈1240px for A4) but their box y-coords
+ * drift DOWN by several % on larger images (~1800px shifts fields a full row) —
+ * so we deliberately render small for analysis. This is separate from the
+ * higher-res render used for on-screen previews.
+ */
+const VLM_RENDER_WIDTH = 1240;
+
+/**
  * Rollout flag for VLM-native analysis (opt-out — defaults ON). Set
  * NEXT_PUBLIC_VLM_ANALYSIS=off (or 0/false/no) to force the legacy
  * Sarvam/Tesseract pipeline, e.g. to A/B the two or disable VLM fast.
@@ -136,7 +145,7 @@ async function analyzePdfWithVlm(
   try {
     for (let i = 0; i < pageCount; i++) {
       onProgress({ stage: "reading", page: i + 1, pageCount });
-      const rendered = await renderPageToCanvas(pdf, i + 1);
+      const rendered = await renderPageToCanvas(pdf, i + 1, VLM_RENDER_WIDTH);
       pageDims[i] = { width: rendered.pageWidthPts, height: rendered.pageHeightPts };
       pngs.push(await canvasToPngBlob(rendered.canvas));
       rendered.canvas.width = 0; // release bitmap memory
@@ -178,7 +187,8 @@ async function analyzeImageWithVlm(
   onProgress: (progress: AnalysisProgress) => void,
 ): Promise<AnalysisResult | null> {
   onProgress({ stage: "ocr", pct: 0.1 });
-  const canvas = await imageBlobToCanvas(blob);
+  // Cap the render width — vision bbox accuracy degrades on larger images.
+  const canvas = await imageBlobToCanvas(blob, VLM_RENDER_WIDTH);
   const pageDims: PageDim[] = [{ width: canvas.width, height: canvas.height }];
   const png = await canvasToPngBlob(canvas);
   const page = await extractPageFields(png, 1, 1);
