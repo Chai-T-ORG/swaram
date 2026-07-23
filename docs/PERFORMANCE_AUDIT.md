@@ -6,6 +6,34 @@ _Static analysis of the Next.js 16 / React 19 app. Findings are ordered by impac
 
 ## Implementation status (this branch)
 
+### 🔴 Biggest win — OpenCV (4.46 MB gzipped) was in the `/processing` first load
+
+Measured from a real `next build` (Turbopack): the largest client chunk in the
+whole app is **`@techstark/opencv-js` at 4.46 MB gzipped** (~13 MB raw). It was
+being pulled into the **`/processing/[formId]` route's initial JS** through a
+fully *static* import chain:
+
+```
+/processing route → useProcessing → analyzeForm → deskew.ts
+    → import cv from "@techstark/opencv-js"   ← static, eager
+```
+
+Every other consumer loads OpenCV lazily and best-effort (`shapeDetector.ts`'s
+`loadOpenCv()` uses a dynamic `import()` behind a 25 s timeout). Only
+`deskew.ts` broke the pattern, so processing a form meant downloading 4.46 MB of
+gzipped JS up front — bigger than the favicon and every other issue combined.
+
+**Fix:** `deskewCanvas(cv, canvas)` now receives the already-loaded `cv`
+instance (the call site already had it from `await cvWarmup`), and `deskew.ts`
+uses a **type-only** `import type` so it never statically bundles OpenCV.
+
+**Verified after rebuild:** OpenCV is now a standalone **async** chunk (it
+appears only inside a dynamic-`import()` chunk-loader array), and the
+`/processing` page's SSR bundle is **45 KB** instead of 4 MB+. OpenCV loads only
+when a form is actually being deskewed/analyzed. _(Also fixed a stale
+`package-lock.json` — it was missing `@emnapi/*` transitive deps, which makes
+`npm ci` — Vercel's default install — fail; reconciled so CI installs cleanly.)_
+
 **Applied:**
 - ✅ **#1** Deleted all three 2 MB icon SVGs (`public/icon.svg`, `public/icon0.svg`, `app/icon0.svg`); dropped the SVG from `layout.tsx` icons and from the service-worker precache list; bumped the SW cache `v1 → v2` so old clients purge the cached 2 MB file.
 - ✅ **#2** Deleted ~9.7 MB of unreferenced images (`hero-*`, `media-*` incl. the duplicate, `tip_illustration.png`, `hero-bg*`) and the unused create-next-app SVGs (`next/vercel/file/globe/window.svg`).

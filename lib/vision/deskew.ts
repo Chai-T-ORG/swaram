@@ -1,6 +1,11 @@
-import cv from "@techstark/opencv-js";
+// Type-only import (erased at build) so this module never statically bundles
+// OpenCV's ~4.5 MB (gzipped) runtime. The caller passes the already-loaded `cv`
+// instance from loadOpenCv() — the same lazy path detectShapes() uses — so the
+// whole analysis pipeline pulls OpenCV in on demand rather than into the
+// /processing route's initial JS.
+type CV = typeof import("@techstark/opencv-js");
 
-export function deskewCanvas(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
+export function deskewCanvas(cv: CV, sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
   let src = cv.imread(sourceCanvas);
   let gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
