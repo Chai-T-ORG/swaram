@@ -319,9 +319,7 @@ function resetSilenceTimer(): void {
 
 function autoPauseRecognition(): void {
   isAutoPaused = true;
-  if (!isSafariOrIOS) {
-    playEarconStop();
-  }
+  playEarconStop(); // cue on every platform — iOS VoiceOver users need it most
   if (continuousActive) {
     try {
       continuousActive.abort();
@@ -348,9 +346,7 @@ export function wakeUpContinuous(): void {
   if (isAutoPaused) {
     console.log("[STT] Waking up continuous speech recognition.");
     isAutoPaused = false;
-    if (!isSafariOrIOS) {
-      playEarconStart();
-    }
+    playEarconStart();
     startContinuousListening();
   }
 }
@@ -377,7 +373,7 @@ function emitTranscript(source: string, text: string, confidence: number): void 
   const normalized = normalizeTranscript(text);
   if (!normalized) return;
   console.log(`[STT/${source}] Recognized: "${normalized}" (confidence: ${confidence})`);
-  if (!isSafariOrIOS) playEarconRecognized();
+  playEarconRecognized();
   resetSilenceTimer();
   listeners.forEach((listener) => {
     try {
@@ -602,9 +598,7 @@ function startNativeContinuousListening(options: { lang?: string } = {}): void {
 
     if (transcript) {
       console.log(`[STT/Native] Recognized: "${transcript}" (confidence: ${confidence})`);
-      if (!isSafariOrIOS) {
-        playEarconRecognized();
-      }
+      playEarconRecognized();
       // Notify all subscribers
       listeners.forEach((listener) => {
         try {

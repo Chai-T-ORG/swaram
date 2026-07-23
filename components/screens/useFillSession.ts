@@ -19,7 +19,8 @@ import { expandTableCells, applyCellValue, parseCount, type CellRef, type RowCou
 import { speak, cancelSpeech, spellOut, unlockAudioPlayback, prefetchTTS } from "@/lib/voice/textToSpeech";
 import { getVoiceSettings } from "@/lib/voice/voiceSettings";
 import { validateField } from "@/lib/validation/rules";
-import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE } from "@/lib/voice/transcriptFormat";
+import { spellTokensToText, titleCase, formatAnswer, mergeSpelledCorrection, applySpokenEdit, formatIdCode, ID_FIELD_RE, speakableDate } from "@/lib/voice/transcriptFormat";
+import { matchOption, parseOptionNumber } from "@/lib/voice/choiceMatch";
 import { parseFillCommand, isNameField, needsConfirmation } from "@/lib/voice/fillCommands";
 import { setSttFieldHint } from "@/lib/voice/groqSTT";
 import { rememberName, knownNames, snapToKnownName } from "@/lib/voice/nameDictionary";
@@ -31,6 +32,8 @@ import {
   addTranscriptListener,
   removeTranscriptListener,
 } from "@/lib/voice/speechToText";
+import { playEarcon } from "@/lib/voice/earcons";
+import { haptic } from "@/lib/voice/haptics";
 
 const UNCLEAR_THRESHOLD = 0.6;
 const HIGH_CONFIDENCE = 0.98;
@@ -56,8 +59,12 @@ export function useFillSession() {
   const searchParams = useSearchParams();
   const voice = useVoice();
   useVoicePage({
-    title: "Voice session",
-    hint: "Answer the questions as I read them. Say skip, repeat, or stop anytime.",
+    // Start-oriented title/hint: this is the FIRST thing announced on arriving
+    // at the fill screen (the "Start" gate), so it must tell the user what to
+    // do here. It's spoken on mount when audio is unlocked, or on the first
+    // gesture otherwise — either way the start screen is no longer silent.
+    title: "Ready to fill",
+    hint: "Press start, or say start, when you're ready — I'll ask one question at a time.",
     description:
       "Form filling stage. Answer the questions as I read them. Say skip to skip, repeat to repeat, or go back to correct a field.",
     exclusive: true,
@@ -148,6 +155,15 @@ export function useFillSession() {
         }
         return false;
       }
+      if (phase === "done") {
+        // After the last answer: a spoken word takes the user to review (the
+        // auto-advance also does, this covers barge-in / a slow navigation).
+        if (/\b(review|continue|next|proceed|go|yes|ready|check|okay|ok)\b/.test(clean)) {
+          router.push(`/review/${formId}`);
+          return true;
+        }
+        return false;
+      }
       if (phase === "typing") {
         if (/use voice|voice instead|resume voice|listen/.test(clean)) {
           resume();
@@ -203,6 +219,14 @@ export function useFillSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, voice]);
 
+  // NOTE: an earlier "auto-listen" experiment opened a continuous VAD mic during
+  // the listening phase to remove the tap-before-every-answer. It was reverted:
+  // continuous VAD FRAGMENTS the utterance on silence and captures room noise,
+  // which measurably hurt the name/answer ensemble — push-to-talk's one clean,
+  // user-bounded clip is the bigger accuracy win. Turn clarity is solved instead
+  // with distinct earcons + haptics + spoken orientation, not by changing the
+  // capture model. Keep PTT the capture path.
+
   // Synchronize state values
   function syncRecord() {
     if (recordRef.current) {
@@ -236,6 +260,9 @@ export function useFillSession() {
     }
     recordRef.current = form;
     setRecord(form);
+    // Prefetch the review route now, so the auto-advance after the last answer
+    // (and the manual "Continue to review") lands instantly.
+    try { router.prefetch(`/review/${formId}`); } catch { /* older router */ }
     setPhase("start");
     const pendingCount = form.fields.filter((f) => f.status === "pending").length;
     const message = onlySkippedRef.current
@@ -304,7 +331,16 @@ export function useFillSession() {
     // Prefer the AI-refined natural question + hint when available.
     const base = field.question?.trim() || defaultQuestionFor(field);
     if (field.type === "choice" && field.options?.length) {
-      return `${base} Options: ${field.options.join(", ")}.`;
+      // Number the options so a blind user can answer with a digit — far more
+      // robust than a homophone-prone word ("male" heard as "mail").
+      const numbered = field.options.map((o, i) => `${i + 1} for ${o}`).join(", ");
+      return `${base} ${numbered}.`;
+    }
+    if (field.type === "comb" && field.combLength) {
+      // Say the ACTUAL number of boxes (from the detected comb), not a
+      // hardcoded/AI-guessed digit count — an Aadhaar comb is 12 boxes, not 10.
+      const help = field.help ? ` ${field.help}` : "";
+      return `${base} This field has ${field.combLength} boxes, one character in each.${help}`;
     }
     return field.help ? `${base} ${field.help}` : base;
   }
@@ -388,7 +424,11 @@ export function useFillSession() {
       return;
     }
 
-    await speak(questionFor(field));
+    // Orientation: a blind user can't see a progress bar, so speak position
+    // before the question. Kept short; skipped for single-question queues.
+    const total = queueRef.current.length;
+    const progress = total > 1 ? `Question ${pos + 1} of ${total}. ` : "";
+    await speak(progress + questionFor(field));
     if (!alive(id)) return;
 
     listenKindRef.current = "answer";
@@ -569,6 +609,8 @@ export function useFillSession() {
     if (field.type === "checkbox") {
       const yn = parseYesNo(raw);
       if (yn === null) {
+        playEarcon("error");
+        haptic("error");
         await speak("Please answer yes or no.");
         if (alive(id)) setPhase("listening");
         return;
@@ -578,21 +620,40 @@ export function useFillSession() {
     }
 
     if (field.type === "choice" && field.options?.length) {
-      const option = matchOption(raw, field.options);
+      // Phonetic + fuzzy match handles homophones ("male" heard as "mail"),
+      // and a spoken option NUMBER is an escape hatch a homophone can't block.
+      let option = matchOption(raw, field.options);
       if (!option) {
+        const numIdx = parseOptionNumber(raw, field.options.length);
+        if (numIdx !== null) option = field.options[numIdx];
+      }
+      if (!option) {
+        playEarcon("error");
+        haptic("error");
         retriesRef.current += 1;
         if (retriesRef.current >= 3) {
           await speak("Let's pick it from a list instead.");
           if (alive(id)) setPhase("typing");
           return;
         }
-        await speak(`I heard ${raw}. The options are: ${field.options.join(", ")}. Say one.`);
+        // Enumerate so the answer can be given as a number, not just the word.
+        const numbered = field.options.map((o, i) => `${i + 1} for ${o}`).join(", ");
+        await speak(`I heard ${raw}. Say the option, or its number: ${numbered}.`);
         if (alive(id)) setPhase("listening");
         return;
       }
       commit(pos, option, id, `${option}.`);
       return;
     }
+
+    // Immediate "I heard you, working on it" cue. Name/address answers run the
+    // ensemble + (sometimes) an LLM pass + a TTS readback, which is a few
+    // seconds of otherwise-dead air a blind user can't interpret. This bridges
+    // it: a captured earcon + haptic + a spoken-status the UI shows.
+    playEarcon("captured");
+    haptic("captured");
+    setTone("info");
+    setStatus("Got it — checking…");
 
     // Adaptive STT — "smart lane": for name/address/free-text fields, run the
     // raw transcript through a fast field-aware LLM pass that fixes Indian names
@@ -602,8 +663,12 @@ export function useFillSession() {
     const lane = smartLane(field);
     let source = raw;
     // A name the user already confirmed once beats any model: snap to it
-    // deterministically and skip the LLM round-trip entirely.
-    const snapped = lane.kind === "name" ? snapToKnownName(raw, field.profileKey) : null;
+    // deterministically and skip the LLM round-trip entirely. BUT only on the
+    // first attempt — after a rejection the user is CORRECTING, so snapping the
+    // fresh transcript back to the (rejected) stored name is exactly the
+    // "I keep saying Gordan but it reverts to Jordan" trap.
+    const snapped =
+      lane.kind === "name" && retriesRef.current === 0 ? snapToKnownName(raw, field.profileKey) : null;
     if (snapped) {
       source = snapped;
     } else if (lane.correct && isLlmAvailable()) {
@@ -614,11 +679,18 @@ export function useFillSession() {
         lane.kind === "name" ? knownNames() : [],
       );
       if (!alive(id)) return;
-      if (corrected) source = corrected;
+      // Guard against the corrector HALLUCINATING a place/name out of pure
+      // digits — "12345" for a State field must never become "Mumbai". If the
+      // input had no letters but the "correction" introduced them, it invented
+      // the answer; keep the raw value so the user hears and rejects it.
+      const invented = !!corrected && /[a-z]/i.test(corrected) && !/[a-z]/i.test(raw);
+      if (corrected && !invented) source = corrected;
     }
 
     const value = formatAnswer(source, field);
     if (!value) {
+      playEarcon("error");
+      haptic("error");
       await speak("I didn't catch that. Could you repeat it?");
       if (alive(id)) setPhase("listening");
       return;
@@ -626,6 +698,8 @@ export function useFillSession() {
 
     const validationError = validateField(field.label, value);
     if (validationError) {
+      playEarcon("error");
+      haptic("error");
       await speak(`${validationError} Let's try again.`);
       if (alive(id)) setPhase("listening");
       return;
@@ -657,15 +731,25 @@ export function useFillSession() {
     setSttFieldHint("");
     setPhase("confirming");
     setStatus(`I heard: “${value}”. Correct?`);
-    // For names, emails, and numbers, read it back character-by-character so
-    // the user can actually verify it — this is where mishearings hide.
-    const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
+    // Spell the value back character-by-character ONLY for short identity
+    // values (a person's name, an email, an ID/number) where mishearings hide.
+    // A long "name" field like "Name of Institution" — 40+ characters — must NOT
+    // be spelled: that's 15+ seconds of slow letter-by-letter speech, the exact
+    // "readback is extremely slow" complaint. Long values are read normally.
+    const compact = value.replace(/\s/g, "");
+    const isPersonName = isNameField(field) && compact.length <= 22;
+    const spellItBack =
+      isPersonName ||
+      (/(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label) && compact.length <= 30);
     // In Hindi/Malayalam, speak the name in its phonetic native script so the
     // voice pronounces it the Indian way; the spelled-back letters stay Latin
-    // because that's what lands on the printed form.
-    const spokenValue = isNameField(field)
+    // because that's what lands on the printed form. Dates are read as words
+    // ("the 5th of June, 2002") so a swapped day/month is impossible to miss.
+    const spokenValue = isPersonName
       ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
-      : value;
+      : field.type === "date"
+        ? speakableDate(value)
+        : value;
     if (!alive(id)) return;
     const readback = spellItBack
       ? `I heard: ${spokenValue}. That's ${spellOut(value)}. Correct?`
@@ -673,8 +757,8 @@ export function useFillSession() {
     await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""), {
       // Name lines route through the pronunciation-dictionary TTS path so
       // "Thilakan" is said the Indian way even in English (no-op until the
-      // dictionary is registered server-side).
-      nameReadback: isNameField(field),
+      // dictionary is registered server-side). Only for short person names.
+      nameReadback: isPersonName,
     });
     if (alive(id)) {
       setPhase("listening");
@@ -717,9 +801,12 @@ export function useFillSession() {
       await speak("Okay, once more. " + questionFor(field) + spellHint);
       if (alive(id)) {
         listenKindRef.current = "answer";
+        // Correcting: keep the name ensemble ON (accuracy) but send NO known
+        // names, so the server won't snap the fresh audio back to the rejected
+        // stored name. The client snap is likewise skipped now (retries > 0).
         setSttFieldHint(smartLane(field).kind === "name" ? "name" : "", {
           label: field.label,
-          names: knownNames(),
+          names: [],
         });
         setPhase("listening");
       }
@@ -746,16 +833,25 @@ export function useFillSession() {
 
     retriesRef.current += 1;
     if (retriesRef.current >= 3) {
-      commit(posRef.current, pendingConfirmRef.current ?? "", id);
+      // NEVER auto-commit a value the user is disputing — that's the "I said no
+      // but it went to the next question" bug. Fall back to typing so they fix
+      // it deliberately.
+      playEarcon("error");
+      haptic("error");
+      await speak("I'm not sure — let's fix this by typing it.");
+      if (alive(id)) setPhase("typing");
       return;
     }
-    await speak(`I heard ${transcript}. Please answer yes or no. Is ${pendingConfirmRef.current} correct?`);
+    await speak(`I didn't catch a yes or no. Is ${pendingConfirmRef.current} correct? Please say yes, or no.`);
     if (alive(id)) setPhase("listening");
   }
 
   function commit(pos: number, val: string, id: number, speakPrefix = "") {
     const rec = recordRef.current;
     if (!rec) return;
+    // Multimodal "accepted, moving on" cue before the spoken acknowledgement.
+    playEarcon("success");
+    haptic("success");
     const field = queueRef.current[pos];
     if (field) {
       field.value = val;
@@ -842,9 +938,14 @@ export function useFillSession() {
     setTone("success");
     rec.status = "review";
     syncRecord();
-    const msg = "Excellent! We have gone through all questions. Let's review the form now.";
+    playEarcon("success");
+    haptic("success");
+    const msg = "All questions answered. Taking you to review now, where I'll read everything back.";
     setStatus(msg);
     await speak(msg);
+    // Actually GO to review — the done screen previously had no voice command
+    // and no auto-advance, stranding the user after the last answer.
+    if (alive(id)) router.push(`/review/${formId}`);
   }
 
   function handleCommand(cmd: "repeat" | "skip" | "back", pos: number, id: number) {
@@ -996,31 +1097,15 @@ function isTextLike(field: FormField): boolean {
 
 function parseYesNo(transcript: string): boolean | null {
   const t = transcript.toLowerCase().trim();
-  if (/^(yes|yeah|yep|yup|correct|right|that's right|sure|ok|okay|haan|ha|confirm)\b/.test(t)) return true;
-  if (/^(no|nope|nah|wrong|incorrect|nahi|not correct|that's wrong)\b/.test(t)) return false;
+  // Include the ways STT commonly renders a spoken "yes"/"no" in Indian English.
+  if (/^(yes|yeah|yep|yup|yah|ya|correct|right|that'?s right|sure|ok|okay|haan|ha|confirm|perfect|good)\b/.test(t)) return true;
+  if (/^(no|nope|nah|know|not right|wrong|incorrect|nahi|not correct|that'?s wrong|change|redo|again)\b/.test(t)) return false;
   // Hindi / Malayalam / French — the recognizer returns native script.
   if (containsKeyword(transcript, INTL_KEYWORDS.no)) return false; // check "no" first: "വേണ്ട"/"non" are distinct
   if (containsKeyword(transcript, INTL_KEYWORDS.yes)) return true;
   return null;
 }
 
-function matchOption(transcript: string, options: string[]): string | null {
-  const heard = transcript.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
-  if (!heard) return null;
-  for (const option of options) {
-    if (option.toLowerCase() === heard) return option;
-  }
-  for (const option of options) {
-    const o = option.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
-    if (heard.includes(o) || o.includes(heard)) return option;
-  }
-  const squashed = heard.replace(/\s+/g, "");
-  for (const option of options) {
-    const o = option.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (o === squashed) return option;
-  }
-  return null;
-}
 
 /**
  * Adaptive-STT routing: should this field's answer go through the LLM corrector

@@ -141,13 +141,14 @@ function drawAnswer(
     let chars: string[];
     if (field.type === "date") {
       chars = text.replace(/\D/g, "").split("");
-    } else if (
-      field.profileKey &&
-      ["aadhaar", "pan", "mobile", "pin", "bank_account", "ifsc"].includes(field.profileKey)
-    ) {
-      chars = text.replace(/\s+/g, "").split("");
     } else {
-      chars = text.split("");
+      // Smart fit: a name-style comb puts a blank box between words, so KEEP the
+      // spaces when the spaced value already fits the boxes. Otherwise the
+      // spaces are just grouping ("1234 5678 9012", "25 BCS 200") — STRIP them
+      // so the characters land in their boxes. (If it doesn't fit even stripped
+      // it's likely wrong; the draw loop truncates to combLength.)
+      const spaced = text.split("");
+      chars = spaced.length <= field.combLength ? spaced : text.replace(/\s+/g, "").split("");
     }
     // Precise path: one box per character (grouped combs / boxed dates). Used
     // only when we have a full parallel set of cells; otherwise fall through to

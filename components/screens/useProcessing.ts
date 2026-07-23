@@ -18,9 +18,11 @@ import { analyzeForm, type AnalysisStage } from "@/lib/analysis/analyzeForm";
 import { enhanceFieldsWithLlm } from "@/lib/analysis/enhanceFields";
 import { isLlmAvailable } from "@/lib/voice/llm";
 import { speak } from "@/lib/voice/textToSpeech";
+import { playEarcon } from "@/lib/voice/earcons";
 import type { FormRecord } from "@/lib/types";
 
 import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdfReader";
+import { loadOpenCv } from "@/lib/vision/shapeDetector";
 
 export type StepState = "pending" | "active" | "done";
 
@@ -40,6 +42,7 @@ export function useProcessing() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
   const startedRef = useRef(false);
+  const spokenStageRef = useRef<string>("");
 
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [stage, setStage] = useState<AnalysisStage | "done" | "failed">("reading");
@@ -90,6 +93,14 @@ export function useProcessing() {
   );
 
   useEffect(() => {
+    // Pre-warm OpenCV in the background the moment this screen mounts. It's a
+    // 4.5 MB (gz) WASM runtime used only by the legacy fallback pipeline, kept
+    // out of the entry chunk (see deskew.ts). Kicking loadOpenCv() off here —
+    // memoized, fire-and-forget — mirrors the timing the old static import gave
+    // (download starts at page load, not mid-analysis), so if the legacy path
+    // is reached, OpenCV is already warm instead of blocking analysis.
+    void loadOpenCv();
+
     if (activeProcesses.has(formId)) {
       // Form is already being processed in another instance (Strict Mode).
       const interval = setInterval(async () => {
@@ -106,6 +117,14 @@ export function useProcessing() {
     run().finally(() => activeProcesses.delete(formId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Soft "still working" heartbeat while analysis runs, so the silent AI-vision
+  // wait never reads as frozen to a blind user. Stops once done or failed.
+  useEffect(() => {
+    if (done || failed) return;
+    const iv = setInterval(() => playEarcon("captured"), 8000);
+    return () => clearInterval(iv);
+  }, [done, failed]);
 
   async function run() {
     try {
@@ -131,8 +150,24 @@ export function useProcessing() {
         return;
       }
 
+      // Set the expectation up front, out loud. The AI-vision pass is ~15-25s
+      // of otherwise-silent waiting — without this a blind user can't tell if
+      // anything is happening. Stage narration below then reports progress.
+      speak("Got your form. Analyzing it now — this usually takes twenty to forty seconds. I'll tell you the moment it's ready.");
+
       const result = await analyzeForm(blob, form.sourceType, (progress) => {
         setStage(progress.stage);
+        // Narrate the long stages once each, so the wait isn't dead silence.
+        if (progress.stage === "ocr" && spokenStageRef.current !== "ocr") {
+          spokenStageRef.current = "ocr";
+          speak("Reading your form with A.I. vision. This is the longest step — hang tight.");
+        } else if (
+          (progress.stage === "fields" || progress.stage === "ordering") &&
+          spokenStageRef.current !== "near"
+        ) {
+          spokenStageRef.current = "near";
+          speak("Almost there — organizing your questions.");
+        }
         if (progress.stage === "ocr") {
           const pct = progress.pct !== undefined ? `${Math.round(progress.pct * 100)}%` : "";
           if (progress.page && progress.pageCount) {
@@ -151,7 +186,8 @@ export function useProcessing() {
       if (fields.length > 0 && isLlmAvailable()) {
         setStage("fields");
         setDetail("understanding the form with AI");
-        speak("Reading through your form to understand each field.");
+        // (The "almost there" narration above already covers this step aloud;
+        // the heartbeat fills the remaining gap — no duplicate line here.)
         try {
           fields = await enhanceFieldsWithLlm(fields, form.name);
         } catch {

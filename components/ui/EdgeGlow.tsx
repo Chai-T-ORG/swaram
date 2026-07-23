@@ -8,6 +8,9 @@ interface EdgeGlowProps {
   mood?: "thinking" | "success";
 }
 
+// Two visually DISTINCT identities so a sighted user always knows whose turn it
+// is: `thinking` = LISTENING (your turn) is brand green and reacts to your mic;
+// `success` = SPEAKING (my turn) is a cooler teal/cyan that pulses rhythmically.
 const STOPS_DARK = {
   thinking: [
     [145, 80, 65], // vivid emerald
@@ -18,15 +21,15 @@ const STOPS_DARK = {
     [145, 80, 65],
   ],
   success: [
-    [162, 75, 75], // bright mint
-    [145, 80, 68], // vivid emerald
-    [130, 68, 62], // lime-green
-    [145, 80, 68], // vivid emerald
-    [162, 75, 75],
+    [188, 72, 74], // bright teal
+    [198, 68, 68], // cyan
+    [178, 66, 62], // teal-green
+    [198, 68, 68], // cyan
+    [188, 72, 74],
   ],
 } as const;
 
-// Light mode: rich forest green & emerald perimeter aura
+// Light mode: rich forest green (listening) vs deep teal (speaking).
 const STOPS_LIGHT = {
   thinking: [
     [145, 65, 38], // rich forest green
@@ -35,9 +38,9 @@ const STOPS_LIGHT = {
     [145, 65, 38],
   ],
   success: [
-    [158, 60, 44],
-    [145, 65, 38],
-    [158, 60, 44],
+    [190, 60, 40], // deep teal
+    [200, 58, 46], // cyan-teal
+    [190, 60, 40],
   ],
 } as const;
 
@@ -98,10 +101,23 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
   const targetRef = useRef<number>(active ? 1 : 0);
   const moodRef = useRef<"thinking" | "success">(mood);
   const alphaRef = useRef<number>(0);
+  const reducedRef = useRef<boolean>(false);
 
   volRef.current = micVolume;
   moodRef.current = mood;
   targetRef.current = active ? 1 : 0;
+
+  // Honor prefers-reduced-motion: keep the glow (so the state is still visible)
+  // but drop the animated wave — saves the per-frame perimeter math and doesn't
+  // move for motion-sensitive users.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const read = () => { reducedRef.current = mq.matches; };
+    read();
+    mq.addEventListener("change", read);
+    return () => mq.removeEventListener("change", read);
+  }, []);
 
   // Track light/dark mode for proper compositing
   useEffect(() => {
@@ -152,7 +168,13 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
       const phase = (elapsed / 10_000) * Math.PI * 2;
       const hShift = Math.sin(elapsed / 7_000) * 18;
       const energy = 0.5 + volRef.current * 0.5;
-      const amplitude = 3 + energy * 4;
+      // Listening reacts to the mic; speaking has no mic signal, so give it a
+      // steady "breathing" pulse instead — a second, motion-based cue that this
+      // is OUTPUT, not input.
+      const reduced = reducedRef.current;
+      const speakingPulse =
+        !reduced && moodRef.current === "success" ? (0.5 + 0.5 * Math.sin(elapsed / 380)) * 5 : 0;
+      const amplitude = reduced ? 0 : 3 + energy * 4 + speakingPulse;
 
       const darkTheme = document.documentElement.classList.contains("dark");
       const stops = darkTheme ? STOPS_DARK[moodRef.current] : STOPS_LIGHT[moodRef.current];
@@ -205,11 +227,15 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
             { lw: 4.5, op: 0.45 },
           ];
 
-      for (const { lw, op } of wavePasses) {
-        ctx.lineWidth = lw;
-        ctx.strokeStyle = makeGrad(op);
-        wavyPerimeter(ctx, W, H, phase, amplitude);
-        ctx.stroke();
+      // Skip the wavy perimeter entirely under reduced motion — the rect glow
+      // above already conveys the state, and this is the per-frame hot path.
+      if (!reduced) {
+        for (const { lw, op } of wavePasses) {
+          ctx.lineWidth = lw;
+          ctx.strokeStyle = makeGrad(op);
+          wavyPerimeter(ctx, W, H, phase, amplitude);
+          ctx.stroke();
+        }
       }
 
       ctx.globalCompositeOperation = "source-over";

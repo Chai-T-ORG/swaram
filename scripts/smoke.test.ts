@@ -23,9 +23,13 @@ import {
   editDistance,
   mergeSpelledCorrection,
   applySpokenEdit,
+  speakableDate,
+  stripNameCarrier,
 } from "../lib/voice/transcriptFormat";
 import { fillAcroformPdf, fillFlatPdf } from "../lib/pdf/pdfWriter";
 import { parseFillCommand, needsConfirmation, isNameField } from "../lib/voice/fillCommands";
+import { matchOption, parseOptionNumber, soundex } from "../lib/voice/choiceMatch";
+import { nameClose, wordCloseEnough } from "../lib/voice/nameMatch";
 import type { FormField } from "../lib/types";
 import type { OcrLine } from "../lib/ocr/tesseractEngine";
 
@@ -205,6 +209,46 @@ async function main() {
   check("digits: 'double nine one'", wordsToDigits("double nine one") === "991");
   const fmtNameField = field({ label: "Full Name", profileKey: "full_name" });
   check("formatAnswer capitalizes names", formatAnswer("arun kumar", fmtNameField) === "Arun Kumar");
+  // Carrier-phrase bug: a spoken carrier must be stripped, and a carrier with
+  // no name behind it must NOT become the literal words "My name".
+  check("name carrier stripped", formatAnswer("my name is arun kumar", fmtNameField) === "Arun Kumar", formatAnswer("my name is arun kumar", fmtNameField));
+  check("name 'myself' carrier stripped", formatAnswer("myself priya menon", fmtNameField) === "Priya Menon", formatAnswer("myself priya menon", fmtNameField));
+  check("carrier-only name rejected", formatAnswer("my name is", fmtNameField) === "", `"${formatAnswer("my name is", fmtNameField)}"`);
+  check("stripNameCarrier bare", stripNameCarrier("My name is") === "", `"${stripNameCarrier("My name is")}"`);
+  check("stripNameCarrier keeps real name", stripNameCarrier("Ian Fernandes") === "Ian Fernandes", stripNameCarrier("Ian Fernandes"));
+  // Date readback must be unambiguous words, not "five slash six".
+  check("speakableDate day/month by name", speakableDate("05/06/2002") === "the 5th of June, 2002", speakableDate("05/06/2002"));
+  check("speakableDate 21st", speakableDate("21/11/1990") === "the 21st of November, 1990", speakableDate("21/11/1990"));
+  check("speakableDate passes through non-dates", speakableDate("not a date") === "not a date");
+  // Choice homophones: "male" heard as "mail" must still select Male.
+  const genderOpts = ["Male", "Female", "Other"];
+  check("soundex male==mail", soundex("male") === soundex("mail"), `${soundex("male")} vs ${soundex("mail")}`);
+  check("choice: 'mail' -> Male", matchOption("mail", genderOpts) === "Male", String(matchOption("mail", genderOpts)));
+  check("choice: exact 'female'", matchOption("female", genderOpts) === "Female");
+  check("choice: 'Mail.' punctuated -> Male", matchOption("Mail.", genderOpts) === "Male", String(matchOption("Mail.", genderOpts)));
+  check("choice: unrelated -> null", matchOption("banana", genderOpts) === null, String(matchOption("banana", genderOpts)));
+  check("optionNumber: 'number two' -> idx1", parseOptionNumber("number two", 3) === 1, String(parseOptionNumber("number two", 3)));
+  check("optionNumber: 'the first one' -> idx0", parseOptionNumber("the first one", 3) === 0, String(parseOptionNumber("the first one", 3)));
+  check("optionNumber: out of range -> null", parseOptionNumber("five", 3) === null, String(parseOptionNumber("five", 3)));
+  // Spoken-digit homophones (Indian English) — the reason numbers felt broken.
+  check("optionNumber homophone 'to' -> idx1", parseOptionNumber("to", 3) === 1, String(parseOptionNumber("to", 3)));
+  check("optionNumber homophone 'won' -> idx0", parseOptionNumber("won", 3) === 0, String(parseOptionNumber("won", 3)));
+  check("optionNumber homophone 'tree' -> idx2", parseOptionNumber("tree", 5) === 2, String(parseOptionNumber("tree", 5)));
+  const panField = field({ label: "PAN" });
+  check("PAN -> tight uppercase (no spaces)", formatAnswer("kyc 1 2 3 4 5 6 7", panField) === "KYC1234567", formatAnswer("kyc 1 2 3 4 5 6 7", panField));
+  // Name dictionary must match per-WORD, so a different given name never snaps
+  // to a stored name just because the surname matches.
+  check("nameClose: different given name -> false", nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran") === false, String(nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran")));
+  check("nameClose: misheard heals -> true", nameClose("Twinsh T Thilakan", "Twinsha T Thilakan") === true, String(nameClose("Twinsh T Thilakan", "Twinsha T Thilakan")));
+  check("nameClose: exact -> true", nameClose("Arun Kumar", "Arun Kumar") === true);
+  check("nameClose: different word count -> false", nameClose("Arun Kumar", "Arun Kumar Nair") === false);
+  check("nameClose: initial vs word -> false", nameClose("Tejas K M", "Tejas Kumar Menon") === false, String(nameClose("Tejas K M", "Tejas Kumar Menon")));
+  // Same shared matcher the server uses — a couple more invariant guards.
+  check("nameClose: only surname shared, given name off by 2 -> false", nameClose("Rahul Sharma", "Vishal Sharma") === false, String(nameClose("Rahul Sharma", "Vishal Sharma")));
+  check("nameClose: punctuated/case tolerant heal -> true", nameClose("twinsha  t  thilakan", "Twinsha T Thilakan") === true);
+  check("wordCloseEnough: gordan~jordan -> true", wordCloseEnough("gordan", "jordan") === true);
+  check("wordCloseEnough: maria~gordan -> false", wordCloseEnough("maria", "gordan") === false, String(wordCloseEnough("maria", "gordan")));
+  check("wordCloseEnough: short words need exact", wordCloseEnough("om", "on") === false);
   const genericField = field({ label: "Remarks" });
   check(
     "formatAnswer spoken punctuation",

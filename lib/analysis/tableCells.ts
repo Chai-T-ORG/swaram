@@ -80,13 +80,17 @@ export function expandTableCells(
 ): FormField[] {
   const out: FormField[] = [];
   for (const f of fields) {
-    if (f.type !== "table" || !f.columns?.length || !f.cells?.length) {
+    // Row count comes from cell bboxes when present, else from row labels — so a
+    // table with rows/columns but MISSING cell bboxes still gets asked instead
+    // of silently skipped by the fill loop (the "it skipped Academic Record"
+    // bug). Only a table with no structure at all passes through.
+    const rowCount = f.cells?.length ?? f.rows?.length ?? 0;
+    if (f.type !== "table" || !f.columns?.length || rowCount === 0) {
       out.push(f);
       continue;
     }
-    const rows = f.rows?.length ?? f.cells.length;
     const cols = f.columns.length;
-    const grid = parseGrid(f.value, rows, cols);
+    const grid = parseGrid(f.value, rowCount, cols);
     // For list tables (family members etc.) ask "how many?" first, so an empty
     // 5-row table doesn't become 25 questions. Only when we can track it.
     if (rowCountMap && isListTable(f) && !grid.some((row) => row.some((v) => v.trim()))) {
@@ -102,11 +106,11 @@ export function expandTableCells(
         source: f.source,
         value: "",
         status: "pending",
-        question: `How many entries do you want to add for ${f.label}? Say a number, up to ${f.cells.length}.`,
+        question: `How many entries do you want to add for ${f.label}? Say a number, up to ${rowCount}.`,
       });
-      rowCountMap.set(countId, { tableId: f.id, maxRows: f.cells.length });
+      rowCountMap.set(countId, { tableId: f.id, maxRows: rowCount });
     }
-    for (let r = 0; r < f.cells.length; r++) {
+    for (let r = 0; r < rowCount; r++) {
       for (let c = 0; c < cols; c++) {
         if (grid[r]?.[c]?.trim()) continue; // already has a value — don't re-ask
         const colName = f.columns[c] ?? `Column ${c + 1}`;
@@ -116,7 +120,7 @@ export function expandTableCells(
           label: `${f.label} — ${rowName} — ${colName}`,
           type: inferCellType(colName),
           page: f.page,
-          bbox: f.cells[r]?.[c] ?? null,
+          bbox: f.cells?.[r]?.[c] ?? null,
           order: f.order,
           confidence: f.confidence,
           source: f.source,

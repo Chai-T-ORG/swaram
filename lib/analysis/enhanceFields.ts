@@ -84,7 +84,14 @@ export async function enhanceFieldsWithLlm(
       out.push(field);
       continue;
     }
-    if (llm.drop) continue; // LLM says this isn't a real field
+    // The LLM may DROP a spurious basic field (a heading/instruction it
+    // mis-labelled), but NEVER a structurally-detected one. A table like
+    // "Academic Record" carries instruction text ("complete every row…") that
+    // the LLM mistakes for an instruction and drops the whole grid — the exact
+    // "it skipped the Academic Record table" bug. comb/table/signature come from
+    // the VLM's grounded layout read; keep them even if the LLM says drop.
+    const STRUCTURAL = new Set<FormField["type"]>(["comb", "table", "signature"]);
+    if (llm.drop && !STRUCTURAL.has(field.type)) continue;
 
     // Only let the LLM re-type "basic" fields. comb / table / signature come
     // from the VLM's grounded layout read and must never be downgraded to text.

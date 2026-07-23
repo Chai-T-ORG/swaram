@@ -1,9 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Strands from "@/components/Strands";
+import dynamic from "next/dynamic";
 import VoiceStrand from "@/components/ui/VoiceStrand";
 import { useVoice } from "@/components/voice/VoiceProvider";
+import { useMicVolume } from "@/lib/voice/micLevel";
+
+// The WebGL waveform pulls in `ogl`. VoiceControl renders this on nearly every
+// screen, so a static import would put the whole WebGL renderer in the shared
+// bundle. Load it as its own client-only chunk instead — it only ever renders
+// on the WebGL2 branch below (decorative + aria-hidden), and the non-WebGL2
+// fallback (VoiceStrand) stays in the critical path.
+const Strands = dynamic(() => import("@/components/Strands"), { ssr: false });
 
 function useIsDarkTheme(): boolean {
   const [dark, setDark] = useState(false);
@@ -51,6 +59,7 @@ export default function VoiceStrands({
   const voice = useVoice();
   const dark = useIsDarkTheme();
   const webgl2 = useWebGL2();
+  const vol = useMicVolume(); // hook must run before any early return
   const [reduced, setReduced] = useState(false);
 
   useEffect(() => {
@@ -70,7 +79,6 @@ export default function VoiceStrands({
     );
   }
 
-  const vol = voice?.micVolume ?? 0;
   const listening = voice?.sttState === "listening";
   const speaking = Boolean(voice?.ttsActive);
 

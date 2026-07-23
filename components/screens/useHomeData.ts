@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { listForms } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
 
@@ -30,6 +31,15 @@ export function formatFormDate(ts: number): string {
 }
 
 export function useHomeData() {
+  // The landing screen must speak for a blind user, not just render. (This was
+  // the one screen with no page announcement.)
+  useVoicePage({
+    title: "Swaram home",
+    hint: "Say scan to photograph a paper form, upload to choose a file, my forms to continue one, or profile for settings.",
+    description:
+      "Swaram home screen. You can say: scan a form, upload a file, my forms, or profile.",
+  });
+
   const { data: forms = [] } = useSWR("local_forms_list", () => listForms(), {
     revalidateOnFocus: true,
     dedupingInterval: 2000,
