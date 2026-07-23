@@ -55,6 +55,22 @@ ok(!synth.some((f) => f.label === "Academic Record — SSLC — Board"), "alread
 ok(synth.every((f) => f.bbox !== null), "synthetic cells carry their cell bbox");
 ok(synth.every((f) => typeof f.question === "string" && f.question!.includes("what is the")), "synthetic cells have a spoken question");
 
+// ---- table with row labels but NO cell bboxes must STILL expand (the "it
+// skipped Academic Record" bug: an unexpanded table gets dropped by the fill
+// loop, which auto-skips type "table") ----
+const noCells: FormField = {
+  id: "tblNC", label: "Academic Record", type: "table", page: 1, bbox: null,
+  columns: ["Board", "Year"], rows: ["SSLC", "HSE"],
+  cells: undefined, value: "",
+  order: 5, confidence: 90, source: "ocr", status: "pending",
+};
+const cmNC = new Map<string, CellRef>();
+const ncExpanded = expandTableCells([noCells], cmNC);
+ok(ncExpanded.length === 4, `table without cells expands to 2×2=4, got ${ncExpanded.length}`);
+ok(!ncExpanded.some((f) => f.type === "table"), "no raw table remains when cells are absent");
+ok(ncExpanded.every((f) => f.bbox === null), "synthetic cells have null bbox when cell bboxes absent");
+ok(cmNC.size === 4, "cellMap populated even without cell bboxes");
+
 // ---- applyCellValue round-trips into the parent table ----
 // Answer every empty cell; the grid should end fully populated in the right spots.
 for (const f of synth) {
