@@ -13,6 +13,7 @@
 
 import { useEffect, useRef } from "react";
 import { useVoice } from "@/components/voice/VoiceProvider";
+import { useMicVolume } from "@/lib/voice/micLevel";
 
 interface VoiceStrandProps {
   height?: number;
@@ -24,11 +25,12 @@ interface VoiceStrandProps {
 export default function VoiceStrand({ height = 72, className = "", intensity = 0.35 }: VoiceStrandProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const voice = useVoice();
+  const vol = useMicVolume();
 
   // Latest voice state readable from the draw loop without re-running the effect.
   const liveRef = useRef({ vol: 0, listening: false, speaking: false });
   liveRef.current = {
-    vol: voice?.micVolume ?? 0,
+    vol,
     listening: voice?.sttState === "listening",
     speaking: Boolean(voice?.ttsActive),
   };

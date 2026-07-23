@@ -12,6 +12,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import { useFillSession, typeLabel } from "@/components/screens/useFillSession";
+import { useMicVolume } from "@/lib/voice/micLevel";
 import { SpellBubbles, TypedAnswerForm, FieldsMapList } from "@/components/screens/FillParts";
 import { CLOUD_FALLBACK_NOTICE } from "@/lib/voice/speechToText";
 import { WordReveal } from "@/components/ui/motion-components";
@@ -32,6 +33,7 @@ import {
 
 export default function FillDesktop() {
   const s = useFillSession();
+  const micVolume = useMicVolume();
   const prefersReducedMotion = useReducedMotion();
   const [showChat, setShowChat] = useState(true);
   const [showVisualForm, setShowVisualForm] = useState(true);
@@ -87,10 +89,15 @@ export default function FillDesktop() {
         lastGeneratedFieldsRef.current = fieldsStr;
 
         setDocUrl((prev) => {
+          // Don't revoke the OLD url immediately: an auto page-switch can remount
+          // the <iframe> against it in the same tick, and a just-revoked blob url
+          // renders as "PDF not found". Revoke after a grace period, by which
+          // time the iframe has swapped to the new url.
           if (prev) {
-            try {
-              URL.revokeObjectURL(prev);
-            } catch {}
+            const old = prev;
+            setTimeout(() => {
+              try { URL.revokeObjectURL(old); } catch {}
+            }, 4000);
           }
           return localUrl;
         });
@@ -448,14 +455,14 @@ export default function FillDesktop() {
 
               {s.phase === "asking" && (
                 <div className="flex flex-col items-center gap-4 animate-fade-in">
-                  <VoiceOrb state="speaking" volume={s.voice?.micVolume ?? 0} size="lg" />
+                  <VoiceOrb state="speaking" volume={micVolume} size="lg" />
                   <p className="text-sm font-semibold text-accent animate-pulse">Reading question aloud…</p>
                 </div>
               )}
 
               {s.phase === "listening" && !s.confirmMode && (
                 <div className="flex flex-col items-center gap-4 animate-fade-in">
-                  <VoiceOrb state="listening" volume={s.voice?.micVolume ?? 0} size="lg" />
+                  <VoiceOrb state="listening" volume={micVolume} size="lg" />
                   <p className="text-xs font-bold uppercase tracking-wider text-accent animate-pulse">Listening — speak now</p>
                 </div>
               )}

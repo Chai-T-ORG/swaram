@@ -255,6 +255,9 @@ export function useFillSession() {
     }
     recordRef.current = form;
     setRecord(form);
+    // Prefetch the review route now, so the auto-advance after the last answer
+    // (and the manual "Continue to review") lands instantly.
+    try { router.prefetch(`/review/${formId}`); } catch { /* older router */ }
     setPhase("start");
     const pendingCount = form.fields.filter((f) => f.status === "pending").length;
     const message = onlySkippedRef.current
@@ -327,6 +330,12 @@ export function useFillSession() {
       // robust than a homophone-prone word ("male" heard as "mail").
       const numbered = field.options.map((o, i) => `${i + 1} for ${o}`).join(", ");
       return `${base} ${numbered}.`;
+    }
+    if (field.type === "comb" && field.combLength) {
+      // Say the ACTUAL number of boxes (from the detected comb), not a
+      // hardcoded/AI-guessed digit count — an Aadhaar comb is 12 boxes, not 10.
+      const help = field.help ? ` ${field.help}` : "";
+      return `${base} This field has ${field.combLength} boxes, one character in each.${help}`;
     }
     return field.help ? `${base} ${field.help}` : base;
   }
@@ -658,7 +667,12 @@ export function useFillSession() {
         lane.kind === "name" ? knownNames() : [],
       );
       if (!alive(id)) return;
-      if (corrected) source = corrected;
+      // Guard against the corrector HALLUCINATING a place/name out of pure
+      // digits — "12345" for a State field must never become "Mumbai". If the
+      // input had no letters but the "correction" introduced them, it invented
+      // the answer; keep the raw value so the user hears and rejects it.
+      const invented = !!corrected && /[a-z]/i.test(corrected) && !/[a-z]/i.test(raw);
+      if (corrected && !invented) source = corrected;
     }
 
     const value = formatAnswer(source, field);
@@ -692,14 +706,21 @@ export function useFillSession() {
     setSttFieldHint("");
     setPhase("confirming");
     setStatus(`I heard: “${value}”. Correct?`);
-    // For names, emails, and numbers, read it back character-by-character so
-    // the user can actually verify it — this is where mishearings hide.
-    const spellItBack = isNameField(field) || /(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label);
+    // Spell the value back character-by-character ONLY for short identity
+    // values (a person's name, an email, an ID/number) where mishearings hide.
+    // A long "name" field like "Name of Institution" — 40+ characters — must NOT
+    // be spelled: that's 15+ seconds of slow letter-by-letter speech, the exact
+    // "readback is extremely slow" complaint. Long values are read normally.
+    const compact = value.replace(/\s/g, "");
+    const isPersonName = isNameField(field) && compact.length <= 22;
+    const spellItBack =
+      isPersonName ||
+      (/(email|phone|mobile|aadhaar|number|code|account|ifsc)/i.test(field.label) && compact.length <= 30);
     // In Hindi/Malayalam, speak the name in its phonetic native script so the
     // voice pronounces it the Indian way; the spelled-back letters stay Latin
     // because that's what lands on the printed form. Dates are read as words
     // ("the 5th of June, 2002") so a swapped day/month is impossible to miss.
-    const spokenValue = isNameField(field)
+    const spokenValue = isPersonName
       ? await transliterateForSpeech(value, getVoiceSettings().sttLang)
       : field.type === "date"
         ? speakableDate(value)
@@ -711,8 +732,8 @@ export function useFillSession() {
     await speak(readback + (isTextLike(field) ? " You can also say: let me spell." : ""), {
       // Name lines route through the pronunciation-dictionary TTS path so
       // "Thilakan" is said the Indian way even in English (no-op until the
-      // dictionary is registered server-side).
-      nameReadback: isNameField(field),
+      // dictionary is registered server-side). Only for short person names.
+      nameReadback: isPersonName,
     });
     if (alive(id)) {
       setPhase("listening");

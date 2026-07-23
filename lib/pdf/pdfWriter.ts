@@ -141,20 +141,14 @@ function drawAnswer(
     let chars: string[];
     if (field.type === "date") {
       chars = text.replace(/\D/g, "").split("");
-    } else if (
-      !/[a-z]/i.test(text) ||
-      (field.profileKey &&
-        ["aadhaar", "pan", "mobile", "pin", "bank_account", "ifsc"].includes(field.profileKey))
-    ) {
-      // Numeric / ID comb (Aadhaar, mobile, PIN…): the spaces from grouping
-      // ("1234 5678 9012") are NOT blank boxes — strip them so digits align to
-      // their cells. Keyed off "no letters" so it works even when label-matching
-      // didn't set profileKey (the exact Aadhaar-misalignment bug).
-      chars = text.replace(/\s+/g, "").split("");
     } else {
-      // Name-style comb: a blank box separates words ("RAMU␣RAMODARAN") — keep
-      // the spacing as authored.
-      chars = text.split("");
+      // Smart fit: a name-style comb puts a blank box between words, so KEEP the
+      // spaces when the spaced value already fits the boxes. Otherwise the
+      // spaces are just grouping ("1234 5678 9012", "25 BCS 200") — STRIP them
+      // so the characters land in their boxes. (If it doesn't fit even stripped
+      // it's likely wrong; the draw loop truncates to combLength.)
+      const spaced = text.split("");
+      chars = spaced.length <= field.combLength ? spaced : text.replace(/\s+/g, "").split("");
     }
     // Precise path: one box per character (grouped combs / boxed dates). Used
     // only when we have a full parallel set of cells; otherwise fall through to

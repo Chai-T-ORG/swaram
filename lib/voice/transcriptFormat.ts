@@ -554,7 +554,7 @@ const NAME_KEYS = new Set([
 ]);
 
 /** Fields whose value is an alphanumeric code (roll no, registration no…). */
-export const ID_FIELD_RE = /roll|registration|application|enrol|admission|licen[cs]e|reference|token no/;
+export const ID_FIELD_RE = /roll|regist(er|ration)|application|enrol|admission|licen[cs]e|reference|token no/;
 
 /**
  * Leading carrier phrases people prepend to a spoken name ("my name is …",

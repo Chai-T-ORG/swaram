@@ -101,10 +101,23 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
   const targetRef = useRef<number>(active ? 1 : 0);
   const moodRef = useRef<"thinking" | "success">(mood);
   const alphaRef = useRef<number>(0);
+  const reducedRef = useRef<boolean>(false);
 
   volRef.current = micVolume;
   moodRef.current = mood;
   targetRef.current = active ? 1 : 0;
+
+  // Honor prefers-reduced-motion: keep the glow (so the state is still visible)
+  // but drop the animated wave — saves the per-frame perimeter math and doesn't
+  // move for motion-sensitive users.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const read = () => { reducedRef.current = mq.matches; };
+    read();
+    mq.addEventListener("change", read);
+    return () => mq.removeEventListener("change", read);
+  }, []);
 
   // Track light/dark mode for proper compositing
   useEffect(() => {
@@ -158,9 +171,10 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
       // Listening reacts to the mic; speaking has no mic signal, so give it a
       // steady "breathing" pulse instead — a second, motion-based cue that this
       // is OUTPUT, not input.
+      const reduced = reducedRef.current;
       const speakingPulse =
-        moodRef.current === "success" ? (0.5 + 0.5 * Math.sin(elapsed / 380)) * 5 : 0;
-      const amplitude = 3 + energy * 4 + speakingPulse;
+        !reduced && moodRef.current === "success" ? (0.5 + 0.5 * Math.sin(elapsed / 380)) * 5 : 0;
+      const amplitude = reduced ? 0 : 3 + energy * 4 + speakingPulse;
 
       const darkTheme = document.documentElement.classList.contains("dark");
       const stops = darkTheme ? STOPS_DARK[moodRef.current] : STOPS_LIGHT[moodRef.current];
@@ -213,11 +227,15 @@ export default function EdgeGlow({ active, micVolume = 0, mood = "thinking" }: E
             { lw: 4.5, op: 0.45 },
           ];
 
-      for (const { lw, op } of wavePasses) {
-        ctx.lineWidth = lw;
-        ctx.strokeStyle = makeGrad(op);
-        wavyPerimeter(ctx, W, H, phase, amplitude);
-        ctx.stroke();
+      // Skip the wavy perimeter entirely under reduced motion — the rect glow
+      // above already conveys the state, and this is the per-frame hot path.
+      if (!reduced) {
+        for (const { lw, op } of wavePasses) {
+          ctx.lineWidth = lw;
+          ctx.strokeStyle = makeGrad(op);
+          wavyPerimeter(ctx, W, H, phase, amplitude);
+          ctx.stroke();
+        }
       }
 
       ctx.globalCompositeOperation = "source-over";

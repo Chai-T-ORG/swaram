@@ -9,6 +9,19 @@ const nextConfig: NextConfig = {
   // are actually used land in each route's bundle instead of the whole package.
   experimental: {
     optimizePackageImports: ["lucide-react", "framer-motion"],
+    // Client-side router-cache retention. Every route here is dynamic (the root
+    // layout reads the device UA header), and Next's default keeps dynamic
+    // navigations for 0s — so switching home ⇄ my forms ⇄ profile, or going
+    // back, re-fetched the RSC from the server every time. These pages hold no
+    // server data (they hydrate from localStorage via SWR, which revalidates on
+    // its own), so caching the navigation is safe AND makes switching instant.
+    staleTimes: {
+      dynamic: 60, // reuse a visited page's segment for 60s
+      static: 300,
+    },
+    // Desktop: fully prefetch a dynamic route when the user hovers its link, so
+    // the click lands with no server round-trip.
+    dynamicOnHover: true,
   },
   // Serve modern formats (AVIF/WebP) via Vercel Image Optimization for anything
   // routed through next/image.

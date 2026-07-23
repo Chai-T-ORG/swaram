@@ -50,6 +50,7 @@ import {
 } from "@/lib/voice/speechToText";
 import { playEarconStart, playEarconStop } from "@/lib/voice/earcons";
 import { setHapticsEnabled } from "@/lib/voice/haptics";
+import { setMicLevel } from "@/lib/voice/micLevel";
 import { getProfile } from "@/lib/storage/profileStore";
 import { getStream, primeMicIfGranted } from "@/lib/voice/micManager";
 import { loadWhisper, isWhisperReady } from "@/lib/voice/whisperSTT";
@@ -115,7 +116,6 @@ interface VoiceContextValue {
   addMessage: (sender: "assistant" | "user", text: string) => void;
   activeFormId: string | null;
   setActiveFormId: (id: string | null) => void;
-  micVolume: number;
   ttsActive: boolean;
   voiceUiState: VoiceUiState;
 }
@@ -209,7 +209,6 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
 
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [activeFormId, setActiveFormId] = useState<string | null>(null);
-  const [micVolume, setMicVolume] = useState(0);
   const [ttsActive, setTtsActive] = useState(false);
 
   // One-time: move legacy installs off the old (silent-on-mobile) Kokoro default.
@@ -225,10 +224,12 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  // Track microphone voice volume — uses shared mic stream (no duplicate getUserMedia)
+  // Track microphone voice volume — uses shared mic stream (no duplicate
+  // getUserMedia). Feeds the external micLevel store (NOT React state) so the
+  // 60fps updates never re-render the voice context tree.
   useEffect(() => {
     if (sttState !== "listening") {
-      setMicVolume(0);
+      setMicLevel(0);
       return;
     }
 
@@ -257,13 +258,18 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         source.connect(analyser);
 
         const update = () => {
+          // Skip the FFT work while the tab is hidden (nothing is visible).
+          if (typeof document !== "undefined" && document.hidden) {
+            animationId = requestAnimationFrame(update);
+            return;
+          }
           analyser.getByteFrequencyData(dataArray);
           let sum = 0;
           for (let i = 0; i < bufferLength; i++) {
             sum += dataArray[i];
           }
           const avg = sum / bufferLength;
-          setMicVolume(Math.min(1, avg / 120));
+          setMicLevel(Math.min(1, avg / 120));
           animationId = requestAnimationFrame(update);
         };
         animationId = requestAnimationFrame(update);
@@ -1077,7 +1083,6 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     addMessage,
     activeFormId,
     setActiveFormId,
-    micVolume,
     ttsActive,
     voiceUiState,
   };
