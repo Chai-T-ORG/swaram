@@ -4,6 +4,24 @@ _Static analysis of the Next.js 16 / React 19 app. Findings are ordered by impac
 
 ---
 
+## Implementation status (this branch)
+
+**Applied:**
+- ✅ **#1** Deleted all three 2 MB icon SVGs (`public/icon.svg`, `public/icon0.svg`, `app/icon0.svg`); dropped the SVG from `layout.tsx` icons and from the service-worker precache list; bumped the SW cache `v1 → v2` so old clients purge the cached 2 MB file.
+- ✅ **#2** Deleted ~9.7 MB of unreferenced images (`hero-*`, `media-*` incl. the duplicate, `tip_illustration.png`, `hero-bg*`) and the unused create-next-app SVGs (`next/vercel/file/globe/window.svg`).
+- ✅ **#5** Moved the pure fetch-proxy routes to the Edge runtime: `api/chat`, `api/transliterate`, `api/speech/token`. (`api/sarvam/job` stays Node — it streams PDF uploads up to 200 MB, past the Edge body limit.)
+- ✅ **#6** Replaced the blanket `public, s-maxage=60` on `/api/:path*` with `private, no-store`; added `experimental.optimizePackageImports` for `lucide-react` + `framer-motion`, `images.formats: [avif, webp]`, and `poweredByHeader: false`.
+- ✅ **#3 (partial)** Code-split the two device trees with `next/dynamic` in `AppShell` and `app/page.tsx`, so a client ships only the shell/home it renders instead of both. `optimizePackageImports` (above) trims the framer-motion + lucide surface across the shared chunk.
+
+**Deferred (higher risk / needs a build + device testing, or new infra):**
+- **#3 (rest)** Converting shell chrome / static screens to Server Components and deferring `VoiceProvider`'s STT/TTS/LLM module graph behind first-intent `import()` — high value, but a large refactor that must be measured and device-tested.
+- **#4** Migrating content images to `next/image` — infra is now enabled (`images.formats`); no content images use it yet (only the 34 KB immutable-cached `logo.png`).
+- **#7** Vercel KV/Edge Config for the transliterate cache, and `@vercel/speed-insights` for RUM — both need new dependencies/services, so they're intentionally not added here (adding a dep without updating `package-lock.json` would break `npm ci` on deploy).
+
+_Not verified with a production build in this environment (no `node_modules`; the native ML deps make a clean install heavy). Re-measure with `next build` + `@next/bundle-analyzer` before/after the deferred #3 work._
+
+---
+
 ## TL;DR — the 6 things that matter most
 
 | # | Culprit | Impact | Effort | Vercel lever |

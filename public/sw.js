@@ -3,12 +3,14 @@
  * Cache-first for the heavy on-device engines (tesseract worker/core/lang,
  * pdf.js worker) so repeat visits work offline; network-first for pages.
  */
-const CACHE = "swaram-v1";
+// Bumped v1 -> v2 so the activate step purges the old cache, which had precached
+// the (now-deleted) 2 MB icon.svg.
+const CACHE = "swaram-v2";
 // Caches to preserve on activate. The TTS clip cache (managed by
 // lib/voice/textToSpeech.ts) is kept so spoken prompts survive updates; keep
 // this in sync with TTS_CACHE_NAME there.
 const KEEP_CACHES = [CACHE, "swaram-tts-v1"];
-const ENGINE_PATHS = ["/tesseract/", "/pdf.worker.min.mjs", "/icon.svg"];
+const ENGINE_PATHS = ["/tesseract/", "/pdf.worker.min.mjs"];
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
