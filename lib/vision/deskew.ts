@@ -1,6 +1,12 @@
-import cv from "@techstark/opencv-js";
+// Type-only import (erased at build) so this module never statically bundles
+// OpenCV's ~4.5 MB (gzipped) runtime into the /processing entry chunk. The
+// caller passes the `cv` instance it already awaited from loadOpenCv(). Crucially,
+// useProcessing pre-warms loadOpenCv() on mount, so OpenCV downloads in the
+// background off the render/analysis critical path and is warm by the time the
+// (fallback-only) legacy pipeline reaches here.
+type CV = typeof import("@techstark/opencv-js");
 
-export function deskewCanvas(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
+export function deskewCanvas(cv: CV, sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
   let src = cv.imread(sourceCanvas);
   let gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);

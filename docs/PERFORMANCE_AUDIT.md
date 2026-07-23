@@ -6,6 +6,35 @@ _Static analysis of the Next.js 16 / React 19 app. Findings are ordered by impac
 
 ## Implementation status (this branch)
 
+### 🔴 OpenCV (4.46 MB gzipped): out of the entry chunk, pre-warmed on mount
+
+Measured from a real `next build` (Turbopack): the largest client chunk in the
+whole app is **`@techstark/opencv-js` at 4.46 MB gzipped** (~13 MB raw). It was
+in the **`/processing/[formId]` route's render-blocking entry chunk** via a
+static import in `deskew.ts` (`import cv from "@techstark/opencv-js"`), even
+though OpenCV is only used by the **legacy fallback** pipeline — the primary
+path is the VLM route, which never touches OpenCV.
+
+**First attempt regressed and taught the lesson.** Simply deferring the import
+moved the 4.46 MB download **into the analysis critical path**
+(`analyzeImageLegacy` awaits `loadOpenCv()` almost immediately), making analysis
+slow and, on slow connections, tripping the 25 s `loadOpenCv()` timeout →
+degraded/failed analysis. The static import had been doubling as an eager
+warm-up (download started at page load).
+
+**Landed fix (this branch):**
+- `deskew.ts` uses a **type-only** import and takes `cv` as a parameter, so
+  OpenCV is no longer in the `/processing` render-blocking entry chunk.
+- `useProcessing` **pre-warms `loadOpenCv()` on mount** (memoized,
+  fire-and-forget). This reproduces the original download timing — OpenCV starts
+  downloading when the processing screen appears, not mid-analysis — so it warms
+  in the background during `getFile` + the VLM attempt and is ready by the time
+  the fallback path (if reached) needs it. No analysis-critical-path regression,
+  and the screen hydrates without parsing 4.46 MB first.
+
+_The stale `package-lock.json` fix (missing `@emnapi/*` transitive deps, which
+makes `npm ci` — Vercel's default install — fail) is also kept._
+
 **Applied:**
 - ✅ **#1** Deleted all three 2 MB icon SVGs (`public/icon.svg`, `public/icon0.svg`, `app/icon0.svg`); dropped the SVG from `layout.tsx` icons and from the service-worker precache list; bumped the SW cache `v1 → v2` so old clients purge the cached 2 MB file.
 - ✅ **#2** Deleted ~9.7 MB of unreferenced images (`hero-*`, `media-*` incl. the duplicate, `tip_illustration.png`, `hero-bg*`) and the unused create-next-app SVGs (`next/vercel/file/globe/window.svg`).
