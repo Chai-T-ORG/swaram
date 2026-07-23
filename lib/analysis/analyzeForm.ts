@@ -280,7 +280,7 @@ async function analyzeImageLegacy(
   let shapes: DetectedShape[] = [];
   let shapesUnavailable = false;
   if (cv) {
-    canvas = deskewCanvas(cv, canvas);
+    canvas = deskewCanvas(canvas);
     shapes = await detectShapes(canvas);
   } else {
     shapesUnavailable = true;

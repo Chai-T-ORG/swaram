@@ -6,33 +6,33 @@ _Static analysis of the Next.js 16 / React 19 app. Findings are ordered by impac
 
 ## Implementation status (this branch)
 
-### 🔴 Biggest win — OpenCV (4.46 MB gzipped) was in the `/processing` first load
+### ⚠️ OpenCV (4.46 MB gzipped): attempted, then REVERTED — see the trap
 
 Measured from a real `next build` (Turbopack): the largest client chunk in the
-whole app is **`@techstark/opencv-js` at 4.46 MB gzipped** (~13 MB raw). It was
-being pulled into the **`/processing/[formId]` route's initial JS** through a
-fully *static* import chain:
+whole app is **`@techstark/opencv-js` at 4.46 MB gzipped** (~13 MB raw), and it
+was in the **`/processing/[formId]` route's initial JS** via a static import in
+`deskew.ts` (`import cv from "@techstark/opencv-js"`). Deferring it to the
+existing lazy `loadOpenCv()` path dropped that route's first load from ~4.9 MB
+to ~465 KB gzipped in the build.
 
-```
-/processing route → useProcessing → analyzeForm → deskew.ts
-    → import cv from "@techstark/opencv-js"   ← static, eager
-```
+**But this REGRESSED form analysis and was reverted.** The static import wasn't
+only bloat — it doubled as an *eager warm-up*: OpenCV began downloading during
+page load, so by the time analysis ran (`await cvWarmup`), it was already warm.
+Removing it moved the full 4.46 MB download **into the analysis critical path**
+(`analyzeImageLegacy` calls `loadOpenCv()` and awaits it almost immediately),
+making analysis slow and, on slow/variable connections, tripping the 25 s
+`loadOpenCv()` timeout → degraded/failed analysis.
 
-Every other consumer loads OpenCV lazily and best-effort (`shapeDetector.ts`'s
-`loadOpenCv()` uses a dynamic `import()` behind a 25 s timeout). Only
-`deskew.ts` broke the pattern, so processing a form meant downloading 4.46 MB of
-gzipped JS up front — bigger than the favicon and every other issue combined.
+**Correct way to land this later (not yet done — needs end-to-end testing):**
+keep OpenCV out of the initial *bundle* (type-only import + pass `cv` in) **and**
+pre-warm `loadOpenCv()` early — ideally on the upload/scan screens, before the
+user reaches `/processing` — so it downloads off the critical path and is warm
+by analysis time. That needs the real analysis flow exercised (real form image
++ keys) to verify, so it's left as a follow-up rather than shipped blind.
 
-**Fix:** `deskewCanvas(cv, canvas)` now receives the already-loaded `cv`
-instance (the call site already had it from `await cvWarmup`), and `deskew.ts`
-uses a **type-only** `import type` so it never statically bundles OpenCV.
-
-**Verified after rebuild:** OpenCV is now a standalone **async** chunk (it
-appears only inside a dynamic-`import()` chunk-loader array), and the
-`/processing` page's SSR bundle is **45 KB** instead of 4 MB+. OpenCV loads only
-when a form is actually being deskewed/analyzed. _(Also fixed a stale
-`package-lock.json` — it was missing `@emnapi/*` transitive deps, which makes
-`npm ci` — Vercel's default install — fail; reconciled so CI installs cleanly.)_
+_The stale `package-lock.json` fix (missing `@emnapi/*` transitive deps, which
+makes `npm ci` — Vercel's default install — fail) was kept; it's unrelated to
+the analysis path._
 
 **Applied:**
 - ✅ **#1** Deleted all three 2 MB icon SVGs (`public/icon.svg`, `public/icon0.svg`, `app/icon0.svg`); dropped the SVG from `layout.tsx` icons and from the service-worker precache list; bumped the SW cache `v1 → v2` so old clients purge the cached 2 MB file.
