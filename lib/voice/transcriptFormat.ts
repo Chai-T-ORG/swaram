@@ -594,7 +594,10 @@ export function formatAnswer(raw: string, field: Pick<FormField, "type" | "profi
   if (key === "phone" || /(mobile|phone|contact|whatsapp)/.test(label)) return formatPhone(trimmed);
   if (field.sensitive && /(aadhaar|aadhar|adhar|uid)/.test(label)) return formatAadhaar(trimmed);
   if (key === "pincode" || /pin\s?code|postal/.test(label)) return formatPincode(trimmed);
-  if (ID_FIELD_RE.test(label)) return formatIdCode(trimmed);
+  // PAN / voter ID / passport are tight uppercase alphanumeric codes (one char
+  // per box on the form) — format like other ID codes so "kyc 1 2 3 4 5 6 7"
+  // becomes "KYC1234567", not spaced text that then fails validation.
+  if (ID_FIELD_RE.test(label) || /\bpan\b|\bvoter\b|passport/.test(label)) return formatIdCode(trimmed);
   if (key === "address" || /address/.test(label)) return formatAddress(trimmed);
   if (NAME_KEYS.has(key) || /\bname\b/.test(label)) {
     // Drop a leading carrier ("my name is …") so it never lands on the form;

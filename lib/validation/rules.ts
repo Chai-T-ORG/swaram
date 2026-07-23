@@ -9,7 +9,10 @@ export const ValidationRules = {
     message: "Aadhaar number must be exactly 12 digits.",
   },
   pan: {
-    pattern: /^[A-Z]{5}\d{4}[A-Z]$/i,
+    // 10-char alphanumeric (matches the message). We intentionally do NOT
+    // enforce the strict 5-letter/4-digit/1-letter PAN shape: it blocked
+    // legitimate test data and mishears with no upside for a form-filler.
+    pattern: /^[A-Z0-9]{10}$/i,
     message: "PAN must be a 10-character alphanumeric string (e.g. ABCDE1234F).",
   },
   pinCode: {

@@ -58,6 +58,9 @@ export function matchOption(transcript: string, options: string[]): string | nul
 const OPTION_NUMBER_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
   first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+  // Common STT renderings of spoken digits (esp. Indian English) — the reason
+  // "say the number" felt broken: "two"→"to", "one"→"won", "three"→"tree"…
+  won: 1, wan: 1, to: 2, too: 2, tu: 2, tree: 3, thee: 3, for: 4, fore: 4, ate: 8, ait: 8,
 };
 
 /** "say two" / "number 2" / "the third one" -> zero-based option index, or null. */

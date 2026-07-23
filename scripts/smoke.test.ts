@@ -230,6 +230,12 @@ async function main() {
   check("optionNumber: 'number two' -> idx1", parseOptionNumber("number two", 3) === 1, String(parseOptionNumber("number two", 3)));
   check("optionNumber: 'the first one' -> idx0", parseOptionNumber("the first one", 3) === 0, String(parseOptionNumber("the first one", 3)));
   check("optionNumber: out of range -> null", parseOptionNumber("five", 3) === null, String(parseOptionNumber("five", 3)));
+  // Spoken-digit homophones (Indian English) — the reason numbers felt broken.
+  check("optionNumber homophone 'to' -> idx1", parseOptionNumber("to", 3) === 1, String(parseOptionNumber("to", 3)));
+  check("optionNumber homophone 'won' -> idx0", parseOptionNumber("won", 3) === 0, String(parseOptionNumber("won", 3)));
+  check("optionNumber homophone 'tree' -> idx2", parseOptionNumber("tree", 5) === 2, String(parseOptionNumber("tree", 5)));
+  const panField = field({ label: "PAN" });
+  check("PAN -> tight uppercase (no spaces)", formatAnswer("kyc 1 2 3 4 5 6 7", panField) === "KYC1234567", formatAnswer("kyc 1 2 3 4 5 6 7", panField));
   // Name dictionary must match per-WORD, so a different given name never snaps
   // to a stored name just because the surname matches.
   check("nameClose: different given name -> false", nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran") === false, String(nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran")));

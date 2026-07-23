@@ -56,8 +56,12 @@ export function useFillSession() {
   const searchParams = useSearchParams();
   const voice = useVoice();
   useVoicePage({
-    title: "Voice session",
-    hint: "Answer the questions as I read them. Say skip, repeat, or stop anytime.",
+    // Start-oriented title/hint: this is the FIRST thing announced on arriving
+    // at the fill screen (the "Start" gate), so it must tell the user what to
+    // do here. It's spoken on mount when audio is unlocked, or on the first
+    // gesture otherwise — either way the start screen is no longer silent.
+    title: "Ready to fill",
+    hint: "Press start, or say start, when you're ready — I'll ask one question at a time.",
     description:
       "Form filling stage. Answer the questions as I read them. Say skip to skip, repeat to repeat, or go back to correct a field.",
     exclusive: true,
@@ -142,6 +146,15 @@ export function useFillSession() {
       if (phase === "paused") {
         if (/\b(resume|continue|start|go on|unpause|carry on)\b/.test(clean) || containsKeyword(text, INTL_KEYWORDS.resume)) {
           resume();
+          return true;
+        }
+        return false;
+      }
+      if (phase === "done") {
+        // After the last answer: a spoken word takes the user to review (the
+        // auto-advance also does, this covers barge-in / a slow navigation).
+        if (/\b(review|continue|next|proceed|go|yes|ready|check|okay|ok)\b/.test(clean)) {
+          router.push(`/review/${formId}`);
           return true;
         }
         return false;
@@ -310,7 +323,10 @@ export function useFillSession() {
     // Prefer the AI-refined natural question + hint when available.
     const base = field.question?.trim() || defaultQuestionFor(field);
     if (field.type === "choice" && field.options?.length) {
-      return `${base} Options: ${field.options.join(", ")}.`;
+      // Number the options so a blind user can answer with a digit — far more
+      // robust than a homophone-prone word ("male" heard as "mail").
+      const numbered = field.options.map((o, i) => `${i + 1} for ${o}`).join(", ");
+      return `${base} ${numbered}.`;
     }
     return field.help ? `${base} ${field.help}` : base;
   }
@@ -609,6 +625,15 @@ export function useFillSession() {
       return;
     }
 
+    // Immediate "I heard you, working on it" cue. Name/address answers run the
+    // ensemble + (sometimes) an LLM pass + a TTS readback, which is a few
+    // seconds of otherwise-dead air a blind user can't interpret. This bridges
+    // it: a captured earcon + haptic + a spoken-status the UI shows.
+    playEarcon("captured");
+    haptic("captured");
+    setTone("info");
+    setStatus("Got it — checking…");
+
     // Adaptive STT — "smart lane": for name/address/free-text fields, run the
     // raw transcript through a fast field-aware LLM pass that fixes Indian names
     // and addresses Whisper mangles ("Tejas KM" heard as "they just came").
@@ -762,10 +787,16 @@ export function useFillSession() {
 
     retriesRef.current += 1;
     if (retriesRef.current >= 3) {
-      commit(posRef.current, pendingConfirmRef.current ?? "", id);
+      // NEVER auto-commit a value the user is disputing — that's the "I said no
+      // but it went to the next question" bug. Fall back to typing so they fix
+      // it deliberately.
+      playEarcon("error");
+      haptic("error");
+      await speak("I'm not sure — let's fix this by typing it.");
+      if (alive(id)) setPhase("typing");
       return;
     }
-    await speak(`I heard ${transcript}. Please answer yes or no. Is ${pendingConfirmRef.current} correct?`);
+    await speak(`I didn't catch a yes or no. Is ${pendingConfirmRef.current} correct? Please say yes, or no.`);
     if (alive(id)) setPhase("listening");
   }
 
@@ -854,9 +885,14 @@ export function useFillSession() {
     setTone("success");
     rec.status = "review";
     syncRecord();
-    const msg = "Excellent! We have gone through all questions. Let's review the form now.";
+    playEarcon("success");
+    haptic("success");
+    const msg = "All questions answered. Taking you to review now, where I'll read everything back.";
     setStatus(msg);
     await speak(msg);
+    // Actually GO to review — the done screen previously had no voice command
+    // and no auto-advance, stranding the user after the last answer.
+    if (alive(id)) router.push(`/review/${formId}`);
   }
 
   function handleCommand(cmd: "repeat" | "skip" | "back", pos: number, id: number) {
@@ -1003,8 +1039,9 @@ function isTextLike(field: FormField): boolean {
 
 function parseYesNo(transcript: string): boolean | null {
   const t = transcript.toLowerCase().trim();
-  if (/^(yes|yeah|yep|yup|correct|right|that's right|sure|ok|okay|haan|ha|confirm)\b/.test(t)) return true;
-  if (/^(no|nope|nah|wrong|incorrect|nahi|not correct|that's wrong)\b/.test(t)) return false;
+  // Include the ways STT commonly renders a spoken "yes"/"no" in Indian English.
+  if (/^(yes|yeah|yep|yup|yah|ya|correct|right|that'?s right|sure|ok|okay|haan|ha|confirm|perfect|good)\b/.test(t)) return true;
+  if (/^(no|nope|nah|know|not right|wrong|incorrect|nahi|not correct|that'?s wrong|change|redo|again)\b/.test(t)) return false;
   // Hindi / Malayalam / French — the recognizer returns native script.
   if (containsKeyword(transcript, INTL_KEYWORDS.no)) return false; // check "no" first: "വേണ്ട"/"non" are distinct
   if (containsKeyword(transcript, INTL_KEYWORDS.yes)) return true;

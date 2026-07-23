@@ -57,12 +57,11 @@ export default function FillDesktop() {
     if (!s.formId || !s.record) return;
     if (!showVisualForm) return;
 
-    // Skip generation while actively asking or listening
-    if (s.phase === "asking" || s.phase === "listening") {
-      return;
-    }
-
-    // Check if fields have actually changed since last generation
+    // Regenerate whenever the ANSWERS change — do NOT skip during asking/
+    // listening. That skip meant the live preview only refreshed in the brief
+    // gaps between phases, so it lagged the conversation by a couple of
+    // questions (the "I have to refresh to see it" bug). The fields-hash check
+    // below already prevents redundant regenerations, so this is cheap.
     const fieldsStr = JSON.stringify(s.record.fields);
     if (lastGeneratedFieldsRef.current === fieldsStr) {
       return;
@@ -98,7 +97,7 @@ export default function FillDesktop() {
       } catch (err) {
         console.error("PDF filling error:", err);
       }
-    }, 800);
+    }, 350);
 
     return () => {
       active = false;
