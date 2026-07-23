@@ -195,5 +195,26 @@ ok(JSON.stringify(fam.columns) === JSON.stringify(["Name", "Relationship", "Age"
   ok(evenCellsInGroups([c(0.1, 0.02)]).length === 1, "single cell returned unchanged");
 }
 
+// A table with NO caption/label must survive (fallback label), not be dropped
+// as a captionless field — the "Academic Record vanished" class of bug.
+{
+  const noLabelTable: VlmPage[] = [{
+    page: 1,
+    fields: [{
+      label: "", type: "table",
+      columns: ["Board", "Year"],
+      rows: [
+        { rowLabel: "SSLC", cells: [{ value: "", bbox: [1, 1, 2, 2] }, { value: "", bbox: [1, 3, 2, 4] }] },
+        { rowLabel: "HSE", cells: [{ value: "", bbox: [3, 1, 4, 2] }, { value: "", bbox: [3, 3, 4, 4] }] },
+      ],
+    }] as unknown as VlmPage["fields"],
+  }];
+  const out = schemaToFields(noLabelTable);
+  ok(out.length === 1, `captionless table survives, got ${out.length}`);
+  ok(out[0]?.type === "table", "survivor is a table");
+  ok(!!out[0]?.label, "captionless table gets a fallback label");
+  ok((out[0]?.columns?.length ?? 0) === 2 && (out[0]?.rows?.length ?? 0) === 2, "table structure intact");
+}
+
 console.log(`\nvlm-adapter.test: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

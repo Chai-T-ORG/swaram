@@ -123,7 +123,11 @@ export function schemaToFields(pages: VlmPage[]): FormField[] {
 
   for (const { page, fields: raw } of pages) {
     for (const vf of raw ?? []) {
-      const label = (vf.label ?? "").trim();
+      // A table is high-value structural data — never drop it just because the
+      // model forgot a caption. Give it a fallback label so it survives; other
+      // captionless fields are still dropped as noise.
+      const isTable = normType(vf.type) === "table";
+      const label = (vf.label ?? "").trim() || (isTable ? "Table" : "");
       if (!label) continue;
       const dict = matchLabel(label);
       const base = {
