@@ -21,6 +21,7 @@ import { speak } from "@/lib/voice/textToSpeech";
 import type { FormRecord } from "@/lib/types";
 
 import { loadPdfDocument, renderPageToCanvas } from "@/lib/pdf/pdfReader";
+import { loadOpenCv } from "@/lib/vision/shapeDetector";
 
 export type StepState = "pending" | "active" | "done";
 
@@ -90,6 +91,14 @@ export function useProcessing() {
   );
 
   useEffect(() => {
+    // Pre-warm OpenCV in the background the moment this screen mounts. It's a
+    // 4.5 MB (gz) WASM runtime used only by the legacy fallback pipeline, kept
+    // out of the entry chunk (see deskew.ts). Kicking loadOpenCv() off here —
+    // memoized, fire-and-forget — mirrors the timing the old static import gave
+    // (download starts at page load, not mid-analysis), so if the legacy path
+    // is reached, OpenCV is already warm instead of blocking analysis.
+    void loadOpenCv();
+
     if (activeProcesses.has(formId)) {
       // Form is already being processed in another instance (Strict Mode).
       const interval = setInterval(async () => {
