@@ -29,6 +29,7 @@ import {
 import { fillAcroformPdf, fillFlatPdf } from "../lib/pdf/pdfWriter";
 import { parseFillCommand, needsConfirmation, isNameField } from "../lib/voice/fillCommands";
 import { matchOption, parseOptionNumber, soundex } from "../lib/voice/choiceMatch";
+import { nameClose, wordCloseEnough } from "../lib/voice/nameMatch";
 import type { FormField } from "../lib/types";
 import type { OcrLine } from "../lib/ocr/tesseractEngine";
 
@@ -229,6 +230,19 @@ async function main() {
   check("optionNumber: 'number two' -> idx1", parseOptionNumber("number two", 3) === 1, String(parseOptionNumber("number two", 3)));
   check("optionNumber: 'the first one' -> idx0", parseOptionNumber("the first one", 3) === 0, String(parseOptionNumber("the first one", 3)));
   check("optionNumber: out of range -> null", parseOptionNumber("five", 3) === null, String(parseOptionNumber("five", 3)));
+  // Name dictionary must match per-WORD, so a different given name never snaps
+  // to a stored name just because the surname matches.
+  check("nameClose: different given name -> false", nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran") === false, String(nameClose("Maria Kimmich Ramodaran", "Gordan Kimmich Ramodaran")));
+  check("nameClose: misheard heals -> true", nameClose("Twinsh T Thilakan", "Twinsha T Thilakan") === true, String(nameClose("Twinsh T Thilakan", "Twinsha T Thilakan")));
+  check("nameClose: exact -> true", nameClose("Arun Kumar", "Arun Kumar") === true);
+  check("nameClose: different word count -> false", nameClose("Arun Kumar", "Arun Kumar Nair") === false);
+  check("nameClose: initial vs word -> false", nameClose("Tejas K M", "Tejas Kumar Menon") === false, String(nameClose("Tejas K M", "Tejas Kumar Menon")));
+  // Same shared matcher the server uses — a couple more invariant guards.
+  check("nameClose: only surname shared, given name off by 2 -> false", nameClose("Rahul Sharma", "Vishal Sharma") === false, String(nameClose("Rahul Sharma", "Vishal Sharma")));
+  check("nameClose: punctuated/case tolerant heal -> true", nameClose("twinsha  t  thilakan", "Twinsha T Thilakan") === true);
+  check("wordCloseEnough: gordan~jordan -> true", wordCloseEnough("gordan", "jordan") === true);
+  check("wordCloseEnough: maria~gordan -> false", wordCloseEnough("maria", "gordan") === false, String(wordCloseEnough("maria", "gordan")));
+  check("wordCloseEnough: short words need exact", wordCloseEnough("om", "on") === false);
   const genericField = field({ label: "Remarks" });
   check(
     "formatAnswer spoken punctuation",

@@ -617,8 +617,12 @@ export function useFillSession() {
     const lane = smartLane(field);
     let source = raw;
     // A name the user already confirmed once beats any model: snap to it
-    // deterministically and skip the LLM round-trip entirely.
-    const snapped = lane.kind === "name" ? snapToKnownName(raw, field.profileKey) : null;
+    // deterministically and skip the LLM round-trip entirely. BUT only on the
+    // first attempt — after a rejection the user is CORRECTING, so snapping the
+    // fresh transcript back to the (rejected) stored name is exactly the
+    // "I keep saying Gordan but it reverts to Jordan" trap.
+    const snapped =
+      lane.kind === "name" && retriesRef.current === 0 ? snapToKnownName(raw, field.profileKey) : null;
     if (snapped) {
       source = snapped;
     } else if (lane.correct && isLlmAvailable()) {
@@ -726,9 +730,12 @@ export function useFillSession() {
       await speak("Okay, once more. " + questionFor(field) + spellHint);
       if (alive(id)) {
         listenKindRef.current = "answer";
+        // Correcting: keep the name ensemble ON (accuracy) but send NO known
+        // names, so the server won't snap the fresh audio back to the rejected
+        // stored name. The client snap is likewise skipped now (retries > 0).
         setSttFieldHint(smartLane(field).kind === "name" ? "name" : "", {
           label: field.label,
-          names: knownNames(),
+          names: [],
         });
         setPhase("listening");
       }

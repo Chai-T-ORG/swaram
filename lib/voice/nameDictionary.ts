@@ -13,7 +13,8 @@
  *
  * Stored in localStorage; capped small; guarded for SSR/Node.
  */
-import { editDistance, titleCase } from "./transcriptFormat";
+import { titleCase } from "./transcriptFormat";
+import { nameClose, wordCloseEnough } from "./nameMatch";
 
 const KEY = "swaram_name_dictionary";
 const MAX_NAMES = 40;
@@ -79,31 +80,9 @@ export function knownNames(): string[] {
   return load().names;
 }
 
-/** How close two strings must be to count as "the same name, misheard". */
-function closeEnough(a: string, b: string): boolean {
-  const d = editDistance(a, b);
-  if (d === 0) return true;
-  const len = Math.max(a.length, b.length);
-  return len >= 4 && d <= Math.max(1, Math.floor(len * 0.34));
-}
-
-/**
- * Guard against the snap itself becoming a guesser: a whole-value snap must
- * preserve the SHAPE of what was heard. Same word count, and an initial
- * (single letter) never maps to a full word or vice versa — so a stored
- * "Tejas Kumar" can never swallow a spoken "Tejas K M".
- */
-function shapeCompatible(heard: string, candidate: string): boolean {
-  const h = heard.split(/\s+/).filter(Boolean);
-  const c = candidate.split(/\s+/).filter(Boolean);
-  if (h.length !== c.length) return false;
-  for (let i = 0; i < h.length; i++) {
-    const hi = h[i].replace(/\./g, "").length === 1;
-    const ci = c[i].replace(/\./g, "").length === 1;
-    if (hi !== ci) return false;
-  }
-  return true;
-}
+// The name-matching predicate (per-word, no given-name substitution, initial
+// guard) lives in ./nameMatch as the SINGLE source of truth shared with the
+// server ensemble — do not re-implement it here.
 
 /**
  * Snap a fresh transcript toward the stored names. Tries the whole value
@@ -118,10 +97,10 @@ export function snapToKnownName(raw: string, profileKey?: string): string | null
 
   // The value previously confirmed for this exact field wins outright.
   const forKey = profileKey ? dict.byKey[profileKey] : undefined;
-  if (forKey && closeEnough(heard, forKey) && shapeCompatible(heard, forKey)) return forKey;
+  if (forKey && nameClose(heard, forKey)) return forKey;
 
   for (const name of [...dict.names].reverse()) {
-    if (closeEnough(heard, name) && shapeCompatible(heard, name)) return name;
+    if (nameClose(heard, name)) return name;
   }
 
   // Word-level repair against the vocabulary of all stored name words.
@@ -136,7 +115,7 @@ export function snapToKnownName(raw: string, profileKey?: string): string | null
   const words = heard.split(/\s+/).map((w) => {
     if (vocab.has(w.toLowerCase())) return vocab.get(w.toLowerCase())!;
     for (const [, original] of vocab) {
-      if (w.length >= 4 && closeEnough(w, original)) {
+      if (w.length >= 4 && wordCloseEnough(w, original)) {
         repaired = true;
         return original;
       }
@@ -144,4 +123,15 @@ export function snapToKnownName(raw: string, profileKey?: string): string | null
     return w;
   });
   return repaired ? titleCase(words.join(" ")) : null;
+}
+
+/** Recovery valve: forget every stored name (Profile → "Forget saved names").
+ * A poisoned dictionary must always be escapable without dev tools. */
+export function clearNames(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    // storage blocked — nothing to clear
+  }
 }

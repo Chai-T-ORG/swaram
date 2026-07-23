@@ -907,6 +907,15 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   // autoplay policy), so the very FIRST screen a blind user lands on would stay
   // silent until they happened to trigger something. Announce the current
   // page's intro on the first gesture that unlocks audio, then self-remove.
+  //
+  // CRITICAL: this listens on `pointerUP` in the BUBBLE phase, never
+  // `pointerdown`/capture. A capture-phase pointerdown handler here would run
+  // BEFORE functional handlers on the same tap, and calling unlockAudioPlayback
+  // + speak() consumes the tap's user-activation — which silently breaks any
+  // gesture-gated action that runs later in the same tap, e.g. the upload
+  // screen's "tap anywhere to open the file picker" (inputRef.click() needs a
+  // live user gesture). By the time pointerup fires, the picker has already
+  // opened on pointerdown, so we never preempt it.
   useEffect(() => {
     if (typeof window === "undefined" || speechUnlocked()) return;
     const announceOnUnlock = () => {
@@ -917,14 +926,14 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
         announcedRef.current = key;
         speak(`${cfg.title}.${cfg.hint ? ` ${cfg.hint}` : ""}`);
       }
-      window.removeEventListener("pointerdown", announceOnUnlock, true);
-      window.removeEventListener("keydown", announceOnUnlock, true);
+      window.removeEventListener("pointerup", announceOnUnlock);
+      window.removeEventListener("keydown", announceOnUnlock);
     };
-    window.addEventListener("pointerdown", announceOnUnlock, true);
-    window.addEventListener("keydown", announceOnUnlock, true);
+    window.addEventListener("pointerup", announceOnUnlock);
+    window.addEventListener("keydown", announceOnUnlock);
     return () => {
-      window.removeEventListener("pointerdown", announceOnUnlock, true);
-      window.removeEventListener("keydown", announceOnUnlock, true);
+      window.removeEventListener("pointerup", announceOnUnlock);
+      window.removeEventListener("keydown", announceOnUnlock);
     };
   }, [pathname]);
 

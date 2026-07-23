@@ -196,6 +196,22 @@ export function VoiceSection({ p }: { p: ProfileSettings }) {
 
         <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
           <label className="text-xs font-bold uppercase text-soft">
+            Saved names
+          </label>
+          <p className="max-w-sm text-[11px] leading-normal text-faint">
+            I remember names you confirm so I recognise them next time. If I keep hearing a name wrong, forget them and start fresh.
+          </p>
+          <button
+            type="button"
+            className="max-w-sm rounded-xl border border-line/65 px-4 py-2 text-sm font-semibold text-soft hover:bg-line/20"
+            onClick={() => p.forgetNames()}
+          >
+            Forget saved names
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-col gap-2 border-t border-line/65 pt-4">
+          <label className="text-xs font-bold uppercase text-soft">
             First-run welcome setup
           </label>
           <p className="max-w-sm text-xs leading-relaxed text-soft">

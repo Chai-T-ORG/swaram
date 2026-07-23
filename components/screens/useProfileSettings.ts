@@ -37,6 +37,7 @@ import {
 } from "@/lib/voice/voiceSettings";
 import { getGroqKey, setGroqKey, probeGroqAvailability } from "@/lib/voice/groqSTT";
 import { setHapticsEnabled, haptic } from "@/lib/voice/haptics";
+import { clearNames } from "@/lib/voice/nameDictionary";
 import type { ProfileData } from "@/lib/types";
 
 export const PROFILE_FIELDS: { key: string; label: string; hint?: string }[] = [
@@ -259,6 +260,14 @@ export function useProfileSettings() {
     speak(next ? "Vibration cues on." : "Vibration cues off.");
   }
 
+  function forgetNames() {
+    clearNames();
+    setTone("success");
+    const msg = "Cleared the names I'd learned. I'll ask fresh next time.";
+    setStatus(msg);
+    speak(msg);
+  }
+
   function selectSttProvider(next: SttProvider) {
     setSttProvider(next);
     setVoiceSettings({ sttProvider: next });
@@ -320,6 +329,7 @@ export function useProfileSettings() {
     selectTtsProvider,
     selectMicMode,
     toggleHaptics,
+    forgetNames,
     selectSttProvider,
     saveGroqKey,
     retryKokoro,
