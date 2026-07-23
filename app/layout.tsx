@@ -39,16 +39,18 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.svg", type: "image/svg+xml" },
       { url: "/icon1.png", type: "image/png", sizes: "32x32" },
       { url: "/web-app-manifest-192x192.png", type: "image/png", sizes: "192x192" },
+      { url: "/web-app-manifest-512x512.png", type: "image/png", sizes: "512x512" },
     ],
     apple: [
       { url: "/apple-icon.png", sizes: "180x180", type: "image/png" },
     ],
   },
-  // favicon.ico, icon0.svg, icon1.png and apple-icon.png live in app/ and are
-  // auto-detected + injected into <head> by Next.js's metadata file convention.
+  // favicon.ico, icon1.png and apple-icon.png live in app/ and are auto-detected
+  // + injected into <head> by Next.js's metadata file convention. (The former
+  // 2 MB icon0.svg / icon.svg — a base64 raster wrapped in SVG — was removed;
+  // the PNG/ICO set above covers every icon slot at a fraction of the weight.)
 };
 
 export const viewport: Viewport = {

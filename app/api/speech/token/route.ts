@@ -11,7 +11,10 @@
  * Returns 503 when no Azure key is configured, so the client cleanly falls back
  * to its non-streaming STT paths.
  */
-export const runtime = "nodejs";
+// Pure fetch proxy (Web APIs only) — runs at the edge for low cold-start +
+// region-local latency. The in-memory token cache is best-effort per isolate;
+// on a miss we simply mint a fresh 10-minute token, which is cheap.
+export const runtime = "edge";
 
 interface CachedToken {
   token: string;
