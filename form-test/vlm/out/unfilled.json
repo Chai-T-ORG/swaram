@@ -1,0 +1,1034 @@
+[
+  {
+    "page": 0,
+    "label": "Full Name of Applicant",
+    "type": "comb",
+    "combLength": 25,
+    "value": "",
+    "bbox": {
+      "x": 0.112,
+      "y": 0.312,
+      "w": 0.568,
+      "h": 0.023
+    }
+  },
+  {
+    "page": 0,
+    "label": "Date of Birth",
+    "type": "date",
+    "value": "",
+    "bbox": {
+      "x": 0.252,
+      "y": 0.366,
+      "w": 0.21,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 0,
+    "label": "Gender",
+    "type": "choice",
+    "options": [
+      "Male",
+      "Female",
+      "Other"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.652,
+      "y": 0.371,
+      "w": 0.235,
+      "h": 0.016
+    }
+  },
+  {
+    "page": 0,
+    "label": "Father's / Guardian's Name",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.414,
+      "w": 0.571,
+      "h": 0.014
+    }
+  },
+  {
+    "page": 0,
+    "label": "Mother's Name",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.447,
+      "w": 0.571,
+      "h": 0.012
+    }
+  },
+  {
+    "page": 0,
+    "label": "Community / Category",
+    "type": "choice",
+    "options": [
+      "General",
+      "OBC",
+      "SC",
+      "ST",
+      "EWS"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.474,
+      "w": 0.353,
+      "h": 0.015
+    }
+  },
+  {
+    "page": 0,
+    "label": "Aadhaar Number",
+    "type": "comb",
+    "combLength": 12,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.499,
+      "w": 0.304,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 0,
+    "label": "PAN",
+    "type": "comb",
+    "combLength": 10,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.53,
+      "w": 0.229,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 0,
+    "label": "Mobile Number",
+    "type": "comb",
+    "combLength": 10,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.56,
+      "w": 0.229,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 0,
+    "label": "Email Address",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.601,
+      "w": 0.571,
+      "h": 0.011
+    }
+  },
+  {
+    "page": 0,
+    "label": "Permanent Address",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.631,
+      "w": 0.571,
+      "h": 0.06
+    }
+  },
+  {
+    "page": 0,
+    "label": "PIN Code",
+    "type": "comb",
+    "combLength": 6,
+    "value": "",
+    "bbox": {
+      "x": 0.206,
+      "y": 0.701,
+      "w": 0.138,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 0,
+    "label": "District",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.446,
+      "y": 0.71,
+      "w": 0.2,
+      "h": 0.012
+    }
+  },
+  {
+    "page": 0,
+    "label": "State",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.721,
+      "y": 0.71,
+      "w": 0.202,
+      "h": 0.012
+    }
+  },
+  {
+    "page": 0,
+    "label": "Is your address for correspondence the same as 1.11?",
+    "type": "choice",
+    "options": [
+      "Yes",
+      "No"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.52,
+      "y": 0.743,
+      "w": 0.11,
+      "h": 0.012
+    }
+  },
+  {
+    "page": 1,
+    "label": "Name of Institution",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.135,
+      "w": 0.571,
+      "h": 0.011
+    }
+  },
+  {
+    "page": 1,
+    "label": "Course / Programme",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.168,
+      "w": 0.237,
+      "h": 0.01
+    }
+  },
+  {
+    "page": 1,
+    "label": "Branch",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.68,
+      "y": 0.168,
+      "w": 0.243,
+      "h": 0.01
+    }
+  },
+  {
+    "page": 1,
+    "label": "Register Number",
+    "type": "comb",
+    "combLength": 9,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.187,
+      "w": 0.206,
+      "h": 0.024
+    }
+  },
+  {
+    "page": 1,
+    "label": "Current Semester",
+    "type": "comb",
+    "combLength": 2,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.218,
+      "w": 0.048,
+      "h": 0.02
+    }
+  },
+  {
+    "page": 1,
+    "label": "Year of Admission",
+    "type": "comb",
+    "combLength": 4,
+    "value": "",
+    "bbox": {
+      "x": 0.641,
+      "y": 0.218,
+      "w": 0.092,
+      "h": 0.02
+    }
+  },
+  {
+    "page": 1,
+    "label": "Academic Record",
+    "type": "table",
+    "columns": [
+      "Board / University",
+      "Year",
+      "Max. Marks",
+      "Marks Obt.",
+      "% / CGPA"
+    ],
+    "rows": [
+      {
+        "rowLabel": "SSLC / Class X",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.297,
+              "y": 0.304,
+              "w": 0.202,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.499,
+              "y": 0.304,
+              "w": 0.093,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.592,
+              "y": 0.304,
+              "w": 0.109,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.701,
+              "y": 0.304,
+              "w": 0.109,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.81,
+              "y": 0.304,
+              "w": 0.113,
+              "h": 0.022
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "HSE / Class XII",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.297,
+              "y": 0.326,
+              "w": 0.202,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.499,
+              "y": 0.326,
+              "w": 0.093,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.592,
+              "y": 0.326,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.701,
+              "y": 0.326,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.81,
+              "y": 0.326,
+              "w": 0.113,
+              "h": 0.02
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "Semester 1",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.297,
+              "y": 0.346,
+              "w": 0.202,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.499,
+              "y": 0.346,
+              "w": 0.093,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.592,
+              "y": 0.346,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.701,
+              "y": 0.346,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.81,
+              "y": 0.346,
+              "w": 0.113,
+              "h": 0.02
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "Semester 2",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.297,
+              "y": 0.366,
+              "w": 0.202,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.499,
+              "y": 0.366,
+              "w": 0.093,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.592,
+              "y": 0.366,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.701,
+              "y": 0.366,
+              "w": 0.109,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.81,
+              "y": 0.366,
+              "w": 0.113,
+              "h": 0.02
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "page": 1,
+    "label": "Annual Family Income (in figures)",
+    "type": "comb",
+    "combLength": 8,
+    "value": "",
+    "bbox": {
+      "x": 0.438,
+      "y": 0.429,
+      "w": 0.182,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 1,
+    "label": "Annual Family Income (in words)",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.402,
+      "y": 0.471,
+      "w": 0.521,
+      "h": 0.01
+    }
+  },
+  {
+    "page": 1,
+    "label": "Occupation of Father / Guardian",
+    "type": "choice",
+    "options": [
+      "Salaried",
+      "Self-employed",
+      "Agriculture",
+      "Daily wage",
+      "Pensioner",
+      "Unemployed",
+      "Deceased",
+      "Other (specify)"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.11,
+      "y": 0.535,
+      "w": 0.548,
+      "h": 0.039
+    }
+  },
+  {
+    "page": 1,
+    "label": "Occupation of Father / Guardian (Other specify)",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.484,
+      "y": 0.565,
+      "w": 0.439,
+      "h": 0.01
+    }
+  },
+  {
+    "page": 1,
+    "label": "Bank Account Number",
+    "type": "comb",
+    "combLength": 15,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.589,
+      "w": 0.324,
+      "h": 0.022
+    }
+  },
+  {
+    "page": 1,
+    "label": "IFSC Code",
+    "type": "comb",
+    "combLength": 11,
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.62,
+      "w": 0.251,
+      "h": 0.021
+    }
+  },
+  {
+    "page": 1,
+    "label": "Account Type",
+    "type": "choice",
+    "options": [
+      "Savings",
+      "Current"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.755,
+      "y": 0.626,
+      "w": 0.166,
+      "h": 0.013
+    }
+  },
+  {
+    "page": 1,
+    "label": "Bank Name & Branch",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.352,
+      "y": 0.662,
+      "w": 0.571,
+      "h": 0.01
+    }
+  },
+  {
+    "page": 2,
+    "label": "Category applied for",
+    "type": "choice",
+    "options": [
+      "Merit-based",
+      "Means-based (financial need)",
+      "Sports Quota",
+      "Persons with Disability"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.11,
+      "y": 0.15,
+      "w": 0.65,
+      "h": 0.018
+    }
+  },
+  {
+    "page": 2,
+    "label": "Documents enclosed",
+    "type": "choice",
+    "options": [
+      "Income Certificate",
+      "Caste / Community Certificate",
+      "Bank Passbook (first page)",
+      "Aadhaar copy",
+      "Mark lists (all)",
+      "Bonafide Certificate",
+      "Disability Certificate"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.11,
+      "y": 0.21,
+      "w": 0.59,
+      "h": 0.064
+    }
+  },
+  {
+    "page": 2,
+    "label": "Are you receiving any other scholarship or stipend this year?",
+    "type": "choice",
+    "options": [
+      "Yes",
+      "No"
+    ],
+    "value": "",
+    "bbox": {
+      "x": 0.585,
+      "y": 0.296,
+      "w": 0.113,
+      "h": 0.014
+    }
+  },
+  {
+    "page": 2,
+    "label": "If Yes, name of scheme",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.293,
+      "y": 0.32,
+      "w": 0.288,
+      "h": 0.016
+    }
+  },
+  {
+    "page": 2,
+    "label": "Amount (Rs.)",
+    "type": "comb",
+    "combLength": 8,
+    "value": "",
+    "bbox": {
+      "x": 0.72,
+      "y": 0.312,
+      "w": 0.163,
+      "h": 0.024
+    }
+  },
+  {
+    "page": 2,
+    "label": "Particulars of Family Members",
+    "type": "table",
+    "columns": [
+      "Name",
+      "Relationship",
+      "Age",
+      "Occupation",
+      "Annual Income (Rs.)"
+    ],
+    "rows": [
+      {
+        "rowLabel": "1",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.153,
+              "y": 0.448,
+              "w": 0.244,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.397,
+              "y": 0.448,
+              "w": 0.142,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.539,
+              "y": 0.448,
+              "w": 0.067,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.606,
+              "y": 0.448,
+              "w": 0.177,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.783,
+              "y": 0.448,
+              "w": 0.14,
+              "h": 0.022
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "2",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.153,
+              "y": 0.47,
+              "w": 0.244,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.397,
+              "y": 0.47,
+              "w": 0.142,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.539,
+              "y": 0.47,
+              "w": 0.067,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.606,
+              "y": 0.47,
+              "w": 0.177,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.783,
+              "y": 0.47,
+              "w": 0.14,
+              "h": 0.022
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "3",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.153,
+              "y": 0.492,
+              "w": 0.244,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.397,
+              "y": 0.492,
+              "w": 0.142,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.539,
+              "y": 0.492,
+              "w": 0.067,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.606,
+              "y": 0.492,
+              "w": 0.177,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.783,
+              "y": 0.492,
+              "w": 0.14,
+              "h": 0.022
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "4",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.153,
+              "y": 0.514,
+              "w": 0.244,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.397,
+              "y": 0.514,
+              "w": 0.142,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.539,
+              "y": 0.514,
+              "w": 0.067,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.606,
+              "y": 0.514,
+              "w": 0.177,
+              "h": 0.02
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.783,
+              "y": 0.514,
+              "w": 0.14,
+              "h": 0.02
+            }
+          }
+        ]
+      },
+      {
+        "rowLabel": "5",
+        "cells": [
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.153,
+              "y": 0.534,
+              "w": 0.244,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.397,
+              "y": 0.534,
+              "w": 0.142,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.539,
+              "y": 0.534,
+              "w": 0.067,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.606,
+              "y": 0.534,
+              "w": 0.177,
+              "h": 0.022
+            }
+          },
+          {
+            "value": "",
+            "bbox": {
+              "x": 0.783,
+              "y": 0.534,
+              "w": 0.14,
+              "h": 0.022
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "page": 3,
+    "label": "Address for Correspondence",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.113,
+      "y": 0.16,
+      "w": 0.81,
+      "h": 0.038
+    }
+  },
+  {
+    "page": 3,
+    "label": "PIN Code",
+    "type": "comb",
+    "combLength": 6,
+    "value": "",
+    "bbox": {
+      "x": 0.207,
+      "y": 0.204,
+      "w": 0.136,
+      "h": 0.024
+    }
+  },
+  {
+    "page": 3,
+    "label": "District",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.446,
+      "y": 0.213,
+      "w": 0.201,
+      "h": 0.015
+    }
+  },
+  {
+    "page": 3,
+    "label": "State",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.722,
+      "y": 0.213,
+      "w": 0.201,
+      "h": 0.015
+    }
+  },
+  {
+    "page": 3,
+    "label": "Place",
+    "type": "text",
+    "value": "",
+    "bbox": {
+      "x": 0.169,
+      "y": 0.443,
+      "w": 0.252,
+      "h": 0.017
+    }
+  },
+  {
+    "page": 3,
+    "label": "Date",
+    "type": "date",
+    "value": "",
+    "bbox": {
+      "x": 0.525,
+      "y": 0.439,
+      "w": 0.21,
+      "h": 0.022
+    }
+  },
+  {
+    "page": 3,
+    "label": "Signature of Applicant",
+    "type": "signature",
+    "value": "",
+    "bbox": {
+      "x": 0.112,
+      "y": 0.504,
+      "w": 0.254,
+      "h": 0.059
+    }
+  }
+]

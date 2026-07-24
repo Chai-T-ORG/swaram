@@ -7,9 +7,11 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
+import { formatAnswer } from "@/lib/voice/transcriptFormat";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
 
 export type ReviewTone = "info" | "success" | "warning" | "error";
@@ -17,6 +19,7 @@ export type ReviewTone = "info" | "success" | "warning" | "error";
 export function useReview() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
+  const voice = useVoice();
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [status, setStatus] = useState("Loading your answers…");
   const [tone, setTone] = useState<ReviewTone>("info");
@@ -56,6 +59,7 @@ export function useReview() {
   );
 
   useEffect(() => {
+    voice?.transitionConversation({ type: "REVIEWING" });
     getForm(formId).then((form) => {
       if (!form) {
         setTone("error");
@@ -80,11 +84,20 @@ export function useReview() {
 
   async function saveEdit(field: FormField) {
     if (!record) return;
+    const raw = editValue.trim();
+    // Run typed input through the SAME formatting the voice path uses, so a comb
+    // /ID/date edited here (e.g. a Register or Aadhaar number) is uppercased,
+    // spaces stripped, and boxed correctly — not stored raw and rendered garbled.
+    // Choice/checkbox come from a dropdown already exact, so leave them as-is.
+    const value =
+      raw && (field.type === "text" || field.type === "comb" || field.type === "date")
+        ? formatAnswer(raw, field)
+        : raw;
     const updated: FormRecord = {
       ...record,
       fields: record.fields.map((f) =>
         f.id === field.id
-          ? { ...f, value: editValue.trim(), status: editValue.trim() ? ("answered" as const) : f.status }
+          ? { ...f, value, status: value ? ("answered" as const) : f.status }
           : f,
       ),
     };
@@ -104,7 +117,9 @@ export function useReview() {
     setReading(true);
     for (const field of [...record.fields].sort((a, b) => a.order - b.order)) {
       const answer =
-        field.status === "skipped" || field.status === "unclear" ? "skipped" : field.value || "blank";
+        field.status === "skipped" || field.status === "unclear"
+          ? "skipped"
+          : fieldDisplayValue(field) || "blank";
       await speak(`${field.label}: ${answer}.`, { interrupt: false });
     }
     setReading(false);
@@ -113,6 +128,7 @@ export function useReview() {
   async function continueToComplete() {
     if (!record) return;
     await saveForm({ ...record, status: "review" });
+    voice?.transitionConversation({ type: "COMPLETED" });
     router.push(`/complete/${formId}`);
   }
 

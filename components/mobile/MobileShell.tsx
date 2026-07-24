@@ -36,6 +36,10 @@ function TabLink({ label, href, icon: Icon }: { label: string; href: string; ico
   return (
     <Link
       href={href}
+      // Fully prefetch the bottom-tab destinations (no hover on touch). The tab
+      // bar is always mounted, so each tab is ready before the first tap; with
+      // staleTimes retaining them, switching stays instant thereafter.
+      prefetch
       aria-current={active ? "page" : undefined}
       className={`relative flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl no-underline transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
         active ? "text-accent" : "text-soft hover:text-ink"

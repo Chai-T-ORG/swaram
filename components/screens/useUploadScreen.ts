@@ -43,9 +43,14 @@ export function useUploadScreen() {
   }
 
   function armPicker() {
+    voice?.transitionConversation({ type: "UPLOAD_INTENT" });
     armedRef.current = true;
     setIsArmed(true);
-    const msg = "To choose your file, tap anywhere on the screen.";
+    voice?.transitionConversation({ type: "WAITING_FOR_FILE" });
+    // Browsers may reject a picker opened from an STT callback. Try now for
+    // engines that allow it, then keep a reliable next-tap fallback armed.
+    openPicker();
+    const msg = "I can help you upload a form. Opening the file picker. If it does not appear, tap anywhere on the screen.";
     setStatus(msg);
     setTone("info");
     speak(msg);
@@ -63,12 +68,17 @@ export function useUploadScreen() {
     return () => window.removeEventListener("pointerdown", onAnyTap);
   }, []);
 
-  useVoicePage({
+  const voice = useVoicePage({
     title: "Upload a form",
     hint: "Say choose file, then tap anywhere to open the picker. Or say scan to use the camera.",
     description:
       "Upload page. Pick a PDF or a photo of your form, up to fifty megabytes. Say choose file and then tap anywhere to open the picker, or say scan to use the camera instead.",
     commands: [
+      [
+        /(?:need|want|help me) (?:to )?upload (?:a |the )?(?:form|pdf|document|file)|upload (?:a |the )?(?:form|pdf|document|file)/i,
+        () => armPicker(),
+        "upload a file",
+      ],
       // Page commands are matched before the global nav commands, so this also
       // claims the regional words for "file" (which otherwise read as "go to
       // upload") and opens the picker instead. The adaptive router covers any
@@ -92,6 +102,7 @@ export function useUploadScreen() {
     ],
   });
 
+<<<<<<< HEAD
   async function handleFiles(fileList: FileList | File[] | undefined | null) {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
@@ -110,6 +121,30 @@ export function useUploadScreen() {
         speak(message);
         return;
       }
+=======
+  // React's input typings do not expose the native `cancel` event, but modern
+  // file inputs emit it when the picker is dismissed. Listen directly so a
+  // cancelled picker returns the voice flow to a useful, acknowledged state.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.addEventListener("cancel", cancelPicker);
+    return () => input.removeEventListener("cancel", cancelPicker);
+  }, [voice]);
+
+  async function handleFile(file: File | undefined | null) {
+    if (!file) return;
+    armedRef.current = false;
+    setIsArmed(false);
+    voice?.transitionConversation({ type: "FILE_SELECTED" });
+    const isAccepted = ACCEPTED.includes(file.type) || /\.(pdf|jpe?g|png)$/i.test(file.name);
+    if (!isAccepted) {
+      setTone("error");
+      const message = `${file.name} is not a supported file. Please choose a PDF, JPG, or PNG.`;
+      setStatus(message);
+      speak(message);
+      return;
+>>>>>>> aec1bf03dd50fe119ec5645b132989ed7826da7a
     }
 
     if (hasPdf && hasImage) {
@@ -179,19 +214,41 @@ export function useUploadScreen() {
       await saveFile(record.id, "original", finalBlob);
       await saveForm(record);
       setTone("success");
+<<<<<<< HEAD
       setStatus(`${files.length} file${files.length > 1 ? "s" : ""} uploaded. Analyzing your form now.`);
       speak("Got it. Analyzing your form now.");
+=======
+      setStatus(`${file.name} uploaded. Analyzing your form now.`);
+      voice?.transitionConversation({ type: "PROCESSING" });
+      await speak("I've received your document. I'm reading the form now.");
+>>>>>>> aec1bf03dd50fe119ec5645b132989ed7826da7a
       router.push(`/processing/${record.id}`);
     } catch {
       setProgress(null);
       setTone("error");
       const message = "Something went wrong while processing. Please try again.";
       setStatus(message);
+      voice?.transitionConversation({ type: "ERROR", message });
       speak(message);
     }
   }
 
+<<<<<<< HEAD
   return { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFiles, openPicker };
+=======
+  function cancelPicker() {
+    if (!armedRef.current) return;
+    armedRef.current = false;
+    setIsArmed(false);
+    voice?.transitionConversation({ type: "CANCELLED" });
+    const message = "No file was selected. You can say upload a file or tap Choose file whenever you are ready.";
+    setStatus(message);
+    setTone("info");
+    speak(message);
+  }
+
+  return { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker, cancelPicker };
+>>>>>>> aec1bf03dd50fe119ec5645b132989ed7826da7a
 }
 
 function readWithProgress(file: File, onProgress: (pct: number) => void): Promise<ArrayBuffer> {

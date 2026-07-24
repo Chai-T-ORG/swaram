@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import { useVoicePage } from "@/components/voice/VoiceProvider";
 import { listForms } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
 
@@ -19,10 +20,10 @@ export function routeForForm(form: FormRecord): string {
 }
 
 /** Answered share of a form, 0-100. */
-export function formProgress(form: FormRecord): number {
-  if (!form.fields.length) return 0;
-  const done = form.fields.filter((f) => f.status === "answered" || f.status === "autofilled").length;
-  return Math.round((done / form.fields.length) * 100);
+export function formProgress(f: any): number {
+  if (!f || !f.fields || f.fields.length === 0) return 0;
+  const done = f.fields.filter((field: any) => field.status === "answered" || field.status === "autofilled").length;
+  return Math.round((done / f.fields.length) * 100);
 }
 
 export function formatFormDate(ts: number): string {
@@ -30,6 +31,15 @@ export function formatFormDate(ts: number): string {
 }
 
 export function useHomeData() {
+  // The landing screen must speak for a blind user, not just render. (This was
+  // the one screen with no page announcement.)
+  useVoicePage({
+    title: "Swaram home",
+    hint: "Say scan to photograph a paper form, upload to choose a file, my forms to continue one, or profile for settings.",
+    description:
+      "Swaram home screen. You can say: scan a form, upload a file, my forms, or profile.",
+  });
+
   const { data: forms = [] } = useSWR("local_forms_list", () => listForms(), {
     revalidateOnFocus: true,
     dedupingInterval: 2000,

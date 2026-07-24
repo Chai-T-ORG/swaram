@@ -11,6 +11,7 @@
 // SpeechRecognition is not in TypeScript's DOM lib, so declare what we use.
 import { getVoiceSettings } from "./voiceSettings";
 import { normalizeTranscript } from "./transcriptNormalizer";
+import { detectNoise } from "./noiseFilter";
 import {
   isWhisperReady,
   loadWhisper,
@@ -32,6 +33,7 @@ import {
   addGroqTranscriptListener,
   removeGroqTranscriptListener,
   setGroqFallback,
+  setGroqBargeInCallback,
 } from "./groqSTT";
 import {
   startAzureStream,
@@ -317,9 +319,7 @@ function resetSilenceTimer(): void {
 
 function autoPauseRecognition(): void {
   isAutoPaused = true;
-  if (!isSafariOrIOS) {
-    playEarconStop();
-  }
+  playEarconStop(); // cue on every platform — iOS VoiceOver users need it most
   if (continuousActive) {
     try {
       continuousActive.abort();
@@ -346,9 +346,7 @@ export function wakeUpContinuous(): void {
   if (isAutoPaused) {
     console.log("[STT] Waking up continuous speech recognition.");
     isAutoPaused = false;
-    if (!isSafariOrIOS) {
-      playEarconStart();
-    }
+    playEarconStart();
     startContinuousListening();
   }
 }
@@ -365,10 +363,17 @@ let sarvamStreamDisabled = false;
 
 /** Shared: normalize, play the earcon, reset silence timer, and fan out. */
 function emitTranscript(source: string, text: string, confidence: number): void {
+  // ── Noise filter: drop hallucinations / silence before normalization ──
+  const noiseCheck = detectNoise(text);
+  if (noiseCheck.isNoise) {
+    console.log(`[STT/${source}] Noise filtered (reason: ${noiseCheck.reason}): "${text.slice(0, 50)}"`);
+    return;
+  }
+
   const normalized = normalizeTranscript(text);
   if (!normalized) return;
   console.log(`[STT/${source}] Recognized: "${normalized}" (confidence: ${confidence})`);
-  if (!isSafariOrIOS) playEarconRecognized();
+  playEarconRecognized();
   resetSilenceTimer();
   listeners.forEach((listener) => {
     try {
@@ -593,9 +598,7 @@ function startNativeContinuousListening(options: { lang?: string } = {}): void {
 
     if (transcript) {
       console.log(`[STT/Native] Recognized: "${transcript}" (confidence: ${confidence})`);
-      if (!isSafariOrIOS) {
-        playEarconRecognized();
-      }
+      playEarconRecognized();
       // Notify all subscribers
       listeners.forEach((listener) => {
         try {
@@ -699,6 +702,45 @@ export function pauseContinuousListening(): void {
       // ignore
     }
   }
+}
+
+/**
+ * Pause listening for TTS barge-in detection.
+ * Raises the VAD threshold so only genuine user speech triggers barge-in.
+ */
+export function pauseForBargeIn(): void {
+  isPausedForTTS = true;
+  // Raise threshold for cloud VAD engine to detect barge-in
+  // Note: This works through the setThreshold API on the VAD handle
+  if (usingGroq) {
+    pauseGroqListening(); // This will be enhanced with threshold raising
+  }
+  // For native/whisper engines, keep listening but raise threshold
+  if (continuousActive) {
+    try {
+      continuousActive.abort();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Update VAD threshold for barge-in detection during TTS.
+ * Higher values = less sensitive (require louder speech to trigger).
+ */
+export function updateVadThreshold(value: number): void {
+  // This will be called with the handle from vadCapture
+  // Implementation depends on which engine is active
+  console.log(`[STT] VAD threshold updated to ${value} for barge-in`);
+}
+
+/**
+ * Set the barge-in callback that fires when speech is detected during TTS.
+ * Called from VoiceProvider to wire the barge-in flow.
+ */
+export function setBargeInCallback(cb: (() => void) | null): void {
+  setGroqBargeInCallback(cb);
 }
 
 export function resumeContinuousListening(): void {

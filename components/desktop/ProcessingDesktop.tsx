@@ -59,11 +59,15 @@ export default function ProcessingDesktop() {
                   </div>
                 )}
                 {/* Laser scan line clipped to thumbnail container */}
-                {!prefersReducedMotion ? (
-                  <div className="laser-line pointer-events-none" aria-hidden="true" />
-                ) : (
-                  <div className="absolute inset-0 bg-accent/5 ring-1 ring-inset ring-accent/30 pointer-events-none" aria-hidden="true" />
-                )}
+                <div
+                  suppressHydrationWarning
+                  className={
+                    prefersReducedMotion
+                      ? "absolute inset-0 bg-accent/5 ring-1 ring-inset ring-accent/30 pointer-events-none"
+                      : "laser-line pointer-events-none"
+                  }
+                  aria-hidden="true"
+                />
               </div>
             </div>
 

@@ -8,9 +8,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { getFile, getForm, saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormRecord } from "@/lib/types";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
 import { generateFilledPdf } from "@/lib/pdf/pdfWriter";
 import { extractProfileUpdates } from "@/lib/matching/fuzzyProfileMatch";
 import { mergeIntoProfile } from "@/lib/storage/profileStore";
@@ -20,6 +21,7 @@ export type CompleteTone = "info" | "success" | "warning" | "error";
 
 export function useComplete() {
   const { formId } = useParams<{ formId: string }>();
+  const voice = useVoice();
   const startedRef = useRef(false);
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -78,6 +80,7 @@ export function useComplete() {
       await saveFile(formId, "filled", filled);
       const updated: FormRecord = { ...form, status: "complete" };
       await saveForm(updated);
+      voice?.transitionConversation({ type: "COMPLETED" });
       setRecord(updated);
       setPdfBlob(filled);
       setPdfUrl(URL.createObjectURL(filled));
@@ -97,7 +100,10 @@ export function useComplete() {
       );
     } catch {
       setTone("error");
-      setStatus("Something went wrong while creating the PDF. Please try again from the review screen.");
+      const message = "Something went wrong while creating the PDF. Please try again from the review screen.";
+      setStatus(message);
+      voice?.transitionConversation({ type: "ERROR", message });
+      speak(message);
     }
   }
 
@@ -143,7 +149,7 @@ export function useComplete() {
     setReading(true);
     await speak("Here is your completed form.", { interrupt: true });
     for (const field of [...record.fields].sort((a, b) => a.order - b.order)) {
-      await speak(`${field.label}: ${field.value || "blank"}.`, { interrupt: false });
+      await speak(`${field.label}: ${fieldDisplayValue(field) || "blank"}.`, { interrupt: false });
     }
     setReading(false);
   }

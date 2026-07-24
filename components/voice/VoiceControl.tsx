@@ -15,6 +15,7 @@
 import { type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { useVoice, useVoiceShell } from "./VoiceProvider";
+import { useMicVolume } from "@/lib/voice/micLevel";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import VoiceStrands from "@/components/ui/VoiceStrands";
 
@@ -26,9 +27,10 @@ interface VoiceControlProps {
 export default function VoiceControl({ variant, className = "" }: VoiceControlProps) {
   const voice = useVoice();
   const shell = useVoiceShell();
+  const micVolume = useMicVolume(); // hook must run before the early return
   if (!voice) return null;
 
-  const { sttState, micMode, toast, micVolume, ttsActive, wakeMic, voiceUiState } = voice;
+  const { sttState, micMode, toast, ttsActive, wakeMic, voiceUiState } = voice;
   const { isTouch, onMicPointerDown, onMicPointerUp, onMicPointerCancel, togglePtt } = shell;
 
   const orbState = voiceUiState;

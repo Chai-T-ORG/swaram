@@ -9,13 +9,14 @@
  */
 
 import { useVoice } from "@/components/voice/VoiceProvider";
+import { useMicVolume } from "@/lib/voice/micLevel";
 import EdgeGlow from "./EdgeGlow";
 
 export default function AuroraField() {
   const voice = useVoice();
   const sttState = voice?.sttState ?? "off";
   const ttsActive = voice?.ttsActive ?? false;
-  const micVolume = voice?.micVolume ?? 0;
+  const micVolume = useMicVolume();
   const listening = sttState === "listening";
 
   const fieldOpacity = listening

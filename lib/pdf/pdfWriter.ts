@@ -32,7 +32,7 @@ function isYes(value: string): boolean {
 /** Shrink font size until text fits the box width (floor 8pt for legibility). */
 function fitFontSize(font: PDFFont, text: string, maxWidth: number, start = 11): number {
   let size = start;
-  while (size > 8 && font.widthOfTextAtSize(text, size) > maxWidth) {
+  while (size > 14 && font.widthOfTextAtSize(text, size) > maxWidth) {
     size -= 0.5;
   }
   return size;
@@ -40,11 +40,16 @@ function fitFontSize(font: PDFFont, text: string, maxWidth: number, start = 11):
 
 function drawCheckmark(page: PDFPage, bbox: { x: number; y: number; w: number; h: number }, checkFont: PDFFont): void {
   const { width: pw, height: ph } = page.getSize();
-  const boxX = bbox.x * pw;
-  const boxW = Math.max(bbox.w * pw, 6);
+  let boxX = bbox.x * pw;
+  let boxW = Math.max(bbox.w * pw, 6);
   const boxH = Math.max(bbox.h * ph, 6);
   const boxBottom = ph - (bbox.y + bbox.h) * ph;
-  // U+2713 maps to the ZapfDingbats checkmark glyph.
+  
+  if (boxW > boxH * 1.5) {
+    boxX -= 18;
+    boxW = 16;
+  }
+
   const size = Math.min(Math.max(boxH * 0.9, 9), 15);
   page.drawText("✓", {
     x: boxX + Math.max((boxW - size * 0.8) / 2, 0.5),
@@ -64,16 +69,24 @@ function drawAnswer(
   if (!field.value.trim()) return;
   const { width: pw, height: ph } = page.getSize();
 
-  // Choice with detected option positions: tick the box of the chosen option.
+  // Choice with detected option positions: tick the box of EACH chosen option
+  // (multi-select values arrive comma-separated, e.g. "Aadhaar copy, Mark lists").
   if (field.type === "choice" && field.options?.length && field.optionBboxes?.length) {
-    const value = field.value.trim().toLowerCase();
-    let index = field.options.findIndex((o) => o.trim().toLowerCase() === value);
-    if (index < 0) index = field.options.findIndex((o) => o.trim().toLowerCase().includes(value) || value.includes(o.trim().toLowerCase()));
-    const target = index >= 0 ? field.optionBboxes[index] : null;
-    if (target) {
-      drawCheckmark(page, target, checkFont);
-      return;
+    const chosen = field.value
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    let ticked = 0;
+    for (const pick of chosen) {
+      let index = field.options.findIndex((o) => o.trim().toLowerCase() === pick);
+      if (index < 0) index = field.options.findIndex((o) => o.trim().toLowerCase().includes(pick) || pick.includes(o.trim().toLowerCase()));
+      const target = index >= 0 ? field.optionBboxes[index] : null;
+      if (target) {
+        drawCheckmark(page, target, checkFont);
+        ticked++;
+      }
     }
+    if (ticked > 0) return;
   }
 
   if (field.type === "signature") {
@@ -124,9 +137,43 @@ function drawAnswer(
 
   const text = field.value.trim();
 
-  if (field.type === "comb" && field.combLength) {
-    // Strip spaces that might have been typed, e.g., for Aadhaar "1234 5678" -> "12345678"
-    const chars = text.replace(/\s+/g, "").split("");
+  if (field.combLength) {
+    let chars: string[];
+    if (field.type === "date") {
+      chars = text.replace(/\D/g, "").split("");
+    } else {
+      // Smart fit: a name-style comb puts a blank box between words, so KEEP the
+      // spaces when the spaced value already fits the boxes. Otherwise the
+      // spaces are just grouping ("1234 5678 9012", "25 BCS 200") — STRIP them
+      // so the characters land in their boxes. (If it doesn't fit even stripped
+      // it's likely wrong; the draw loop truncates to combLength.)
+      const spaced = text.split("");
+      chars = spaced.length <= field.combLength ? spaced : text.replace(/\s+/g, "").split("");
+    }
+    // Precise path: one box per character (grouped combs / boxed dates). Used
+    // only when we have a full parallel set of cells; otherwise fall through to
+    // uniform division so nothing regresses.
+    const cells = field.combCells;
+    if (cells && chars.length > 0 && cells.length >= chars.length) {
+      for (let i = 0; i < chars.length; i++) {
+        const c = cells[i];
+        const cx = c.x * pw;
+        const cw = Math.max(c.w * pw, 4);
+        const ch = Math.max(c.h * ph, 4);
+        const cBottom = ph - (c.y + c.h) * ph;
+        const size = fitFontSize(font, "W", cw - 2, 12);
+        const charW = font.widthOfTextAtSize(chars[i], size);
+        page.drawText(chars[i], {
+          x: cx + (cw - charW) / 2,
+          y: cBottom + Math.max(ch * 0.22, 2.5),
+          size,
+          font,
+          color: INK,
+        });
+      }
+      return;
+    }
+
     const cellW = boxW / field.combLength;
     const size = fitFontSize(font, "W", cellW - 2, 12);
     const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
@@ -138,9 +185,31 @@ function drawAnswer(
     return;
   }
 
+  // If it's a large box, wrap text.
+  if (boxH > 28 && text.length > 30) {
+    page.drawText(text, {
+      x: boxX + 2,
+      y: boxBottom + boxH - 12, // start near the top of the box
+      size: 11,
+      font,
+      color: INK,
+      maxWidth: boxW - 4,
+      lineHeight: 14,
+    });
+    return;
+  }
+
   const size = fitFontSize(font, text, boxW - 4);
-  // The bbox bottom is the writing line — sit the text on it, not across it.
-  const baseline = boxBottom + Math.max(boxH * 0.22, 2.5);
+  // A thin bbox IS the printed underline (the model boxes the line itself), so
+  // sit the text just above its TOP edge — font-size-independent, so long fields
+  // whose font shrinks don't drop onto the line. A tall bbox is an open answer
+  // area: write near its bottom.
+  // gboxToBBox floors h at 0.008, so a printed underline arrives as exactly
+  // 0.008 — catch that (a real answer area is 0.011+).
+  const isUnderline = field.bbox.h < 0.009;
+  const baseline = isUnderline
+    ? ph - field.bbox.y * ph + 3
+    : boxBottom + Math.max(boxH * 0.22, size * 0.4);
   page.drawText(text, {
     x: boxX + 2,
     y: baseline,

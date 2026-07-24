@@ -12,7 +12,11 @@ import { useUploadScreen } from "@/components/screens/useUploadScreen";
 import { IconArrowLeft, IconUpload, IconDoc, IconCamera, IconLoader } from "@/components/icons";
 
 export default function UploadDesktop() {
+<<<<<<< HEAD
   const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFiles, openPicker } = useUploadScreen();
+=======
+  const { inputRef, status, tone, progress, dragging, setDragging, isArmed, handleFile, openPicker, cancelPicker } = useUploadScreen();
+>>>>>>> aec1bf03dd50fe119ec5645b132989ed7826da7a
 
   return (
     <motion.div
@@ -74,7 +78,15 @@ export default function UploadDesktop() {
           accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
           className="sr-only"
           id="file-input"
+<<<<<<< HEAD
           onChange={(e) => handleFiles(e.target.files)}
+=======
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void handleFile(file);
+            else cancelPicker();
+          }}
+>>>>>>> aec1bf03dd50fe119ec5645b132989ed7826da7a
         />
 
         <button type="button" className="btn-primary" onClick={openPicker}>

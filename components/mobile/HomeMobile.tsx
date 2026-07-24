@@ -116,7 +116,7 @@ export default function HomeMobile() {
             </Link>
           </div>
           <ul className="flex flex-col gap-2.5">
-            {recent.map((form) => (
+            {recent.map((form: any) => (
               <li key={form.id}>
                 <Link
                   href={routeForForm(form)}

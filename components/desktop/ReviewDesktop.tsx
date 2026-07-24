@@ -9,6 +9,7 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import FieldEditForm from "@/components/ui/FieldEditForm";
+import { fieldDisplayValue } from "@/lib/analysis/tableCells";
 import { useReview } from "@/components/screens/useReview";
 import {
   IconArrowRight,
@@ -137,7 +138,7 @@ export default function ReviewDesktop() {
                       ) : field.status === "pending" ? (
                         <span className="text-base font-normal italic text-soft">Not asked yet</span>
                       ) : (
-                        field.value || <span className="text-base font-normal italic text-faint">Blank</span>
+                        fieldDisplayValue(field) || <span className="text-base font-normal italic text-faint">Blank</span>
                       )}
                     </p>
                   )}

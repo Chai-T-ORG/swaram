@@ -12,6 +12,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import StatusAnnouncer from "@/components/StatusAnnouncer";
 import VoiceOrb from "@/components/ui/VoiceOrb";
 import { useFillSession, typeLabel } from "@/components/screens/useFillSession";
+import { useMicVolume } from "@/lib/voice/micLevel";
 import { SpellBubbles, TypedAnswerForm, FieldsMapList } from "@/components/screens/FillParts";
 import { CLOUD_FALLBACK_NOTICE } from "@/lib/voice/speechToText";
 import { WordReveal } from "@/components/ui/motion-components";
@@ -28,10 +29,13 @@ import {
   IconChevronRight,
   IconPause,
   IconWave,
+  IconLock,
+  IconLoader,
 } from "@/components/icons";
 
 export default function FillDesktop() {
   const s = useFillSession();
+  const micVolume = useMicVolume();
   const prefersReducedMotion = useReducedMotion();
   const [showChat, setShowChat] = useState(true);
   const [showVisualForm, setShowVisualForm] = useState(true);
@@ -57,12 +61,11 @@ export default function FillDesktop() {
     if (!s.formId || !s.record) return;
     if (!showVisualForm) return;
 
-    // Skip generation while actively asking or listening
-    if (s.phase === "asking" || s.phase === "listening") {
-      return;
-    }
-
-    // Check if fields have actually changed since last generation
+    // Regenerate whenever the ANSWERS change — do NOT skip during asking/
+    // listening. That skip meant the live preview only refreshed in the brief
+    // gaps between phases, so it lagged the conversation by a couple of
+    // questions (the "I have to refresh to see it" bug). The fields-hash check
+    // below already prevents redundant regenerations, so this is cheap.
     const fieldsStr = JSON.stringify(s.record.fields);
     if (lastGeneratedFieldsRef.current === fieldsStr) {
       return;
@@ -88,17 +91,22 @@ export default function FillDesktop() {
         lastGeneratedFieldsRef.current = fieldsStr;
 
         setDocUrl((prev) => {
+          // Don't revoke the OLD url immediately: an auto page-switch can remount
+          // the <iframe> against it in the same tick, and a just-revoked blob url
+          // renders as "PDF not found". Revoke after a grace period, by which
+          // time the iframe has swapped to the new url.
           if (prev) {
-            try {
-              URL.revokeObjectURL(prev);
-            } catch {}
+            const old = prev;
+            setTimeout(() => {
+              try { URL.revokeObjectURL(old); } catch {}
+            }, 4000);
           }
           return localUrl;
         });
       } catch (err) {
         console.error("PDF filling error:", err);
       }
-    }, 800);
+    }, 350);
 
     return () => {
       active = false;
@@ -327,11 +335,17 @@ export default function FillDesktop() {
                             <span className="block text-[9px] font-bold uppercase tracking-wider text-faint mb-1.5">
                               {field.label}
                             </span>
-                            <div className="min-h-[22px] flex items-center">
+                            <div className="min-h-[22px] flex items-center justify-between gap-2">
                               {field.value ? (
                                 <span className="handwritten text-lg tracking-wide animate-ink-bleed">{field.value}</span>
                               ) : (
                                 <span className="text-[11px] text-faint italic font-medium">[Empty Field]</span>
+                              )}
+                              {isActive && s.phase === "verifying" && (
+                                <IconLoader className="h-4 w-4 shrink-0 text-accent animate-spin" aria-label="verifying" />
+                              )}
+                              {isActive && s.fieldLocked && s.phase !== "verifying" && (
+                                <IconLock className="h-4 w-4 shrink-0 text-warn" aria-label="locked" />
                               )}
                             </div>
                           </div>
@@ -449,14 +463,14 @@ export default function FillDesktop() {
 
               {s.phase === "asking" && (
                 <div className="flex flex-col items-center gap-4 animate-fade-in">
-                  <VoiceOrb state="speaking" volume={s.voice?.micVolume ?? 0} size="lg" />
+                  <VoiceOrb state="speaking" volume={micVolume} size="lg" />
                   <p className="text-sm font-semibold text-accent animate-pulse">Reading question aloud…</p>
                 </div>
               )}
 
               {s.phase === "listening" && !s.confirmMode && (
                 <div className="flex flex-col items-center gap-4 animate-fade-in">
-                  <VoiceOrb state="listening" volume={s.voice?.micVolume ?? 0} size="lg" />
+                  <VoiceOrb state="listening" volume={micVolume} size="lg" />
                   <p className="text-xs font-bold uppercase tracking-wider text-accent animate-pulse">Listening — speak now</p>
                 </div>
               )}
@@ -487,6 +501,13 @@ export default function FillDesktop() {
                 </div>
               )}
 
+              {s.phase === "verifying" && (
+                <div className="flex flex-col items-center gap-4 animate-fade-in">
+                  <VoiceOrb state="idle" volume={0} size="lg" />
+                  <p className="text-sm font-semibold text-accent">Verifying your answer…</p>
+                </div>
+              )}
+
               {s.phase === "paused" && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-surface animate-fade-in">
                   <VoiceOrb state="idle" volume={0} size="lg" className="opacity-50" />
@@ -503,21 +524,21 @@ export default function FillDesktop() {
               {s.phase !== "start" && s.phase !== "notice" && (
                 <div className="flex flex-col gap-4 border-t border-line/60 pt-6 w-full">
                   <div className="flex flex-wrap items-center justify-center gap-2.5" role="group" aria-label="Voice controls">
-                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doRepeat}>
+                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doRepeat} disabled={s.fieldLocked}>
                       <IconRepeat className="h-3.5 w-3.5" />
                       <span>Repeat</span>
                     </button>
-                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doSkip}>
+                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doSkip} disabled={s.fieldLocked}>
                       <IconSkip className="h-3.5 w-3.5" />
                       <span>Skip</span>
                     </button>
                     {s.phase !== "typing" && (
-                      <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.enterTyping}>
+                      <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.enterTyping} disabled={s.fieldLocked}>
                         <IconKeyboard className="h-3.5 w-3.5" />
                         <span>Type</span>
                       </button>
                     )}
-                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doBack} disabled={s.atFirst}>
+                    <button type="button" className="btn-secondary min-h-10 cursor-pointer px-4 text-xs" onClick={s.doBack} disabled={s.atFirst || s.fieldLocked}>
                       <IconArrowLeft className="h-3.5 w-3.5" />
                       <span>Back</span>
                     </button>

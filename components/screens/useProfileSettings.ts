@@ -36,6 +36,8 @@ import {
   type MicMode,
 } from "@/lib/voice/voiceSettings";
 import { getGroqKey, setGroqKey, probeGroqAvailability } from "@/lib/voice/groqSTT";
+import { setHapticsEnabled, haptic } from "@/lib/voice/haptics";
+import { clearNames } from "@/lib/voice/nameDictionary";
 import type { ProfileData } from "@/lib/types";
 
 export const PROFILE_FIELDS: { key: string; label: string; hint?: string }[] = [
@@ -81,6 +83,7 @@ export function useProfileSettings() {
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>(DEFAULT_VOICE_SETTINGS.ttsProvider);
   const [sttProvider, setSttProvider] = useState<SttProvider>(DEFAULT_VOICE_SETTINGS.sttProvider);
   const [micMode, setMicMode] = useState<MicMode>(DEFAULT_VOICE_SETTINGS.micMode);
+  const [hapticsEnabled, setHapticsState] = useState<boolean>(DEFAULT_VOICE_SETTINGS.hapticsEnabled);
   const [groqKey, setGroqKeyState] = useState("");
   const [groqEnvKey, setGroqEnvKey] = useState(false);
   const [azureEnvKey, setAzureEnvKey] = useState(false);
@@ -111,6 +114,7 @@ export function useProfileSettings() {
     setTtsProvider(settings.ttsProvider);
     setSttProvider(settings.sttProvider);
     setMicMode(settings.micMode);
+    setHapticsState(settings.hapticsEnabled);
     setGroqKeyState(getGroqKey());
     void probeGroqAvailability(); // warms the availability cache
     fetch("/api/transcribe")
@@ -248,6 +252,22 @@ export function useProfileSettings() {
     );
   }
 
+  function toggleHaptics(next: boolean) {
+    setHapticsState(next);
+    setVoiceSettings({ hapticsEnabled: next });
+    setHapticsEnabled(next);
+    if (next) haptic("success"); // let them feel it turn on
+    speak(next ? "Vibration cues on." : "Vibration cues off.");
+  }
+
+  function forgetNames() {
+    clearNames();
+    setTone("success");
+    const msg = "Cleared the names I'd learned. I'll ask fresh next time.";
+    setStatus(msg);
+    speak(msg);
+  }
+
   function selectSttProvider(next: SttProvider) {
     setSttProvider(next);
     setVoiceSettings({ sttProvider: next });
@@ -286,6 +306,7 @@ export function useProfileSettings() {
     ttsProvider,
     sttProvider,
     micMode,
+    hapticsEnabled,
     groqKey,
     setGroqKeyState,
     groqEnvKey,
@@ -307,6 +328,8 @@ export function useProfileSettings() {
     selectLang,
     selectTtsProvider,
     selectMicMode,
+    toggleHaptics,
+    forgetNames,
     selectSttProvider,
     saveGroqKey,
     retryKokoro,

@@ -35,6 +35,7 @@
  * The audio transits this server and is never stored or logged here.
  */
 import type { NextRequest } from "next/server";
+import { nameClose } from "@/lib/voice/nameMatch";
 
 export const runtime = "nodejs";
 
@@ -380,9 +381,20 @@ function normalized(s: string): string {
   return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim();
 }
 
-/** "My name is Tejas K M" -> "Tejas K M" — the form wants the answer alone. */
+/**
+ * "My name is Tejas K M" -> "Tejas K M" — the form wants the answer alone.
+ *
+ * The carrier is stripped whether or not a name follows it (\s* , and the
+ * bare "my name" / "myself" forms), so a clip where the actual name was
+ * inaudible ("my name is …") collapses to "" — a failed capture the caller
+ * re-prompts for — instead of committing the literal words "My name" as the
+ * answer (the "said their name, got 'My name'" bug). Longer carriers are
+ * listed first so the alternation prefers them.
+ */
 function stripCarrier(t: string): string {
-  return t.replace(/^\s*(?:my name is|the name is|name is|it'?s|this is|i am|i'm)\s+/i, "").trim();
+  return t
+    .replace(/^\s*(?:my name is|the name is|my name's|my name|name is|myself|i'?m called|call me|it'?s|this is|i am|i'?m)\b\s*/i, "")
+    .trim();
 }
 
 /** Of two normalized-equal hypotheses, keep the properly-cased one. */
@@ -391,45 +403,19 @@ function betterCased(a: string, b: string): string {
   return caps(b) > caps(a) ? b : a;
 }
 
-function editDistance(a: string, b: string): number {
-  const s = a.toLowerCase();
-  const t = b.toLowerCase();
-  if (s === t) return 0;
-  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= s.length; i++) {
-    const cur = [i];
-    for (let j = 1; j <= t.length; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1));
-    }
-    prev = cur;
-  }
-  return prev[t.length];
-}
-
 /**
  * Deterministic dictionary snap for consensus results: engines can AGREE on a
  * near-miss ("Twinsha T Thilkan"), which would short-circuit past the fusion
- * LLM that knows the user's confirmed names — so the snap runs here too.
- * Shape-guarded: word counts must match and initials never map to full words,
- * so a spoken "Tejas K M" can never be swallowed by a stored "Tejas Kumar".
+ * LLM that knows the user's confirmed names — so the snap runs here too. The
+ * match predicate is the SHARED, per-word `nameClose` (lib/voice/nameMatch) —
+ * the same one the client dictionary uses, so a different given name ("Maria")
+ * can never snap to a stored one ("Gordan"), on either side.
  */
 function snapToKnown(text: string, namesCsv: string): string {
-  const heard = text.trim();
+  const heard = normalized(text.trim());
   if (!heard || !namesCsv) return text;
-  const hWords = normalized(heard).split(" ").filter(Boolean);
   for (const name of namesCsv.split(",").map((n) => n.trim()).filter(Boolean)) {
-    const nWords = normalized(name).split(" ").filter(Boolean);
-    if (nWords.length !== hWords.length) continue;
-    let compatible = true;
-    let dist = 0;
-    let len = 0;
-    for (let i = 0; i < nWords.length; i++) {
-      if ((hWords[i].length === 1) !== (nWords[i].length === 1)) { compatible = false; break; }
-      dist += editDistance(hWords[i], nWords[i]);
-      len += Math.max(hWords[i].length, nWords[i].length);
-    }
-    if (compatible && dist > 0 && dist <= Math.max(1, Math.floor(len * 0.25))) return name;
-    if (compatible && dist === 0) return name; // same letters, engine casing
+    if (nameClose(heard, normalized(name))) return name;
   }
   return text;
 }

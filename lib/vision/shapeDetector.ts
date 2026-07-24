@@ -214,6 +214,81 @@ export async function preprocessForOcr(canvas: HTMLCanvasElement): Promise<HTMLC
 }
 
 /**
+ * "Digitize" a warped camera scan into a clean, scanner-app-style page before
+ * it goes to the VLM. A phone photo carries glare, shadows, uneven lighting and
+ * low contrast that a rasterized digital PDF never has — the VLM reads the PDF
+ * flawlessly but stumbles on the raw photo. This closes that gap WITHOUT raising
+ * resolution (larger images drift the VLM's bbox y-coords down a full row — see
+ * VLM_RENDER_WIDTH in analyzeForm.ts), so it's pure upside for extraction.
+ *
+ * Pipeline (all grayscale, deliberately NOT binarized — a hard black/white
+ * threshold is great for Tesseract but erases faint pen strokes and the soft
+ * edges a vision model relies on):
+ *   1. Flat-field illumination correction — divide the image by a heavily
+ *      blurred estimate of its own background. Because the background estimate
+ *      tracks LOCAL brightness, a shadow's paper and a sunlit patch's paper both
+ *      normalize to the same white; only ink survives as dark. Kills shadows and
+ *      uneven lighting outright.
+ *   2. CLAHE — local (tile-wise) contrast so faint print/handwriting pops
+ *      without blowing out already-crisp areas. Falls back to a global contrast
+ *      stretch if this OpenCV build lacks CLAHE.
+ *
+ * Returns the source canvas untouched if OpenCV is missing or anything throws,
+ * so a scan is never lost to enhancement (matches preprocessForOcr's contract).
+ */
+export async function enhanceScanForVlm(canvas: HTMLCanvasElement): Promise<HTMLCanvasElement> {
+  const cv = await loadOpenCv();
+  if (!cv) return canvas;
+
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const bg = new cv.Mat();
+  const norm = new cv.Mat();
+  const out = new cv.Mat();
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    // Background = a big Gaussian blur (separable, so fast even at large sigma).
+    // sigma scales with page size so the estimate spans several text lines and
+    // averages away the ink, leaving just the illumination gradient.
+    const sigma = Math.max(15, Math.max(canvas.width, canvas.height) / 25);
+    cv.GaussianBlur(gray, bg, new cv.Size(0, 0), sigma, sigma);
+    // norm = gray / bg * 255 → flat, evenly-lit page (shadows divided out).
+    cv.divide(gray, bg, norm, 255);
+
+    // Local contrast. CLAHE is a class in opencv.js but not every build ships
+    // it, so guard and fall back to a global min/max stretch.
+    let clahe: { apply: (s: unknown, d: unknown) => void; delete?: () => void } | null = null;
+    try {
+      clahe = new (cv as unknown as { CLAHE: new (c: number, s: unknown) => typeof clahe }).CLAHE(
+        2.0,
+        new cv.Size(8, 8),
+      );
+      clahe!.apply(norm, out);
+    } catch {
+      cv.normalize(norm, out, 0, 255, cv.NORM_MINMAX);
+    } finally {
+      clahe?.delete?.();
+    }
+
+    const result = document.createElement("canvas");
+    result.width = canvas.width;
+    result.height = canvas.height;
+    cv.imshow(result, out);
+    return result;
+  } catch (error) {
+    console.warn("[swaram] enhanceScanForVlm failed; using unenhanced scan:", error);
+    return canvas;
+  } finally {
+    src.delete();
+    gray.delete();
+    bg.delete();
+    norm.delete();
+    out.delete();
+  }
+}
+
+/**
  * Document-in-frame check for the camera page. Returns guidance on where
  * the largest paper-like quad sits in the frame, or null if none/no OpenCV.
  */

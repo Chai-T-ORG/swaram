@@ -50,6 +50,8 @@ export interface VoiceSettings {
   sttProvider: SttProvider;
   /** Push-to-talk vs hands-free continuous listening. */
   micMode: MicMode;
+  /** Vibration cues for listening/accepted/error (Android web only; off = mute). */
+  hapticsEnabled: boolean;
   /** Whether the first-time model setup has completed successfully. */
   setupComplete: boolean;
   /** Dedicated flag for whether first-run onboarding has been completed by the user. */
@@ -66,6 +68,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   ttsProvider: "cloud",       // Cloud neural voice via /api/tts — works on every device
   sttProvider: "groq",        // Cloud Whisper (Groq) — accurate & instant; native is the fallback
   micMode: "ptt",             // Push-to-talk by default — reliable in noisy rooms
+  hapticsEnabled: true,       // Vibration cues on; no-ops where the API is absent
   setupComplete: false,
   onboardingComplete: false,
 };
@@ -84,6 +87,7 @@ export function getVoiceSettings(): VoiceSettings {
       ttsProvider: isValidTtsProvider(parsed.ttsProvider) ? parsed.ttsProvider! : DEFAULT_VOICE_SETTINGS.ttsProvider,
       sttProvider: isValidSttProvider(parsed.sttProvider) ? parsed.sttProvider! : DEFAULT_VOICE_SETTINGS.sttProvider,
       micMode: parsed.micMode === "continuous" || parsed.micMode === "ptt" ? parsed.micMode : DEFAULT_VOICE_SETTINGS.micMode,
+      hapticsEnabled: typeof parsed.hapticsEnabled === "boolean" ? parsed.hapticsEnabled : DEFAULT_VOICE_SETTINGS.hapticsEnabled,
       setupComplete: typeof parsed.setupComplete === "boolean" ? parsed.setupComplete : DEFAULT_VOICE_SETTINGS.setupComplete,
       onboardingComplete: typeof parsed.onboardingComplete === "boolean" ? parsed.onboardingComplete : Boolean(parsed.setupComplete),
     };

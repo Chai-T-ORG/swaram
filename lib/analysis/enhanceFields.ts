@@ -84,17 +84,32 @@ export async function enhanceFieldsWithLlm(
       out.push(field);
       continue;
     }
-    if (llm.drop) continue; // LLM says this isn't a real field
+    // The LLM may DROP a spurious basic field (a heading/instruction it
+    // mis-labelled), but NEVER a structurally-detected one. A table like
+    // "Academic Record" carries instruction text ("complete every row…") that
+    // the LLM mistakes for an instruction and drops the whole grid — the exact
+    // "it skipped the Academic Record table" bug. comb/table/signature come from
+    // the VLM's grounded layout read; keep them even if the LLM says drop.
+    const STRUCTURAL = new Set<FormField["type"]>(["comb", "table", "signature"]);
+    if (llm.drop && !STRUCTURAL.has(field.type)) continue;
 
-    const nextType = validType(llm.type) ?? field.type;
-    const options =
-      nextType === "choice"
-        ? (Array.isArray(llm.options) && llm.options.length ? llm.options : field.options)
-        : undefined;
+    // Only let the LLM re-type "basic" fields. comb / table / signature come
+    // from the VLM's grounded layout read and must never be downgraded to text.
+    const BASIC = new Set<FormField["type"]>(["text", "date", "choice", "checkbox"]);
+    const nextType = BASIC.has(field.type) ? validType(llm.type) ?? field.type : field.type;
+
+    let options = field.options;
+    if (nextType === "choice") {
+      // Keep the VLM options when we have per-option tick boxes aligned to them
+      // (reordering/renaming would desync optionBboxes); otherwise accept the
+      // LLM's cleaned list.
+      if (!field.optionBboxes && Array.isArray(llm.options) && llm.options.length) options = llm.options;
+    } else if (nextType !== "table") {
+      options = undefined;
+    }
 
     out.push({
       ...field,
-      label: typeof llm.label === "string" && llm.label.trim() ? llm.label.trim() : field.label,
       type: nextType,
       options,
       question: typeof llm.question === "string" && llm.question.trim() ? llm.question.trim() : field.question,

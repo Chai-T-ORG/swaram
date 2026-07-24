@@ -13,7 +13,10 @@
  */
 import type { NextRequest } from "next/server";
 
-export const runtime = "nodejs";
+// Pure fetch proxy (Web APIs only) — runs at the edge for low cold-start +
+// region-local latency. The in-memory LRU below is best-effort per isolate;
+// the client keeps its own cache on top, and inputs are capped at 120 chars.
+export const runtime = "edge";
 
 /** Targets the app can speak that Sarvam can transliterate into. */
 const TARGETS = new Set(["hi-IN", "ml-IN"]);

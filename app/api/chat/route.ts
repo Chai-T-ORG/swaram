@@ -12,7 +12,9 @@
  */
 import type { NextRequest } from "next/server";
 
-export const runtime = "nodejs";
+// Pure fetch proxy (Web APIs only) — runs at the edge for low cold-start +
+// region-local latency, since this is hit inline during a voice turn.
+export const runtime = "edge";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 

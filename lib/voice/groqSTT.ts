@@ -134,6 +134,12 @@ let handle: VadHandle | null = null;
 let listening = false;
 let hadSuccess = false;
 let consecutiveFailures = 0;
+let onBargeIn: (() => void) | null = null;
+
+/** Register barge-in callback — called when speech detected during TTS. */
+export function setGroqBargeInCallback(cb: (() => void) | null): void {
+  onBargeIn = cb;
+}
 
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -224,9 +230,14 @@ function handleFailure(detail: string): void {
 
 export async function startGroqListening(): Promise<boolean> {
   if (listening) return true;
-  handle = await startVadCapture((pcm, sampleRate) => {
-    void transcribe(pcm, sampleRate);
-  });
+  handle = await startVadCapture(
+    (pcm, sampleRate) => {
+      void transcribe(pcm, sampleRate);
+    },
+    {
+      onSpeechStart: () => onBargeIn?.(),
+    },
+  );
   if (!handle) return false;
   listening = true;
   return true;

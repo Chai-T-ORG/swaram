@@ -26,6 +26,7 @@ export {
   House as IconHome,
   Info as IconInfo,
   Keyboard as IconKeyboard,
+  Lock as IconLock,
   LoaderCircle as IconLoader,
   MessageSquare as IconMessageSquare,
   Mic as IconMic,

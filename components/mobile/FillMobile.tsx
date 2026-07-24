@@ -29,6 +29,8 @@ import {
   IconX,
   IconDoc,
   IconMessageSquare,
+  IconLock,
+  IconLoader,
 } from "@/components/icons";
 
 export default function FillMobile() {
@@ -210,6 +212,13 @@ export default function FillMobile() {
         )}
 
         {s.phase === "typing" && <TypedAnswerForm s={s} />}
+
+        {s.phase === "verifying" && (
+          <div className="flex flex-col items-center gap-3 animate-fade-in">
+            <IconLoader className="h-8 w-8 text-accent animate-spin" aria-label="verifying" />
+            <p className="text-sm font-semibold text-accent">Verifying your answer…</p>
+          </div>
+        )}
       </div>
 
       {/* Bottom: control row + the one voice control */}
@@ -219,18 +228,18 @@ export default function FillMobile() {
           role="group"
           aria-label="Voice controls"
         >
-          <button type="button" onClick={s.doRepeat} aria-label="Repeat question" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken">
+          <button type="button" onClick={s.doRepeat} aria-label="Repeat question" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken disabled:opacity-40" disabled={s.fieldLocked}>
             <IconRepeat className="h-5 w-5" />
           </button>
-          <button type="button" onClick={s.doSkip} aria-label="Skip field" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken">
+          <button type="button" onClick={s.doSkip} aria-label="Skip field" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken disabled:opacity-40" disabled={s.fieldLocked}>
             <IconSkip className="h-5 w-5" />
           </button>
           {s.phase !== "typing" && (
-            <button type="button" onClick={s.enterTyping} aria-label="Type instead" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken">
+            <button type="button" onClick={s.enterTyping} aria-label="Type instead" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken disabled:opacity-40" disabled={s.fieldLocked}>
               <IconKeyboard className="h-5 w-5" />
             </button>
           )}
-          <button type="button" onClick={s.doBack} disabled={s.atFirst} aria-label="Go back one field" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken disabled:opacity-40">
+          <button type="button" onClick={s.doBack} disabled={s.atFirst || s.fieldLocked} aria-label="Go back one field" className="grid h-12 w-12 cursor-pointer place-items-center rounded-full text-soft hover:bg-sunken disabled:opacity-40">
             <IconArrowLeft className="h-5 w-5" />
           </button>
           {s.phase !== "paused" && (
