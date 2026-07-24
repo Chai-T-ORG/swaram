@@ -1,6 +1,10 @@
 <div align="center">
 
-  <h1>🎙️ SWARAM</h1>
+  <a href="https://swaram-chait.vercel.app/">
+    <img src="public/logo.png" alt="SWARAM Logo" width="110" height="110" style="border-radius: 24px; margin-bottom: 12px;" />
+  </a>
+
+  <h1>SWARAM</h1>
   <h3>Voice-First AI Accessibility Assistant for Forms & Documents</h3>
 
   <p>
@@ -8,22 +12,22 @@
   </p>
 
   <p>
-    <a href="https://swaram-chait.vercel.app/"><strong>✨ Try Live App »</strong></a>
+    <a href="https://swaram-chait.vercel.app/"><strong>Try Live App »</strong></a>
     &nbsp;•&nbsp;
-    <a href="#-quickstart"><strong>Quickstart</strong></a>
+    <a href="#quickstart"><strong>Quickstart</strong></a>
     &nbsp;•&nbsp;
-    <a href="#-voice-orb-experience"><strong>Voice Orb States</strong></a>
+    <a href="#visual-voice-orb-experience"><strong>Voice Orb States</strong></a>
     &nbsp;•&nbsp;
-    <a href="#-hybrid-ai-suite"><strong>Hybrid AI Suite</strong></a>
+    <a href="#hybrid-ai-suite--technical-stack"><strong>Hybrid AI Suite</strong></a>
     &nbsp;•&nbsp;
-    <a href="#-system-architecture"><strong>Architecture</strong></a>
+    <a href="#system-architecture--data-flow"><strong>Architecture</strong></a>
   </p>
 
   <br />
 
   <!-- Badges -->
   <p>
-    <a href="https://swaram-chait.vercel.app/"><img src="https://img.shields.io/badge/🚀_Live_App-swaram--chait.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Live Web App" /></a>
+    <a href="https://swaram-chait.vercel.app/"><img src="https://img.shields.io/badge/Production_App-swaram--chait.vercel.app-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Live Production Web App" /></a>
     <img src="https://img.shields.io/badge/Next.js_16-App_Router-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js 16" />
     <img src="https://img.shields.io/badge/React_19-Latest-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
     <img src="https://img.shields.io/badge/Tailwind_CSS_v4-Modern_UI-38BDF8?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS v4" />
@@ -42,17 +46,35 @@
 
 ---
 
-## 🌟 Overview
+## Overview
 
-**SWARAM** (meaning *Sound / Voice* in Sanskrit & Indian languages) is an accessible, voice-first companion designed to eliminate digital accessibility barriers. Filing government applications, healthcare intakes, or financial disclosures can be daunting—especially for visually impaired users.
+**SWARAM** (*Sound / Voice* in Sanskrit & Indian languages) is an accessible, voice-first companion designed to eliminate digital accessibility barriers. Filing government applications, healthcare intakes, or financial disclosures can be daunting—especially for visually impaired users.
 
 SWARAM turns static, complex PDFs into **conversational voice dialogues**. Powered by a hybrid engine of cutting-edge **Vision Language Models (VLMs)**, **Multilingual Speech Synthesis & Recognition**, and **on-device PDF coordinate manipulation**, SWARAM reads forms aloud, asks targeted questions step-by-step, validates inputs, and stamps precise fields back onto the original document.
 
-> 💡 *Designed with inspiration from Wispr Flow, Apple Intelligence, and Arc Browser—SWARAM replaces intimidating SaaS dashboards with a calm, liquid ambient voice interface.*
+> *Designed with inspiration from Wispr Flow, Apple Intelligence, and Arc Browser—SWARAM replaces intimidating SaaS dashboards with a calm, liquid ambient voice interface.*
 
 ---
 
-## 🎙️ Visual Voice Orb Experience
+## Application Interface & Live Showcase
+
+<div align="center">
+  <img src="public/screenshots/welcome_onboarding.png" alt="Voice Setup & Onboarding Screen" width="95%" style="border-radius: 12px; margin-bottom: 24px;" />
+  <p><i>Figure 1: SWARAM Voice Setup & Onboarding Overlay featuring the interactive ambient Voice Orb.</i></p>
+  <br /><br />
+  <img src="public/screenshots/main_workspace.png" alt="Main Conversational Workspace" width="95%" style="border-radius: 12px; margin-bottom: 24px;" />
+  <p><i>Figure 2: Main Conversational Workspace with Speaking state, quick voice prompts, and document ingestion cards.</i></p>
+  <br /><br />
+  <img src="public/screenshots/voice_form_fill.png" alt="Interactive Voice Form Filling Flow" width="95%" style="border-radius: 12px; margin-bottom: 24px;" />
+  <p><i>Figure 3: Interactive Voice Form Filling featuring step-by-step spoken dialogue, transcript confirmation, and PDF split view.</i></p>
+  <br /><br />
+  <img src="public/screenshots/document_writeback.png" alt="Real-Time Document Coordinate Writeback" width="95%" style="border-radius: 12px; margin-bottom: 24px;" />
+  <p><i>Figure 4: Real-Time Document Coordinate Writeback — Stamping individual character inputs directly into original form boxes via pdf-lib.</i></p>
+</div>
+
+---
+
+## Visual Voice Orb Experience
 
 The central interaction hub of SWARAM is the **Visual Voice Orb**—an interactive WebGL/OGL ambient canvas that reacts dynamically to voice input, processing phases, and audio output.
 
@@ -68,12 +90,12 @@ The central interaction hub of SWARAM is the **Visual Voice Orb**—an interacti
   <tbody>
     <tr>
       <td align="center">
-        <b>🟢 IDLE</b>
+        <b>IDLE</b>
       </td>
       <td>Calm ambient pulse<br /><code>1200ms</code> slow loop</td>
       <td>
         <div style="background: linear-gradient(135deg, #059669, #10B981); padding: 10px; border-radius: 8px; color: white; text-align: center; font-weight: bold;">
-          🟢 Emerald Green Glow
+          Emerald Green Glow
         </div>
         <p><i>Soft concentric halo breathing gently. Signals readiness for voice activation.</i></p>
       </td>
@@ -81,12 +103,12 @@ The central interaction hub of SWARAM is the **Visual Voice Orb**—an interacti
     </tr>
     <tr>
       <td align="center">
-        <b>🔵 LISTENING</b>
+        <b>LISTENING</b>
       </td>
       <td>Concentric wave expansion<br />Fast reactive spring</td>
       <td>
         <div style="background: linear-gradient(135deg, #2563EB, #3B82F6); padding: 10px; border-radius: 8px; color: white; text-align: center; font-weight: bold;">
-          🔵 Sapphire Blue Ripples
+          Sapphire Blue Ripples
         </div>
         <p><i>Real-time audio frequency ripples scaling with mic input volume.</i></p>
       </td>
@@ -94,12 +116,12 @@ The central interaction hub of SWARAM is the **Visual Voice Orb**—an interacti
     </tr>
     <tr>
       <td align="center">
-        <b>🟣 PROCESSING</b>
+        <b>PROCESSING</b>
       </td>
       <td>Rotating liquid gradient<br />Shimmer rotation</td>
       <td>
         <div style="background: linear-gradient(135deg, #7C3AED, #A855F7); padding: 10px; border-radius: 8px; color: white; text-align: center; font-weight: bold;">
-          🟣 Violet Model Ring
+          Violet Model Ring
         </div>
         <p><i>Rotating gradient rings reflecting VLM field extraction or LLM intent parsing.</i></p>
       </td>
@@ -107,12 +129,12 @@ The central interaction hub of SWARAM is the **Visual Voice Orb**—an interacti
     </tr>
     <tr>
       <td align="center">
-        <b>🟧 SPEAKING</b>
+        <b>SPEAKING</b>
       </td>
       <td>Expanding wave propagation<br />Dynamic frequency sync</td>
       <td>
         <div style="background: linear-gradient(135deg, #D97706, #F59E0B); padding: 10px; border-radius: 8px; color: white; text-align: center; font-weight: bold;">
-          🟧 Amber Liquid Spectrum
+          Amber Liquid Spectrum
         </div>
         <p><i>Pulsing audio visualizer synced to TTS audio amplitude playback.</i></p>
       </td>
@@ -123,7 +145,7 @@ The central interaction hub of SWARAM is the **Visual Voice Orb**—an interacti
 
 ---
 
-## 🤖 Hybrid AI Suite & Technical Stack
+## Hybrid AI Suite & Technical Stack
 
 SWARAM combines high-precision cloud AI APIs for vision and speech with efficient client-side document processing for absolute coordinate writebacks.
 
@@ -170,17 +192,17 @@ SWARAM combines high-precision cloud AI APIs for vision and speech with efficien
 
 ---
 
-## 📐 System Architecture & Data Flow
+## System Architecture & Data Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as 👤 User / Screen Reader
-    participant Orb as 🎙️ Visual Voice Orb (Next.js)
-    participant VLM as 👁️ VLM Engine (OpenAI / Gemini)
-    participant Dialogue as 💬 Dialogue Manager (Groq / OpenAI)
-    participant Writer as 📄 PDF-Lib Coordinator
-    participant TTS as 🔊 Neural TTS (Kokoro / Azure / Sarvam)
+    actor User as User / Screen Reader
+    participant Orb as Visual Voice Orb (Next.js)
+    participant VLM as VLM Engine (OpenAI / Gemini)
+    participant Dialogue as Dialogue Manager (Groq / OpenAI)
+    participant Writer as PDF-Lib Coordinator
+    participant TTS as Neural TTS (Kokoro / Azure / Sarvam)
 
     User->>Orb: Uploads PDF / Camera Scan
     Orb->>VLM: POST /api/vlm/extract (Page Images)
@@ -205,18 +227,18 @@ sequenceDiagram
 
 ---
 
-## ✨ Key Features & Capabilities
+## Key Features & Capabilities
 
-- 🎙️ **Voice-First Conversational Interface**: Complete hands-free workflow with multi-turn voice interaction, instant confirmation, and mistake correction.
-- 👁️ **Grounded VLM Vision Analysis**: High-precision field recognition for complex, unformatted, or scanned document images using OpenAI GPT-5.5 & Gemini Flash.
-- 🌐 **Deep Multilingual Support**: First-class support for Indian languages (Hindi, Malayalam, Tamil, etc.) powered by Sarvam AI alongside global languages via Azure & Kokoro.
-- ⚡ **Coordinate-Precise PDF Stamping**: Stamped text, checkmarks, and signatures are written into exact coordinate coordinates using `pdf-lib`.
-- ♿ **WCAG 2.1 AA Compliant UI**: Built from the ground up with high contrast (4.5:1+), 44px+ touch targets, keyboard focus traps, and real-time `aria-live` screen-reader region updates.
-- 🛡️ **Privacy-Minded Local Profile Storage**: User profiles and government identifiers remain stored safely in local browser storage via `fuse.js`.
+- **Voice-First Conversational Interface**: Complete hands-free workflow with multi-turn voice interaction, instant confirmation, and error correction.
+- **Grounded VLM Vision Analysis**: High-precision field recognition for complex, unformatted, or scanned document images using OpenAI GPT-5.5 & Gemini Flash.
+- **Deep Multilingual Support**: First-class support for Indian languages (Hindi, Malayalam, Tamil, etc.) powered by Sarvam AI alongside global languages via Azure & Kokoro.
+- **Coordinate-Precise PDF Stamping**: Stamped text, checkmarks, and signatures are written into exact document coordinates using `pdf-lib`.
+- **WCAG 2.1 AA Compliant UI**: Built from the ground up with high contrast (4.5:1+), 44px+ touch targets, keyboard focus traps, and real-time `aria-live` screen-reader region updates.
+- **Privacy-Minded Local Profile Storage**: User profiles and government identifiers remain stored safely in local browser storage via `fuse.js`.
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 ### Prerequisites
 - **Node.js**: `18.18.0` or higher
@@ -274,21 +296,21 @@ npm run stt:relay
 
 ---
 
-## ♿ Accessibility & WCAG Compliance Checklist
+## Accessibility & WCAG Compliance Checklist
 
 SWARAM is engineered with strict adherence to accessibility standards:
 
 | WCAG Criteria | Implementation in SWARAM | Status |
 | :--- | :--- | :--- |
-| **1.4.3 Contrast (Minimum)** | High-contrast warm cream (`#FDFBF7`) & forest green (`#052E16`) color palette with > 7:1 ratio. | `✅ PASS` |
-| **2.1.1 Keyboard Accessible** | Full tab ordering, visible outline states, and shortcut keys for all actions. | `✅ PASS` |
-| **2.5.5 Target Size** | All interactive touch targets exceed the 44px x 44px minimum recommendation. | `✅ PASS` |
-| **4.1.2 Name, Role, Value** | Semantic HTML5 structure with custom ARIA live regions for active voice states. | `✅ PASS` |
-| **2.3.1 Three Flashes / Reduced Motion** | Respects `prefers-reduced-motion` globally across Framer Motion animation tiers. | `✅ PASS` |
+| **1.4.3 Contrast (Minimum)** | High-contrast warm cream (`#FDFBF7`) & forest green (`#052E16`) color palette with > 7:1 ratio. | `COMPLIANT` |
+| **2.1.1 Keyboard Accessible** | Full tab ordering, visible outline states, and shortcut keys for all actions. | `COMPLIANT` |
+| **2.5.5 Target Size** | All interactive touch targets exceed the 44px x 44px minimum recommendation. | `COMPLIANT` |
+| **4.1.2 Name, Role, Value** | Semantic HTML5 structure with custom ARIA live regions for active voice states. | `COMPLIANT` |
+| **2.3.1 Three Flashes / Reduced Motion** | Respects `prefers-reduced-motion` globally across Framer Motion animation tiers. | `COMPLIANT` |
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 swaram/
@@ -312,18 +334,19 @@ swaram/
 │   ├── pdf/                    # pdf-lib Coordinate Writer & PDF.js
 │   └── voice/                  # Web Speech & Audio Stream Handlers
 ├── public/                     # Static Assets & WASM Binary Modules
+│   └── logo.png                # Official SWARAM Brand Logo
 └── scripts/                    # WebSocket Relays & Evaluation Harnesses
 ```
 
 ---
 
-## 📜 License
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
 <div align="center">
-  <p>Made with ❤️ by the <b>SWARAM Team</b></p>
+  <p>Built with pride by the <b>CHAI-T Team</b></p>
   <p><i>Bringing voice, dignity, and accessibility to modern web applications.</i></p>
 </div>
