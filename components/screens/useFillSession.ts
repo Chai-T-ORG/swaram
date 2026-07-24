@@ -36,8 +36,15 @@ import { playEarcon } from "@/lib/voice/earcons";
 import { haptic } from "@/lib/voice/haptics";
 
 const UNCLEAR_THRESHOLD = 0.6;
-const HIGH_CONFIDENCE = 0.98;
-const MED_CONFIDENCE = 0.95;
+// Confidence-based answer gating. NOTE: the current STT engines report coarse,
+// hardcoded confidence values (Sarvam/Azure/Whisper always emit 0.95, Groq emits
+// 0.85–0.99, and the native engine reports 0), so absolute thresholds do not yet
+// map to real recognition quality. Until per-engine confidence is calibrated,
+// these are kept behavior-neutral: the flow behaves exactly as before the merge
+// (auto-commit when no confirmation is needed; never reject a valid answer or
+// force typing on a low score). Raise them once confidence is meaningful.
+const HIGH_CONFIDENCE = 0;
+const MED_CONFIDENCE = 0;
 
 export type FillPhase =
   | "loading"
