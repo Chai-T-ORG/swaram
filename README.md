@@ -335,14 +335,15 @@ swaram/
 │   └── voice/                  # Web Speech & Audio Stream Handlers
 ├── public/                     # Static Assets & WASM Binary Modules
 │   └── logo.png                # Official SWARAM Brand Logo
-└── scripts/                    # WebSocket Relays & Evaluation Harnesses
+├── scripts/                    # WebSocket Relays & Evaluation Harnesses
+└── LICENSE                     # Official MIT License
 ```
 
 ---
 
 ## License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 
 ---
 
