@@ -19,6 +19,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -69,6 +70,12 @@ import { startPtt, stopPtt, cancelPtt, isPttCapturing, onPttStateChange } from "
 import type { MicMode } from "@/lib/voice/voiceSettings";
 import { upgradeToWhisper } from "@/lib/voice/speechToText";
 import { subscribeSetup, isSetupComplete, updateSttProgress, markSttReady } from "@/lib/voice/modelManager";
+import {
+  initialConversation,
+  transitionConversation,
+  type ConversationEvent,
+  type ConversationSnapshot,
+} from "@/lib/voice/conversationState";
 
 export type VoiceCommand = [pattern: RegExp, handler: () => void, help: string];
 
@@ -118,6 +125,8 @@ interface VoiceContextValue {
   setActiveFormId: (id: string | null) => void;
   ttsActive: boolean;
   voiceUiState: VoiceUiState;
+  conversation: ConversationSnapshot;
+  transitionConversation: (event: ConversationEvent) => void;
 }
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
@@ -210,6 +219,7 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [activeFormId, setActiveFormId] = useState<string | null>(null);
   const [ttsActive, setTtsActive] = useState(false);
+  const [conversation, dispatchConversation] = useReducer(transitionConversation, initialConversation);
 
   // One-time: move legacy installs off the old (silent-on-mobile) Kokoro default.
   useEffect(() => {
@@ -1085,6 +1095,8 @@ export default function VoiceProvider({ children }: { children: ReactNode }) {
     setActiveFormId,
     ttsActive,
     voiceUiState,
+    conversation,
+    transitionConversation: dispatchConversation,
   };
 
   const shellValue: VoiceShellValue = {

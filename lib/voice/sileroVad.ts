@@ -23,7 +23,7 @@ type MicVADLike = {
   start: () => Promise<void>;
   pause: () => Promise<void>;
   destroy: () => Promise<void>;
-  setOptions: (update: { redemptionMs?: number }) => void;
+  setOptions: (update: { redemptionMs?: number; positiveSpeechThreshold?: number; negativeSpeechThreshold?: number }) => void;
 };
 
 import { getStream, initMic } from "./micManager";
@@ -89,7 +89,7 @@ export async function startSileroCapture(
       try { vad.setOptions({ redemptionMs: on ? 2000 : 500 }); } catch { /* tuning is best-effort */ }
     });
 
-    return {
+      return {
       stop() {
         destroyed = true;
         void vad.destroy();
@@ -101,6 +101,9 @@ export async function startSileroCapture(
       resume() {
         paused = false;
         void vad.start();
+      },
+      setThreshold(value: number) {
+        try { vad.setOptions({ positiveSpeechThreshold: value }); } catch { /* best-effort */ }
       },
     };
   } catch (err) {

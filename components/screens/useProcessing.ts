@@ -112,7 +112,7 @@ export function useProcessing() {
       }, 2000);
       return () => clearInterval(interval);
     }
-    
+
     activeProcesses.add(formId);
     run().finally(() => activeProcesses.delete(formId));
     // eslint-disable-next-line react-hooks/exhaustive-deps

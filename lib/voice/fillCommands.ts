@@ -56,6 +56,96 @@ export function isNameField(field: Pick<FormField, "profileKey" | "label">): boo
  * would be costly or a mishearing is common; accept the rest (the review
  * screen is the final safety net) so the flow stays fast.
  */
+/**
+ * Lightweight plausibility check — reject answers that are clearly wrong for
+ * the field type *before* asking the user to confirm.  Returns null when the
+ * answer looks plausible, or a short rejection reason string when it doesn't.
+ *
+ * This is intentionally conservative: only reject on obvious mismatches (digits
+ * in a name field, letters in a phone field, etc.) so the flow stays fast and
+ * non-frustrating.  The review screen remains the final safety net.
+ */
+export function plausibleAnswer(
+  value: string,
+  field: Pick<FormField, "type" | "profileKey" | "label" | "sensitive">,
+): string | null {
+  if (!value) return null; // empty is handled elsewhere
+  const trimmed = value.trim();
+  const digits = (trimmed.match(/\d/g) || []).length;
+  const letters = (trimmed.match(/[a-zA-Z\u0900-\u097F\u0D00-\u0D7F\u00C0-\u024F]/g) || []).length;
+  const key = field.profileKey ?? "";
+  const label = field.label.toLowerCase();
+
+  // ---- Phone / numeric IDs ----
+  if (key === "phone" || /(mobile|phone|contact|whatsapp)/.test(label)) {
+    const digitOnly = trimmed.replace(/\D/g, "");
+    if (digitOnly.length < 7 || digitOnly.length > 15) {
+      return "a phone number should be 7 to 15 digits";
+    }
+    if (letters > digitOnly.length) {
+      return "that looks like text, not a phone number";
+    }
+    return null;
+  }
+
+  // ---- Aadhaar ----
+  if (field.sensitive && /(aadhaar|aadhar|adhar|uid)/.test(label)) {
+    const stripped = trimmed.replace(/\s/g, "");
+    if (!/^\d{12}$/.test(stripped) && !/^\d{4}\s?\d{4}\s?\d{4}$/.test(trimmed)) {
+      return "an Aadhaar number should be exactly 12 digits";
+    }
+    return null;
+  }
+
+  // ---- Pincode ----
+  if (key === "pincode" || /pin\s?code|postal/.test(label)) {
+    if (!/^\d{6}$/.test(trimmed.replace(/\s/g, ""))) {
+      return "a pincode should be exactly 6 digits";
+    }
+    return null;
+  }
+
+  // ---- Email ----
+  if (key === "email" || /e-?mail/.test(label)) {
+    if (!trimmed.includes("@") || trimmed.length < 5) {
+      return "that doesn't look like an email address";
+    }
+    return null;
+  }
+
+  // ---- IFSC ----
+  if (key === "ifsc" || /ifsc/.test(label)) {
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(trimmed.replace(/\s/g, ""))) {
+      return "an IFSC code should be 4 letters, a zero, then 6 characters";
+    }
+    return null;
+  }
+
+  // ---- Name fields ----
+  if (isNameField(field)) {
+    if (digits > 0 && digits >= letters) {
+      return "that doesn't sound like a name — it has more numbers than letters";
+    }
+    if (trimmed.split(/\s+/).length > 6) {
+      return "that seems too long for a name";
+    }
+    return null;
+  }
+
+  // ---- Date ----
+  if (field.type === "date") {
+    // Very loose: reject obvious non-dates ("hello", random words)
+    if (letters > 0 && digits === 0 && trimmed.split(/\s+/).length > 4) {
+      return "that doesn't look like a date — try saying a day, month, and year";
+    }
+    return null;
+  }
+
+  // ---- Address / free text / choice / checkbox / anything else ----
+  // Too flexible to reject.  Return null.
+  return null;
+}
+
 export function needsConfirmation(field: FormField, unclear: boolean): boolean {
   if (field.sensitive || unclear) return true;
   if (field.type === "date") return true;

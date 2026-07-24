@@ -2,7 +2,7 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import type { FillSession } from "./useFillSession";
-import { IconCheck, IconAlertCircle } from "@/components/icons";
+import { IconCheck, IconAlertCircle, IconLock, IconLoader } from "@/components/icons";
 
 /** The dictated value shown character by character, so spelling is verifiable. */
 export function SpellBubbles({ value }: { value: string }) {
@@ -149,7 +149,13 @@ export function FieldsMapList({ s, onJump }: { s: FillSession; onJump?: () => vo
             {i + 1}. {f.label}
           </span>
           {f.status === "answered" || f.status === "autofilled" ? (
-            <IconCheck className="h-4 w-4 shrink-0 text-ok" aria-label="answered" />
+            s.phase === "verifying" && f.id === s.currentId ? (
+              <IconLoader className="h-4 w-4 shrink-0 text-accent animate-spin" aria-label="verifying" />
+            ) : s.fieldLocked && f.id === s.currentId ? (
+              <IconLock className="h-4 w-4 shrink-0 text-warn" aria-label="locked" />
+            ) : (
+              <IconCheck className="h-4 w-4 shrink-0 text-ok" aria-label="answered" />
+            )
           ) : f.status === "skipped" ? (
             <IconAlertCircle className="h-4 w-4 shrink-0 text-warn" aria-label="skipped" />
           ) : null}

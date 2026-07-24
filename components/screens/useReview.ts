@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useVoicePage } from "@/components/voice/VoiceProvider";
+import { useVoice, useVoicePage } from "@/components/voice/VoiceProvider";
 import { getForm, saveForm } from "@/lib/storage/localHistoryStore";
 import type { FormField, FormRecord } from "@/lib/types";
 import { fieldDisplayValue } from "@/lib/analysis/tableCells";
@@ -19,6 +19,7 @@ export type ReviewTone = "info" | "success" | "warning" | "error";
 export function useReview() {
   const { formId } = useParams<{ formId: string }>();
   const router = useRouter();
+  const voice = useVoice();
   const [record, setRecord] = useState<FormRecord | null>(null);
   const [status, setStatus] = useState("Loading your answers…");
   const [tone, setTone] = useState<ReviewTone>("info");
@@ -58,6 +59,7 @@ export function useReview() {
   );
 
   useEffect(() => {
+    voice?.transitionConversation({ type: "REVIEWING" });
     getForm(formId).then((form) => {
       if (!form) {
         setTone("error");
@@ -126,6 +128,7 @@ export function useReview() {
   async function continueToComplete() {
     if (!record) return;
     await saveForm({ ...record, status: "review" });
+    voice?.transitionConversation({ type: "COMPLETED" });
     router.push(`/complete/${formId}`);
   }
 

@@ -36,6 +36,15 @@ import { playEarcon } from "@/lib/voice/earcons";
 import { haptic } from "@/lib/voice/haptics";
 
 const UNCLEAR_THRESHOLD = 0.6;
+// Confidence-based answer gating. NOTE: the current STT engines report coarse,
+// hardcoded confidence values (Sarvam/Azure/Whisper always emit 0.95, Groq emits
+// 0.85–0.99, and the native engine reports 0), so absolute thresholds do not yet
+// map to real recognition quality. Until per-engine confidence is calibrated,
+// these are kept behavior-neutral: the flow behaves exactly as before the merge
+// (auto-commit when no confirmation is needed; never reject a valid answer or
+// force typing on a low score). Raise them once confidence is meaningful.
+const HIGH_CONFIDENCE = 0;
+const MED_CONFIDENCE = 0;
 
 export type FillPhase =
   | "loading"
@@ -45,6 +54,7 @@ export type FillPhase =
   | "listening"
   | "confirming"
   | "typing"
+  | "verifying"
   | "paused"
   | "done";
 
@@ -94,6 +104,8 @@ export function useFillSession() {
   const listenKindRef = useRef<"answer" | "confirm">("answer");
   /** When true, the next answer utterance is dictated letters (spell mode). */
   const spellInputRef = useRef(false);
+  /** Prevent another answer from replacing a just-committed field. */
+  const lockedFieldRef = useRef<string | null>(null);
   /** True while the value awaiting confirmation came from spelling — a "no"
    * then re-enters spell-repair instead of asking the question over. */
   const spelledPendingRef = useRef(false);
@@ -164,7 +176,7 @@ export function useFillSession() {
           resume();
           return true;
         }
-        return false;
+        return true;
       }
       if (phase === "asking") {
         // The question is still being spoken — a command ("skip", "repeat",
@@ -394,6 +406,7 @@ export function useFillSession() {
     retriesRef.current = 0;
     noSpeechRef.current = 0;
     unclearTriedRef.current = false;
+    lockedFieldRef.current = null;
     // A stale value from the previous field must never seed a spell-repair,
     // and a half-finished answer must never leak into the next question.
     pendingConfirmRef.current = null;
@@ -446,6 +459,12 @@ export function useFillSession() {
     const clean = transcript.toLowerCase().trim();
     const cmd = parseFillCommand(clean);
 
+    if (lockedFieldRef.current && !cmd) {
+      await speak("This field is already answered. Say go back to change it, or continue to the next question.");
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
     // Commands work in both answer and confirm modes.
     if (cmd === "help") {
       await speak(
@@ -457,7 +476,7 @@ export function useFillSession() {
     }
     if (cmd === "repeat") { handleCommand("repeat", posRef.current, id); return; }
     if (cmd === "skip") { handleCommand("skip", posRef.current, id); return; }
-    if (cmd === "back") { handleCommand("back", posRef.current, id); return; }
+    if (cmd === "back") { lockedFieldRef.current = null; handleCommand("back", posRef.current, id); return; }
     if (cmd === "type") { spellInputRef.current = false; setPhase("typing"); return; }
     if (cmd === "pause") {
       setPhase("paused");
@@ -693,7 +712,20 @@ export function useFillSession() {
       return;
     }
 
-    if (!needsConfirmation(field, isUnclear(field))) {
+    if (confidence < MED_CONFIDENCE) {
+      retriesRef.current += 1;
+      if (retriesRef.current >= 3) {
+        await speak("Let's type it instead.");
+        if (alive(id)) setPhase("typing");
+        return;
+      }
+      const spellHint = isNameField(field) ? " You can say: let me spell." : "";
+      await speak(`I'm not confident I heard that right. Could you say it once more?${spellHint}`);
+      if (alive(id)) setPhase("listening");
+      return;
+    }
+
+    if (confidence >= HIGH_CONFIDENCE && !needsConfirmation(field, isUnclear(field))) {
       commit(pos, value, id, `${value}.`);
       return;
     }
@@ -831,6 +863,7 @@ export function useFillSession() {
     if (field) {
       field.value = val;
       field.status = "answered";
+      lockedFieldRef.current = field.id;
       // If this is a synthetic table cell, mirror the answer into its parent
       // table's value grid so write-back (table path) picks it up.
       const cell = cellMapRef.current.get(field.id);
@@ -853,6 +886,12 @@ export function useFillSession() {
         }
       }
       syncRecord();
+
+      const verified = queueRef.current[pos]?.value === val;
+      if (!verified) {
+        setTone("warning");
+        console.warn(`[fill] Value verification failed for "${field.label}".`);
+      }
 
       // A confirmed name is learned for good: future STT snaps to it, the LLM
       // corrector sees it, and Azure's phrase list is biased toward it.
@@ -943,6 +982,7 @@ export function useFillSession() {
   }
 
   function doBack() {
+    lockedFieldRef.current = null;
     const id = beginRun();
     handleCommand("back", posRef.current, id);
   }
@@ -962,6 +1002,9 @@ export function useFillSession() {
       setStatus("Type an answer, or skip this field.");
       return;
     }
+    setPhase("verifying");
+    setTone("info");
+    setStatus("Verifying your answer...");
     commit(posRef.current, value, id);
   }
 
@@ -1010,6 +1053,7 @@ export function useFillSession() {
     confirmValue,
     /** True while the session is waiting on a yes/no for confirmValue. */
     confirmMode: listenKindRef.current === "confirm",
+    fieldLocked: lockedFieldRef.current !== null,
     typedValue,
     setTypedValue,
     heard,
