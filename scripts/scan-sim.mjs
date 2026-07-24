@@ -14,7 +14,7 @@ const puppeteer = require("puppeteer-core");
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = "http://localhost:3000";
-const SCRATCH = "/private/tmp/claude-501/-Users-tejaskm-swaram-swaram/81348b70-8050-48d0-83d1-d19ec2fdb170/scratchpad";
+const SCRATCH = "/private/tmp/claude-501/-Users-tejaskm-swaram-swaram/1eb507f6-b908-4a91-9295-ed983b81c791/scratchpad";
 const Y4M = `${SCRATCH}/scene.y4m`;
 const W = 640;
 const H = 480;

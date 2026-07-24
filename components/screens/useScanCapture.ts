@@ -13,7 +13,7 @@ import { intentRegex } from "@/lib/voice/intlCommands";
 import { saveFile, saveForm } from "@/lib/storage/localHistoryStore";
 import { newId, type FormRecord } from "@/lib/types";
 import { speak, cancelSpeech } from "@/lib/voice/textToSpeech";
-import { loadOpenCv, checkDocumentInFrame, detectCorners, warpPerspectiveCanvas } from "@/lib/vision/shapeDetector";
+import { loadOpenCv, checkDocumentInFrame, detectCorners, warpPerspectiveCanvas, enhanceScanForVlm } from "@/lib/vision/shapeDetector";
 
 export type CameraState = "idle" | "starting" | "active" | "captured" | "confirm" | "error";
 export type ScanTone = "info" | "warning" | "error" | "success";
@@ -729,6 +729,11 @@ export function useScanCapture() {
       }
       finalCanvas = rotCanvas;
     }
+
+    // Digitize the warped photo — flat-field + contrast turns a shadowed, glare-y
+    // phone shot into a clean scanner-style page so the VLM reads it like it reads
+    // a native PDF. No-ops safely (returns the input) if OpenCV is unavailable.
+    finalCanvas = await enhanceScanForVlm(finalCanvas);
 
     const blob = await new Promise<Blob | null>((resolve) => finalCanvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob) {
